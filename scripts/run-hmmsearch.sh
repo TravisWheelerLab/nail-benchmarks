@@ -1,6 +1,8 @@
 #! /bin/sh
 
 NAME=benchmark
+TARGET=./$NAME/$NAME.fa
+QUERY=./$NAME/$NAME.hmm
 
 DIR=./output/hmmer/
 OUT=$DIR/hmmer.out
@@ -20,7 +22,7 @@ DOMTBL_EVALUE_COL=7
 # DOMTBL_EVALUE_COL=13
 
 mkdir -p $DIR
-hmmsearch -E 200 -o $OUT --domtblout $DOM --tblout $TBL ./$NAME/$NAME.hmm ./$NAME/$NAME.fa
+hmmsearch -E 200 -o $OUT --domtblout $DOM --tblout $TBL $QUERY $TARGET
 
 grep -v '^#' $TBL | sort -g -k$TBL_EVALUE_COL > $SORTED
 
