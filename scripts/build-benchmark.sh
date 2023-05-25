@@ -7,10 +7,10 @@
 
 PROFMARK_BIN=./bin/create-profmark
 NAME=benchmark
-N=200
-MSA=./data/pfam.100.sto
+N=2000000
+MSA=./data/pfam.sto
 FA=./data/uniprot_sprot.fasta
 
 mkdir $NAME
 $PROFMARK_BIN --single -N $N ./$NAME/$NAME $MSA $FA
-hmmbuild ./$NAME/$NAME.hmm ./$NAME/$NAME.msa
+hmmbuild --cpu 8 ./$NAME/$NAME.hmm ./$NAME/$NAME.msa

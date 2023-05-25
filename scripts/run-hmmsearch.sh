@@ -23,7 +23,7 @@ DOMTBL_EVALUE_COL=7
 # DOMTBL_EVALUE_COL=13
 
 mkdir -p $DIR
-/usr/bin/time -o $TIME hmmsearch -E 200 -o $OUT --domtblout $DOM --tblout $TBL $QUERY $TARGET
+/usr/bin/time -ph -o $TIME hmmsearch -E 200 -o $OUT --domtblout $DOM --tblout $TBL $QUERY $TARGET
 
 grep -v '^#' $TBL | sort -g -k$TBL_EVALUE_COL > $SORTED
 

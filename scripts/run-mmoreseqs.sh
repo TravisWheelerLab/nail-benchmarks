@@ -20,8 +20,8 @@ SORTED=$DIR/results.sorted
 EVALUE_COL=8
 
 mkdir -p $DIR
-/usr/bin/time -o $PREP_TIME mmoreseqs prep --skip-hmmbuild -p $PREP $QUERY_MSA $TARGET
-/usr/bin/time -o $SEED_TIME mmoreseqs seed --query-hmm $QUERY_HMM -s $SEEDS $PREP
-/usr/bin/time -o $ALIGN_TIME mmoreseqs align -E 200 -o $TSV $QUERY_HMM $TARGET $SEEDS > $OUT
+/usr/bin/time -ph -o $PREP_TIME mmoreseqs prep -p $PREP $QUERY_MSA $TARGET
+/usr/bin/time -ph -o $SEED_TIME mmoreseqs seed -s $SEEDS $PREP
+/usr/bin/time -ph -o $ALIGN_TIME mmoreseqs align -t 3 -E 200 -o $TSV $QUERY_HMM $TARGET $SEEDS
 
-grep -v '^#' $TSV | sort -g -k$EVALUE_COL > $SORTED
+sort -g -k$EVALUE_COL $TSV > $SORTED
