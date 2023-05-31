@@ -1,5 +1,11 @@
 #! /bin/sh
+if [ "$#" == 0 ]; then
+    THREADS=8
+elif [ "$#" -ge 1 ]; then
+    THREADS=$1
+fi
 
-./scripts/run-mmoreseqs.sh
-./scripts/run-mmseqs.sh
-./scripts/run-hmmsearch.sh
+
+./scripts/run-mmoreseqs.sh $THREADS
+./scripts/run-mmseqs.sh $THREADS
+./scripts/run-hmmsearch.sh $THREADS

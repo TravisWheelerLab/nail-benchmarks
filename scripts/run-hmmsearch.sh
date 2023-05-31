@@ -1,5 +1,11 @@
 #! /bin/sh
 
+if [ "$#" == 0 ]; then
+    THREADS=8
+elif [ "$#" -ge 1 ]; then
+    THREADS=$1
+fi
+
 NAME=benchmark
 TARGET=./$NAME/$NAME.fa
 QUERY=./$NAME/$NAME.hmm
@@ -23,7 +29,7 @@ DOMTBL_EVALUE_COL=7
 # DOMTBL_EVALUE_COL=13
 
 mkdir -p $DIR
-/usr/bin/time -ph -o $TIME hmmsearch -E 200 -o $OUT --domtblout $DOM --tblout $TBL $QUERY $TARGET
+/usr/bin/time -ph -o $TIME hmmsearch --cpu $THREADS -E 200 -o $OUT --domtblout $DOM --tblout $TBL $QUERY $TARGET
 
 grep -v '^#' $TBL | sort -g -k$TBL_EVALUE_COL > $SORTED
 
