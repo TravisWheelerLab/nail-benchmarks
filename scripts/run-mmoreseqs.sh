@@ -26,8 +26,8 @@ SORTED=$DIR/results.sorted
 EVALUE_COL=8
 
 mkdir -p $DIR
-/usr/bin/time -ph -o $PREP_TIME mmoreseqs prep -t $THREADS --skip-hmmbuild -p $PREP $QUERY_MSA $TARGET
-/usr/bin/time -ph -o $SEED_TIME mmoreseqs seed -t $THREADS -q $QUERY_HMM -s $SEEDS $PREP
-/usr/bin/time -ph -o $ALIGN_TIME mmoreseqs align -t $THREADS -E 200 -T $TSV $QUERY_HMM $TARGET $SEEDS
+/usr/bin/time -p -o $PREP_TIME mmoreseqs prep -t $THREADS --skip-hmmbuild -p $PREP $QUERY_MSA $TARGET
+/usr/bin/time -p -o $SEED_TIME mmoreseqs seed -t $THREADS -q $QUERY_HMM -s $SEEDS $PREP
+/usr/bin/time -p -o $ALIGN_TIME mmoreseqs align -t $THREADS -E 200 -T $TSV $QUERY_HMM $TARGET $SEEDS
 
 sort -g -k$EVALUE_COL $TSV > $SORTED

@@ -13,4 +13,4 @@ FA=./data/uniprot_sprot.fasta
 
 mkdir $NAME
 $PROFMARK_BIN --single -N $N ./$NAME/$NAME $MSA $FA
-hmmbuild --cpu 8 ./$NAME/$NAME.hmm ./$NAME/$NAME.msa
+hmmbuild --cpu 24 ./$NAME/$NAME.hmm ./$NAME/$NAME.msa
