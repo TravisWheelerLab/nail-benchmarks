@@ -6,6 +6,6 @@ elif [ "$#" -ge 1 ]; then
 fi
 
 
-./scripts/run-mmoreseqs.sh $THREADS
+./scripts/run-nail.sh $THREADS
 ./scripts/run-mmseqs.sh $THREADS
-./scripts/run-hmmsearch.sh $THREADS
+#./scripts/run-hmmsearch.sh $THREADS

@@ -12,5 +12,6 @@ MSA=./data/pfam.sto
 FA=./data/uniprot_sprot.fasta
 
 mkdir $NAME
-$PROFMARK_BIN --single -N $N ./$NAME/$NAME $MSA $FA
-hmmbuild --cpu 24 ./$NAME/$NAME.hmm ./$NAME/$NAME.msa
+$PROFMARK_BIN -N $N ./$NAME/$NAME $MSA $FA
+hmmbuild --cpu 24 ./$NAME/$NAME.train.hmm ./$NAME/$NAME.msa
+mv ./$NAME/$NAME.test.fa ./$NAME/$NAME.fa
