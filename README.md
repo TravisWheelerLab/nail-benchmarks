@@ -1,2 +1,2 @@
 # nail-benchmarks
-A collection of reproducible benchmarks for MMoreseqs
+A collection of reproducible benchmarks for nail
