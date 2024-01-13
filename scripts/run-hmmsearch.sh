@@ -1,36 +1,32 @@
 #! /bin/sh
 
 if [ "$#" == 0 ]; then
+    echo "usage: ./run-nail.sh <benchmark-dir> [threads]"
+    exit
+elif [ "$#" == 1 ]; then
     THREADS=8
-elif [ "$#" -ge 1 ]; then
-    THREADS=$1
+elif [ "$#" -ge 2 ]; then
+    THREADS=$2
 fi
 
-NAME=benchmark
-TARGET=./$NAME/$NAME.fa
-QUERY=./$NAME/$NAME.hmm
 
-DIR=./output/hmmer/
-TIME=$DIR/hmmer.time
-OUT=$DIR/hmmer.out
-TBL=$DIR/hmmer.tbl
-DOM=$DIR/hmmer.domtbl
-SORTED=$DIR/results.sorted
+BENCHMARK_DIR=$1
+NAME=$(basename "$BENCHMARK_DIR")
+TARGET=$BENCHMARK_DIR/$NAME.test.fa
+QUERY=$BENCHMARK_DIR/$NAME.train.hmm
 
-TBL_EVALUE_COL=5
+RESULTS_DIR=$BENCHMARK_DIR/results/hmmer/
 
-# full sequence E-value
-DOMTBL_EVALUE_COL=7
+TIME=$RESULTS_DIR/hmmer.time
+OUT=$RESULTS_DIR/hmmer.out
+TBL=$RESULTS_DIR/hmmer.tbl
+DOM=$RESULTS_DIR/hmmer.domtbl
 
-# conditional E-value
-# DOMTBL_EVALUE_COL=12
+if [ -d "$RESULTS_DIR" ]; then
+    echo "results directory already exists"
+    exit
+fi
 
-# independent E-value
-# DOMTBL_EVALUE_COL=13
+mkdir -p $RESULTS_DIR
 
-mkdir -p $DIR
 /usr/bin/time -p -o $TIME hmmsearch --cpu $THREADS -E 200 -o $OUT --domtblout $DOM --tblout $TBL $QUERY $TARGET
-
-grep -v '^#' $TBL | sort -g -k$TBL_EVALUE_COL > $SORTED
-
-
