@@ -9,6 +9,7 @@ elif [ "$#" -ge 2 ]; then
     THREADS=$2
 fi
 
+HMMSEARCH=hmmsearch
 
 BENCHMARK_DIR=$1
 NAME=$(basename "$BENCHMARK_DIR")
@@ -29,4 +30,4 @@ fi
 
 mkdir -p $RESULTS_DIR
 
-/usr/bin/time -p -o $TIME hmmsearch --cpu $THREADS -E 200 -o $OUT --domtblout $DOM --tblout $TBL $QUERY $TARGET
+/usr/bin/time -p -o $TIME $HMMSEARCH --cpu $THREADS -E 200 -o $OUT --domtblout $DOM --tblout $TBL $QUERY $TARGET

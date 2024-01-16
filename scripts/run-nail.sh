@@ -47,5 +47,5 @@ mkdir $PREP
 
 /usr/bin/time -p -o $ALIGN_DEFAULT_TIME nail align -t $THREADS -E 200 -T $TSV_DEFAULT -O $OUT_DEFAULT $QUERY_HMM $TARGET $SEEDS
 /usr/bin/time -p -o $ALIGN_8_12_TIME nail align -t $THREADS -A 8 -B 12 -E 200 -T $TSV_8_12 -O $OUT_8_12 $QUERY_HMM $TARGET $SEEDS
-#/usr/bin/time -p -o $ALIGN_FULL_TIME nail align -t $THREADS --full-dp -E 200 -T $TSV_FULL -O $OUT_FULL $QUERY_HMM $TARGET $SEEDS
+/usr/bin/time -p -o $ALIGN_FULL_TIME nail align -t $THREADS --full-dp -E 200 -T $TSV_FULL -O $OUT_FULL $QUERY_HMM $TARGET $SEEDS
 

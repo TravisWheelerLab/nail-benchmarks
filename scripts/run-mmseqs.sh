@@ -9,6 +9,8 @@ elif [ "$#" -ge 2 ]; then
     THREADS=$2
 fi
 
+MMSEQS=mmseqs
+
 BENCHMARK_DIR=$1
 NAME=$(basename "$BENCHMARK_DIR")
 TARGET=$BENCHMARK_DIR/$NAME.test.fa
@@ -45,16 +47,16 @@ rm -rf $RESULTS_DIR
 mkdir -p $RESULTS_DIR
 mkdir $PREP
 
-mmseqs convertmsa $QUERY $MSA_DB --identifier-field 0 > /dev/null
-mmseqs msa2profile $MSA_DB $QUERY_DB --match-mode 1 > /dev/null
-mmseqs createdb $TARGET $TARGET_DB > /dev/null
+$MMSEQS convertmsa $QUERY $MSA_DB --identifier-field 0 > /dev/null
+$MMSEQS msa2profile $MSA_DB $QUERY_DB --match-mode 1 > /dev/null
+$MMSEQS createdb $TARGET $TARGET_DB > /dev/null
 
-/usr/bin/time -p -o $TIME_DEFAULT mmseqs search $QUERY_DB $TARGET_DB $ALIGN_DB_DEFAULT $PREP --threads $THREADS -e 200 > /dev/null
-mmseqs convertalis $QUERY_DB $TARGET_DB $ALIGN_DB_DEFAULT $OUT_DEFAULT --format-output "target,query,tstart,tend,qstart,qend,evalue" > /dev/null
+/usr/bin/time -p -o $TIME_DEFAULT $MMSEQS search $QUERY_DB $TARGET_DB $ALIGN_DB_DEFAULT $PREP --threads $THREADS -e 200 > /dev/null
+$MMSEQS convertalis $QUERY_DB $TARGET_DB $ALIGN_DB_DEFAULT $OUT_DEFAULT --format-output "target,query,tstart,tend,qstart,qend,evalue" > /dev/null
 
-/usr/bin/time -p -o $TIME_SENSITIVE mmseqs search $QUERY_DB $TARGET_DB $ALIGN_DB_SENSITIVE $PREP --threads $THREADS -s 7.5 --max-seqs 1000 -e 200 > /dev/null
-mmseqs convertalis $QUERY_DB $TARGET_DB $ALIGN_DB_SENSITIVE $OUT_SENSITIVE --format-output "target,query,tstart,tend,qstart,qend,evalue" > /dev/null
+/usr/bin/time -p -o $TIME_SENSITIVE $MMSEQS search $QUERY_DB $TARGET_DB $ALIGN_DB_SENSITIVE $PREP --threads $THREADS -s 7.5 --max-seqs 1000 -e 200 > /dev/null
+$MMSEQS convertalis $QUERY_DB $TARGET_DB $ALIGN_DB_SENSITIVE $OUT_SENSITIVE --format-output "target,query,tstart,tend,qstart,qend,evalue" > /dev/null
 
-/usr/bin/time -p -o $TIME_PREFILTER_NAIL mmseqs prefilter $QUERY_DB $TARGET_DB $PREFILTER_DB_NAIL --threads $THREADS -k $K_NAIL --k-score $K_SCORE_NAIL --min-ungapped-score $MIN_UNGAPPED_SCORE_NAIL --max-seqs $MAX_SEQS_NAIL > /dev/null
-/usr/bin/time -p -o $TIME_ALIGN_NAIL mmseqs align $QUERY_DB $TARGET_DB $PREFILTER_DB_NAIL $ALIGN_DB_NAIL --threads $THREADS -e 200 > /dev/null
-mmseqs convertalis $QUERY_DB $TARGET_DB $ALIGN_DB_NAIL $OUT_NAIL --format-output "target,query,tstart,tend,qstart,qend,evalue" > /dev/null
+/usr/bin/time -p -o $TIME_PREFILTER_NAIL $MMSEQS prefilter $QUERY_DB $TARGET_DB $PREFILTER_DB_NAIL --threads $THREADS -k $K_NAIL --k-score $K_SCORE_NAIL --min-ungapped-score $MIN_UNGAPPED_SCORE_NAIL --max-seqs $MAX_SEQS_NAIL > /dev/null
+/usr/bin/time -p -o $TIME_ALIGN_NAIL $MMSEQS align $QUERY_DB $TARGET_DB $PREFILTER_DB_NAIL $ALIGN_DB_NAIL --threads $THREADS -e 200 > /dev/null
+$MMSEQS convertalis $QUERY_DB $TARGET_DB $ALIGN_DB_NAIL $OUT_NAIL --format-output "target,query,tstart,tend,qstart,qend,evalue" > /dev/null

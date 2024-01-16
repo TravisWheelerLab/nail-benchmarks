@@ -5,6 +5,8 @@
 #      ./scripts/build-benchmark.sh
 # *
 
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+
 PROFMARK_BIN=./bin/create-profmark
 NAME=benchmark
 N=2000000
