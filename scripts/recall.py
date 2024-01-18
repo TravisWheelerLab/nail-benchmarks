@@ -117,12 +117,14 @@ class Cols:
         query,
         evalue,
         score=None,
+        bias=None,
         cell_frac=None,
     ):
         self.target = target
         self.query = query
         self.evalue = evalue
         self.score = score
+        self.bias = bias
         self.cell_frac = cell_frac
 
 
@@ -133,12 +135,14 @@ class Hit:
         target_name,
         evalue,
         score=None,
+        bias=None,
         cell_frac=None,
     ):
         self.query_name = query_name
         self.target_name = target_name
         self.evalue = evalue
         self.score = score
+        self.bias = bias
         self.cell_frac = cell_frac
 
     def __str__(self):
@@ -170,6 +174,10 @@ class Hits:
                 if cols.score is not None:
                     score = float(line_tokens[cols.score])
 
+                bias = None
+                if cols.bias is not None:
+                    bias = float(line_tokens[cols.bias])
+
                 cell_frac = None
                 if cols.cell_frac is not None:
                     cell_frac = float(line_tokens[cols.cell_frac])
@@ -179,6 +187,7 @@ class Hits:
                     target,
                     evalue,
                     score=score,
+                    bias=bias,
                     cell_frac=cell_frac
                 )
 
@@ -314,7 +323,7 @@ def read_mmseqs_results(results_dir):
 
 def read_nail_results(results_dir):
     results_dir = results_dir / "nail/"
-    cols = Cols(0, 1, 7, score=6, cell_frac=8)
+    cols = Cols(0, 1, 8, score=6, bias=7, cell_frac=9)
 
     paths = results_dir.glob("*.tsv")
 
@@ -425,17 +434,14 @@ def plot_nail_bitscore(nail_hits):
     default_matched_hits.sort(key=s)
     full_matched_hits.sort(key=s)
 
-    percentage_diffs = []
     for (d, f) in zip(default_matched_hits, full_matched_hits):
         assert (d.target_name == f.target_name)
-        score_diff = abs(f.score - d.score)
-        percentage_diff = score_diff / f.score
-        percentage_diffs.append(percentage_diff)
 
-    average_percentage_diff = sum(percentage_diffs) / len(percentage_diffs)
+    x = [h.score + h.bias for h in full_matched_hits]
+    y = [h.score + h.bias for h in default_matched_hits]
 
-    x = [h.score for h in full_matched_hits]
-    y = [h.score for h in default_matched_hits]
+    coefficients = np.polyfit(x, y, deg=1)
+    fit_line = np.poly1d(coefficients)
 
     plt.scatter(
         x,
@@ -447,9 +453,7 @@ def plot_nail_bitscore(nail_hits):
         alpha=0.4
     )
 
-    # Generating x values for the line
-    x_line = np.linspace(min(x), max(x), 100)
-    plt.plot(x_line, x_line, color='black',)
+    plt.plot(x, fit_line(x), color='black', label="Trend")
 
     plt.xlabel('Sequence Bitscore of Full Forward-Backward')
     plt.ylabel('Sequence Bitscore of Sparse Forward-Backward')
@@ -462,70 +466,54 @@ def plot_nail_bitscore(nail_hits):
 def plot_nail_cells(nail_hits, benchmark):
     default_hits = next(filter(lambda h: h.name == "nail default", nail_hits))
 
-    x_true_positive = []
-    y_true_positive = []
+    hits_groups = [
+        list(filter(lambda h: h.evalue > 1.0, default_hits.false_positives)),
+        list(filter(lambda h: h.evalue <= 1.0, default_hits.false_positives)),
+        default_hits.true_positives,
+    ]
 
-    for hit in default_hits.true_positives:
-        query_length = benchmark.query_lengths[hit.query_name]
-        target_length = benchmark.target_lengths[hit.target_name]
-        num_cells = query_length * target_length
-        x_true_positive.append(num_cells)
-        y_true_positive.append(hit.cell_frac)
+    labels = [
+        "Decoys E > 1.0",
+        "Decoys E <= 1.0",
+        "True Positives",
+    ]
 
-    x_false_positive = []
-    y_false_positive = []
+    color = [
+        colors[2],
+        colors[0],
+        colors[1],
+    ]
 
-    for hit in default_hits.false_positives:
-        query_length = benchmark.query_lengths[hit.query_name]
-        target_length = benchmark.target_lengths[hit.target_name]
-        num_cells = query_length * target_length
+    for (hits, l, c) in zip(hits_groups, labels, color):
+        x = []
+        y = []
+        for hit in hits:
+            query_length = benchmark.query_lengths[hit.query_name]
+            target_length = benchmark.target_lengths[hit.target_name]
+            num_cells = query_length * target_length
+            x.append(num_cells)
+            y.append(hit.cell_frac)
 
-        x_false_positive.append(num_cells)
-        y_false_positive.append(hit.cell_frac)
+        coefficients = np.polyfit(np.log10(x), np.log10(y), deg=1)
 
-    # fit lines
-    x_values = [1e2, 1e9]
+        x_fit = [1e2, 1e9]
+        y_fit = np.exp(coefficients[1]) * x_fit**coefficients[0]
 
-    true_coefficients = np.polyfit(
-        np.log(x_true_positive), np.log(y_true_positive), deg=1)
+        plt.plot(x_fit, y_fit, color=c)
 
-    true_fit_line = np.exp(
-        true_coefficients[1]) * x_values**true_coefficients[0]
+        plt.scatter(
+            x,
+            y,
+            color=c,
+            marker='^',
+            label=l,
+            linestyle='',
+            # markersize=5,
+            alpha=0.4
+        )
 
-    false_coefficients = np.polyfit(
-        np.log(x_false_positive), np.log(y_false_positive), deg=1)
-
-    false_fit_line = np.exp(
-        false_coefficients[1]) * x_values**false_coefficients[0]
-
-    # plotting
-
-    plt.loglog(x_values, false_fit_line, color='red')
-
-    plt.loglog(x_values, true_fit_line, color='green')
-
-    plt.loglog(
-        x_false_positive,
-        y_false_positive,
-        color='red',
-        marker='^',
-        label='False Positives',
-        linestyle='',
-        markersize=5,
-        alpha=0.4
-    )
-
-    plt.loglog(
-        x_true_positive,
-        y_true_positive,
-        color='green',
-        marker='^',
-        label='True Positives',
-        linestyle='',
-        markersize=5,
-        alpha=0.4
-    )
-
+    plt.xscale('log')
+    plt.yscale('log')
     plt.xlabel('Total Cells Computed by Full Forward-Backward')
     plt.ylabel('Fraction of Cells Computed by Sparse Forward-Backward')
     plt.title('Pfam Domain Benchmark, Cells Computed')

@@ -9,6 +9,8 @@ elif [ "$#" -ge 2 ]; then
     THREADS=$2
 fi
 
+E=1e9
+
 BENCHMARK_DIR=$1
 NAME=$(basename "$BENCHMARK_DIR")
 TARGET=$BENCHMARK_DIR/$NAME.test.fa
@@ -45,7 +47,7 @@ mkdir $PREP
 /usr/bin/time -p -o $PREP_TIME nail prep -t $THREADS --skip-hmmbuild -p $PREP $QUERY_MSA $TARGET
 /usr/bin/time -p -o $SEED_TIME nail seed -t $THREADS -q $QUERY_HMM -s $SEEDS $PREP
 
-/usr/bin/time -p -o $ALIGN_DEFAULT_TIME nail align -t $THREADS -E 200 -T $TSV_DEFAULT -O $OUT_DEFAULT $QUERY_HMM $TARGET $SEEDS
-/usr/bin/time -p -o $ALIGN_8_12_TIME nail align -t $THREADS -A 8 -B 12 -E 200 -T $TSV_8_12 -O $OUT_8_12 $QUERY_HMM $TARGET $SEEDS
-/usr/bin/time -p -o $ALIGN_FULL_TIME nail align -t $THREADS --full-dp -E 200 -T $TSV_FULL -O $OUT_FULL $QUERY_HMM $TARGET $SEEDS
+/usr/bin/time -p -o $ALIGN_DEFAULT_TIME nail align -t $THREADS -E $E -T $TSV_DEFAULT -O $OUT_DEFAULT $QUERY_HMM $TARGET $SEEDS
+/usr/bin/time -p -o $ALIGN_8_12_TIME nail align -t $THREADS -A 8 -B 12 -E $E -T $TSV_8_12 -O $OUT_8_12 $QUERY_HMM $TARGET $SEEDS
+/usr/bin/time -p -o $ALIGN_FULL_TIME nail align -t $THREADS --full-dp -E $E -T $TSV_FULL -O $OUT_FULL $QUERY_HMM $TARGET $SEEDS
 

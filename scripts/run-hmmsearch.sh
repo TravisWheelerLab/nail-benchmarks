@@ -11,6 +11,8 @@ fi
 
 HMMSEARCH=hmmsearch
 
+E=1e9
+
 BENCHMARK_DIR=$1
 NAME=$(basename "$BENCHMARK_DIR")
 TARGET=$BENCHMARK_DIR/$NAME.test.fa
@@ -30,4 +32,4 @@ fi
 
 mkdir -p $RESULTS_DIR
 
-/usr/bin/time -p -o $TIME $HMMSEARCH --cpu $THREADS -E 200 -o $OUT --domtblout $DOM --tblout $TBL $QUERY $TARGET
+/usr/bin/time -p -o $TIME $HMMSEARCH --cpu $THREADS -E $E -o $OUT --domtblout $DOM --tblout $TBL $QUERY $TARGET

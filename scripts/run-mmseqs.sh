@@ -11,6 +11,8 @@ fi
 
 MMSEQS=mmseqs
 
+E=1e9
+
 BENCHMARK_DIR=$1
 NAME=$(basename "$BENCHMARK_DIR")
 TARGET=$BENCHMARK_DIR/$NAME.test.fa
@@ -51,12 +53,12 @@ $MMSEQS convertmsa $QUERY $MSA_DB --identifier-field 0 > /dev/null
 $MMSEQS msa2profile $MSA_DB $QUERY_DB --match-mode 1 > /dev/null
 $MMSEQS createdb $TARGET $TARGET_DB > /dev/null
 
-/usr/bin/time -p -o $TIME_DEFAULT $MMSEQS search $QUERY_DB $TARGET_DB $ALIGN_DB_DEFAULT $PREP --threads $THREADS -e 200 > /dev/null
+/usr/bin/time -p -o $TIME_DEFAULT $MMSEQS search $QUERY_DB $TARGET_DB $ALIGN_DB_DEFAULT $PREP --threads $THREADS -e $E > /dev/null
 $MMSEQS convertalis $QUERY_DB $TARGET_DB $ALIGN_DB_DEFAULT $OUT_DEFAULT --format-output "target,query,tstart,tend,qstart,qend,evalue" > /dev/null
 
-/usr/bin/time -p -o $TIME_SENSITIVE $MMSEQS search $QUERY_DB $TARGET_DB $ALIGN_DB_SENSITIVE $PREP --threads $THREADS -s 7.5 --max-seqs 1000 -e 200 > /dev/null
+/usr/bin/time -p -o $TIME_SENSITIVE $MMSEQS search $QUERY_DB $TARGET_DB $ALIGN_DB_SENSITIVE $PREP --threads $THREADS -s 7.5 --max-seqs 1000 -e $E > /dev/null
 $MMSEQS convertalis $QUERY_DB $TARGET_DB $ALIGN_DB_SENSITIVE $OUT_SENSITIVE --format-output "target,query,tstart,tend,qstart,qend,evalue" > /dev/null
 
 /usr/bin/time -p -o $TIME_PREFILTER_NAIL $MMSEQS prefilter $QUERY_DB $TARGET_DB $PREFILTER_DB_NAIL --threads $THREADS -k $K_NAIL --k-score $K_SCORE_NAIL --min-ungapped-score $MIN_UNGAPPED_SCORE_NAIL --max-seqs $MAX_SEQS_NAIL > /dev/null
-/usr/bin/time -p -o $TIME_ALIGN_NAIL $MMSEQS align $QUERY_DB $TARGET_DB $PREFILTER_DB_NAIL $ALIGN_DB_NAIL --threads $THREADS -e 200 > /dev/null
+/usr/bin/time -p -o $TIME_ALIGN_NAIL $MMSEQS align $QUERY_DB $TARGET_DB $PREFILTER_DB_NAIL $ALIGN_DB_NAIL --threads $THREADS -e $E > /dev/null
 $MMSEQS convertalis $QUERY_DB $TARGET_DB $ALIGN_DB_NAIL $OUT_NAIL --format-output "target,query,tstart,tend,qstart,qend,evalue" > /dev/null
