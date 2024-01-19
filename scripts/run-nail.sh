@@ -15,11 +15,11 @@ QUERY_HMM=$BENCHMARK_DIR/$NAME.train.hmm
 
 RESULTS_DIR=$BENCHMARK_DIR/results/nail/
 
-PREP_TIME_1=$RESULTS_DIR/nail.prep.time
-SEED_TIME_1=$RESULTS_DIR/nail.seed.time
+PREP_TIME_1=$RESULTS_DIR/nail.prep.1.time
+PREP_TIME_8=$RESULTS_DIR/nail.prep.8.time
 
-PREP_TIME_8=$RESULTS_DIR/nail.prep.time
-SEED_TIME_8=$RESULTS_DIR/nail.seed.time
+SEED_TIME_1=$RESULTS_DIR/nail.seed.1.time
+SEED_TIME_8=$RESULTS_DIR/nail.seed.8.time
 
 ALIGN_DEFAULT_1_TIME=$RESULTS_DIR/nail.align.1.default.time
 ALIGN_DEFAULT_8_TIME=$RESULTS_DIR/nail.align.8.default.time
