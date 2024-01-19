@@ -22,21 +22,6 @@ colors = [
 ]
 
 
-min_mean_false_positive = 1e-3
-max_mean_false_positive = 10.0
-num_mean_false_positive_points = 20
-
-mean_false_positive_values = list(np.logspace(
-    np.log10(min_mean_false_positive),
-    np.log10(max_mean_false_positive),
-    num_mean_false_positive_points
-))
-
-mean_false_positive_values.insert(0, 0)
-
-recall_step = 0.01
-
-
 class Benchmark:
     def __init__(self, benchmark_dir):
         benchmark_name = benchmark_dir.name
@@ -209,94 +194,53 @@ class Hits:
         self.other.sort(key=sort_key)
 
     def num_hits(self):
-        return len(self.true_positives) + len(self.false_positives) + len(self.other)
+        return (
+            len(self.true_positives)
+            + len(self.false_positives)
+            + len(self.other)
+        )
 
-    def recall_vs_mean_y_even(self, num_true_positives, num_queries):
-        print(self.name)
-
+    def recall_vs_mean_false(self, num_true_positives, num_queries):
         t = [h.target_name for h in self.true_positives]
         tp = list(set([h.target_name for h in self.true_positives]))
 
         assert (len(t) == len(tp))
 
-        first_false_evalue = self.false_positives[0].evalue
+        x = []
+        y = []
 
-        max_recall = len(self.true_positives) / num_true_positives
+        combined_hits = [(h, True) for h in self.true_positives] + \
+            [(h, False) for h in self.false_positives]
 
-        true_before_first_false = list(
-            filter(lambda x: x.evalue <= first_false_evalue, self.true_positives))
+        combined_hits.sort(key=lambda h: h[0].evalue)
 
-        num_true_before_first_false = len(true_before_first_false)
-        recall_before_first_false = num_true_before_first_false / num_true_positives
+        true_count = 0
+        false_count = 0
+        fdr_point = None
 
-        recall_start = math.ceil(recall_before_first_false * 100)
-        recall_end = math.ceil(max_recall * 100)
-
-        recall_values = [i / 100 for i in range(recall_start, recall_end)]
-
-        recall_values.insert(0, recall_before_first_false)
-        recall_values.append(max_recall)
-
-        mean_false_values = []
-        for r in recall_values:
-            true_idx = (math.floor(r * num_true_positives) - 1)
-
-            evalue_threshold = self.true_positives[true_idx].evalue
-            false_below_thresh = list(
-                filter(lambda x: x.evalue <= evalue_threshold, self.false_positives))
-
-            num_false_below_thresh = len(false_below_thresh)
-            mean_false_values.append(num_false_below_thresh / num_queries)
-
-        x = mean_false_values
-        y = recall_values
-
-        return (x, y)
-
-    def recall_vs_mean_false_x_even(self, num_true_positives, num_queries):
-        # false indices maps to the point in the list of false positives
-        # at which each approximate target mean false positive is achieved
-        false_indices = []
-        for target_value in mean_false_positive_values:
-            if len(false_indices) > 0:
-                start = false_indices[-1]
+        for (hit, is_true) in combined_hits:
+            if is_true:
+                true_count += 1
             else:
-                start = 0
+                false_count += 1
 
-            for (idx, hit) in enumerate(self.false_positives[start:]):
-                value = (idx + start) / num_queries
-                if value >= target_value:
-                    false_indices.append(idx + start)
-                    break
+            recall = true_count / num_true_positives
+            mean_false_positive = false_count / num_queries
 
-        evalue_thresholds = [
-            self.false_positives[idx].evalue for idx in false_indices
-        ]
+            x.append(mean_false_positive)
+            y.append(recall)
 
-        true_indices = [0]
-        for e in evalue_thresholds:
-            start = true_indices[-1]
-            for (idx, hit) in enumerate(self.true_positives[start:]):
-                if hit.evalue >= e:
-                    true_indices.append(idx + start)
-                    break
+            if fdr_point is None:
+                false_discovery_rate = false_count / true_count
+                if abs(0.01 - false_discovery_rate) < 1e-3:
+                    fdr_point = (mean_false_positive, recall)
 
-        true_indices = true_indices[1:]
+        for (idx, val) in enumerate(x):
+            if val > 0:
+                y_first = y[idx - 1]
+                break
 
-        recall_values = [
-            idx / num_true_positives for idx in true_indices][:20]
-
-        y_len = len(recall_values)
-        x = mean_false_positive_values[:y_len]
-        y = recall_values
-        return (x, y)
-
-        pass
-
-    def __str__(self):
-        return f"TP:{len(self.true_positives)}"
-        + f"FP:{len(self.false_positives)}"
-        + f"O:{len(self.other)}"
+        return (x, y, y_first, fdr_point)
 
 
 def read_hmmer_results(results_dir):
@@ -330,75 +274,72 @@ def read_nail_results(results_dir):
     return [Hits(p, cols) for p in paths]
 
 
-def resample_points(x_vals, y_vals):
-    x_resampled = []
-    y_resampled = []
-    for x_target in mean_false_positive_values:
-        for (i, (x1, y1)) in enumerate(zip(x_vals, y_vals)):
-            if x1 >= x_target:
-                x0 = x_vals[i - 1]
-                y0 = y_vals[i - 1]
-
-                if x0 == x1:
-                    y_target = y1
-                    break
-                else:
-                    slope = (y1 - y0) / (x1 - x0)
-                    y_target = y0 + (x_target - x0) * slope
-
-                x_resampled.append(x_target)
-                y_resampled.append(y_target)
-                break
-
-    return (x_resampled, y_resampled)
-
-
 def plot_recall(hits, num_true_positives, num_queries):
-    fig, ax = plt.subplots()
+    plotted = [
+        "hmmer",
+        "nail default",
+        "mmseqs sensitive",
+        "mmseqs default",
+    ]
+
+    hits = list(filter(lambda h: h.name in plotted, hits))
 
     ymin = 1.0
     ymax = 0.0
     for (h, c) in zip(hits, colors):
-        vals = h.recall_vs_mean_y_even(num_true_positives, num_queries)
-        (x, y) = resample_points(*vals)
+        (x, y, y_first, (x_fdr, y_fdr)) = h.recall_vs_mean_false(
+            num_true_positives, num_queries)
 
-        ymin = min(ymin, vals[1][0])
-        ymax = max(ymax, vals[1][-1])
+        ymin = min(ymin, y_first)
+        ymax = max(ymax, y[-1])
 
-        ax.semilogx(
-            *vals,
+        plt.plot(
+            x,
+            y,
             color=c,
+            label=h.name
         )
 
-        # ax.semilogx(
-        #     x[1:],
-        #     y[1:],
-        #     marker='o',
-        #     color=c,
-        #     label=h.name
-        # )
-
-        ax.axhline(
-            y=y[0],
-            xmax=0,
-            # linestyle='--',
+        plt.plot(
+            x_fdr,
+            y_fdr,
+            color=c,
             marker='D',
-            color=c,
-            clip_on=False
+            markeredgecolor='black',
         )
+
+        plt.axhline(
+            y=y_first,
+            xmax=10,
+            linestyle='--',
+            alpha=0.4,
+            # marker='D',
+            color=c,
+            # clip_on=False
+        )
+
+    plt.plot([], [], color='black', linestyle='', marker='D',
+             label='1% False Discovery Rate')
+
+    plt.plot([], [], color='black', linestyle='--',
+             label='Recall Before First False Positive')
 
     ymin = (math.floor(ymin * 100) / 100) - 0.025
     ymax = (math.ceil(ymax * 100) / 100) + 0.025
 
-    ax.set_xlim([0, max_mean_false_positive])
-    ax.set_ylim([ymin, ymax])
+    plt.xscale('log')
 
-    ax.legend()
+    plt.xlabel('Mean False Positives Per Search')
+    plt.ylabel('Recall')
+    plt.title('Pfam Domain Benchmark, Recall vs. Mean False Positives Per Search')
 
-    if figures_path is not None:
-        plt.savefig(figures_path)
-    else:
-        plt.show()
+    plt.xlim(1e-3, 1e1)
+    plt.ylim(ymin, ymax)
+
+    plt.legend()
+
+    plt.savefig("recall-vs-mean-false.pdf")
+    plt.show()
 
 
 def plot_nail_bitscore(nail_hits):
@@ -437,23 +378,31 @@ def plot_nail_bitscore(nail_hits):
     for (d, f) in zip(default_matched_hits, full_matched_hits):
         assert (d.target_name == f.target_name)
 
-    x = [h.score + h.bias for h in full_matched_hits]
-    y = [h.score + h.bias for h in default_matched_hits]
+    # x = [h.score + h.bias for h in full_matched_hits]
+    # y = [h.score + h.bias for h in default_matched_hits]
+
+    x = [h.score for h in full_matched_hits]
+    y = [h.score for h in default_matched_hits]
+
+    max_x = max(x)
+    max_y = max(y)
+    max_val = max(max_x, max_y)
 
     coefficients = np.polyfit(x, y, deg=1)
     fit_line = np.poly1d(coefficients)
 
+    plt.plot(x, fit_line(x), color=colors[3], label="Trend")
+    plt.plot([0, max_val], [0, max_val], color=colors[1], label="y = x")
+
     plt.scatter(
         x,
         y,
-        color='green',
+        color=colors[0],
         marker='^',
         label='True Positives',
         s=10,
         alpha=0.4
     )
-
-    plt.plot(x, fit_line(x), color='black', label="Trend")
 
     plt.xlabel('Sequence Bitscore of Full Forward-Backward')
     plt.ylabel('Sequence Bitscore of Sparse Forward-Backward')
@@ -467,21 +416,18 @@ def plot_nail_cells(nail_hits, benchmark):
     default_hits = next(filter(lambda h: h.name == "nail default", nail_hits))
 
     hits_groups = [
-        list(filter(lambda h: h.evalue > 1.0, default_hits.false_positives)),
-        list(filter(lambda h: h.evalue <= 1.0, default_hits.false_positives)),
+        default_hits.false_positives,
         default_hits.true_positives,
     ]
 
     labels = [
-        "Decoys E > 1.0",
-        "Decoys E <= 1.0",
+        "Decoys",
         "True Positives",
     ]
 
     color = [
         colors[2],
         colors[0],
-        colors[1],
     ]
 
     for (hits, l, c) in zip(hits_groups, labels, color):
@@ -499,7 +445,7 @@ def plot_nail_cells(nail_hits, benchmark):
         x_fit = [1e2, 1e9]
         y_fit = np.exp(coefficients[1]) * x_fit**coefficients[0]
 
-        plt.plot(x_fit, y_fit, color=c)
+        plt.plot(x_fit, y_fit, color=c, zorder=0)
 
         plt.scatter(
             x,
@@ -508,9 +454,9 @@ def plot_nail_cells(nail_hits, benchmark):
             marker='^',
             label=l,
             linestyle='',
-            # markersize=5,
             alpha=0.4
         )
+
 
     plt.xscale('log')
     plt.yscale('log')
@@ -545,6 +491,6 @@ if __name__ == "__main__":
 
     benchmark = Benchmark(benchmark_dir)
 
-    # plot_recall(all_hits, benchmark.num_true_positives, benchmark.num_queries)
-    # plot_nail_bitscore(nail_hits)
+    plot_recall(all_hits, benchmark.num_true_positives, benchmark.num_queries)
+    plot_nail_bitscore(nail_hits)
     plot_nail_cells(nail_hits, benchmark)
