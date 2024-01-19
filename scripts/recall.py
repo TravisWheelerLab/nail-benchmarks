@@ -457,7 +457,6 @@ def plot_nail_cells(nail_hits, benchmark):
             alpha=0.4
         )
 
-
     plt.xscale('log')
     plt.yscale('log')
     plt.xlabel('Total Cells Computed by Full Forward-Backward')

@@ -30,8 +30,8 @@ PREP=$RESULTS_DIR/prep/
 PREP=$RESULTS_DIR/prep/
 SEEDS=$PREP/seeds.json
 
-OUT_DEFAULT=$RESULTS_DIR/nail.default.1.out
-TSV_DEFAULT=$RESULTS_DIR/nail.default.1.tsv
+OUT_DEFAULT=$RESULTS_DIR/nail.default.out
+TSV_DEFAULT=$RESULTS_DIR/nail.default.tsv
 
 OUT_FULL=$RESULTS_DIR/nail.full.out
 TSV_FULL=$RESULTS_DIR/nail.full.tsv
