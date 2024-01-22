@@ -13,6 +13,10 @@ TARGET=$BENCHMARK_DIR/$NAME.test.fa
 QUERY_MSA=$BENCHMARK_DIR/$NAME.train.msa
 QUERY_HMM=$BENCHMARK_DIR/$NAME.train.hmm
 
+LONG_SEQ_DIR=$BENCHMARK_DIR/long-seq/
+LONG_SEQ_QUERY_DIR=$LONG_SEQ_DIR/query/
+LONG_SEQ_TARGET_DIR=$LONG_SEQ_DIR/target/
+
 RESULTS_DIR=$BENCHMARK_DIR/results/nail/
 
 PREP_TIME_1=$RESULTS_DIR/nail.prep.1.time
@@ -39,6 +43,15 @@ TSV_FULL=$RESULTS_DIR/nail.full.tsv
 rm -rf $RESULTS_DIR
 mkdir -p $RESULTS_DIR
 mkdir $PREP
+
+LONG_SEQ_TSV=$RESULTS_DIR/long-seq.tsv
+for ((i=1; i<=6; i++)); do
+  LONG_QUERY="$LONG_SEQ_QUERY_DIR${i}.query.fa"
+  LONG_TARGET="$LONG_SEQ_TARGET_DIR${i}.target.fa"
+  nail search -T tmp.tsv -p $PREP $LONG_QUERY $LONG_TARGET > /dev/null
+  cat tmp.tsv >> $LONG_SEQ_TSV
+  rm tmp.tsv
+done
 
 /usr/bin/time -p -o $PREP_TIME_1 nail prep -t 1 --skip-hmmbuild -p $PREP $QUERY_MSA $TARGET
 /usr/bin/time -p -o $PREP_TIME_8 nail prep -t 8 --skip-hmmbuild -p $PREP $QUERY_MSA $TARGET

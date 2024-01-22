@@ -28,5 +28,5 @@ fi
 
 mkdir -p $RESULTS_DIR
 
-/usr/bin/time -p -o $TIME_1 hmmsearch --cpu 1 -E $E -o $OUT --domtblout $DOM --tblout $TBL $QUERY $TARGET
-/usr/bin/time -p -o $TIME_8 hmmsearch --cpu 8 -E $E -o $OUT --domtblout $DOM --tblout $TBL $QUERY $TARGET
+/usr/bin/time -p -o $TIME_1 hmmsearch --cpu 1 -E $E -o $OUT --notextw --domtblout $DOM --tblout $TBL $QUERY $TARGET
+/usr/bin/time -p -o $TIME_8 hmmsearch --cpu 8 -E $E -o $OUT --notextw --domtblout $DOM --tblout $TBL $QUERY $TARGET

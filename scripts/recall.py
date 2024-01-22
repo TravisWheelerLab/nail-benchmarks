@@ -471,6 +471,106 @@ def plot_nail_cells(nail_hits, benchmark):
     plt.show()
 
 
+class Time:
+    def __init__(self, path):
+        self.name = path.name
+        with open(path) as file:
+            line = file.readline()
+            tokens = line.split()
+            self.seconds = float(tokens[1])
+
+
+def plot_time(results_dir, hits, num_true_positives, num_queries):
+    hmmer_dir = results_dir / "hmmer/"
+    hmmer_paths = hmmer_dir.glob("*.time")
+    hmmer_times = {t.name: t for t in [Time(p) for p in hmmer_paths]}
+
+    mmseqs_dir = results_dir / "mmseqs/"
+    mmseqs_paths = mmseqs_dir.glob("*.time")
+    mmseqs_times = {t.name: t for t in [Time(p) for p in mmseqs_paths]}
+
+    nail_dir = results_dir / "nail/"
+    nail_paths = nail_dir.glob("*.time")
+    nail_times = {t.name: t for t in [Time(p) for p in nail_paths]}
+
+    times_1 = [
+        hmmer_times["hmmer.1.time"].seconds,
+        nail_times["nail.seed.1.time"].seconds +
+        nail_times["nail.align.1.default.time"].seconds,
+        mmseqs_times["mmseqs.default.1.time"].seconds,
+        mmseqs_times["mmseqs.sensitive.1.time"].seconds,
+        mmseqs_times["mmseqs.prefilter.nail.1.time"].seconds +
+        mmseqs_times["mmseqs.align.nail.1.time"].seconds,
+    ]
+
+    times_8 = [
+        hmmer_times["hmmer.8.time"].seconds,
+        nail_times["nail.seed.8.time"].seconds +
+        nail_times["nail.align.8.default.time"].seconds,
+        mmseqs_times["mmseqs.default.8.time"].seconds,
+        mmseqs_times["mmseqs.sensitive.8.time"].seconds,
+        mmseqs_times["mmseqs.prefilter.nail.8.time"].seconds +
+        mmseqs_times["mmseqs.align.nail.8.time"].seconds,
+    ]
+
+    plotted = [
+        "hmmer",
+        "nail default",
+        "mmseqs sensitive",
+        "mmseqs default",
+        "mmseqs nail",
+    ]
+
+    hits = list(filter(lambda h: h.name in plotted, hits))
+
+    recalls = [
+        h.recall_vs_mean_false(
+            num_true_positives, num_queries
+        )[2] for h in hits
+    ]
+
+    labels = [
+        "hmmsearch (default)",
+        "nail (default)",
+        "mmseqs (default)",
+        "mmseqs (sensitive: -s 7.5 --max-seqs 1e4",
+        "mmseqs (nail pipeline settings: --k-score 80 --min-ungapped-score 15 --max-seqs 1e4)",
+    ]
+
+    for x, y, l, c in zip(recalls, times_1, labels, colors):
+        plt.scatter(
+            x,
+            y,
+            color=c,
+            marker='o',
+            label=l,
+            linestyle='',
+        )
+
+    for x, y, l, c in zip(recalls, times_8, labels, colors):
+        plt.scatter(
+            x,
+            y,
+            color=c,
+            marker='D',
+            linestyle='',
+        )
+
+    plt.plot([], [], color='black', linestyle='', marker='o',
+             label='1 thread')
+
+    plt.plot([], [], color='black', linestyle='', marker='D',
+             label='8 threads')
+
+    plt.xlabel('Recall before First False Positive')
+    plt.ylabel('Runtime (sec)')
+    plt.title('Pfam Domain Benchmark: Runtime vs Recall before First False Positive')
+
+    plt.legend()
+    plt.grid()
+    plt.show()
+
+
 if __name__ == "__main__":
     figures_path = None
     if len(sys.argv) < 2:
@@ -490,6 +590,11 @@ if __name__ == "__main__":
 
     benchmark = Benchmark(benchmark_dir)
 
-    plot_recall(all_hits, benchmark.num_true_positives, benchmark.num_queries)
+    # plot_recall(
+    #     all_hits, benchmark.num_true_positives, benchmark.num_queries)
+
+    plot_time(results_dir, all_hits,
+              benchmark.num_true_positives, benchmark.num_queries)
+
     plot_nail_bitscore(nail_hits)
     plot_nail_cells(nail_hits, benchmark)
