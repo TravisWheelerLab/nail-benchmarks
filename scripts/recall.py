@@ -21,6 +21,8 @@ colors = [
     "#cab2d6",  # (Light Purple)
 ]
 
+figsize = (16, 12)
+
 
 class Benchmark:
     def __init__(self, benchmark_dir):
@@ -307,6 +309,9 @@ def read_nail_results(results_dir):
 
 
 def plot_recall(hits, num_true_positives, num_queries):
+    plt.close('all')
+    plt.figure(figsize=figsize)
+
     plotted = [
         "hmmer",
         "nail default",
@@ -370,11 +375,14 @@ def plot_recall(hits, num_true_positives, num_queries):
 
     plt.legend()
 
-    plt.savefig("recall-vs-mean-false.pdf")
-    plt.show()
+    plt.savefig("roc.pdf")
+    # plt.show()
 
 
 def plot_nail_bitscore(nail_hits):
+    plt.close('all')
+    plt.figure(figsize=figsize)
+
     default_hits = next(filter(lambda h: h.name == "nail default", nail_hits))
     full_hits = next(filter(lambda h: h.name == "nail full", nail_hits))
 
@@ -441,10 +449,15 @@ def plot_nail_bitscore(nail_hits):
     plt.title('Pfam Domain Benchmark, Sequence Bitscore')
     plt.legend()
     plt.grid()
-    plt.show()
+
+    plt.savefig("bitscore.pdf")
+    # plt.show()
 
 
 def plot_nail_cells(nail_hits, benchmark):
+    plt.close('all')
+    plt.figure(figsize=figsize)
+
     default_hits = next(filter(lambda h: h.name == "nail default", nail_hits))
     long_seq_hits = next(filter(lambda h: h.name == "long-seq", nail_hits))
 
@@ -472,7 +485,13 @@ def plot_nail_cells(nail_hits, benchmark):
         "*",
     ]
 
-    for (i, (hits, l, c, m)) in enumerate(zip(hits_groups, labels, color, markers)):
+    alphas = [
+        0.4,
+        0.4,
+        0.8,
+    ]
+
+    for (i, (hits, l, c, m, a)) in enumerate(zip(hits_groups, labels, color, markers, alphas)):
         x = []
         y = []
         for hit in hits:
@@ -482,7 +501,6 @@ def plot_nail_cells(nail_hits, benchmark):
             x.append(num_cells)
             y.append(hit.cell_frac)
 
-        # don't plot a fit line for the long sequences hits
         if i < 2:
             coefficients = np.polyfit(np.log10(x), np.log10(y), deg=1)
 
@@ -497,8 +515,7 @@ def plot_nail_cells(nail_hits, benchmark):
             color=c,
             marker=m,
             label=l,
-            linestyle='',
-            alpha=0.4
+            alpha=a
         )
 
     plt.xscale('log')
@@ -512,7 +529,8 @@ def plot_nail_cells(nail_hits, benchmark):
 
     plt.legend()
     plt.grid()
-    plt.show()
+
+    plt.savefig("cells.pdf")
 
 
 class Time:
@@ -525,6 +543,9 @@ class Time:
 
 
 def plot_time(results_dir, hits, num_true_positives, num_queries):
+    plt.close('all')
+    plt.figure(figsize=figsize)
+
     hmmer_dir = results_dir / "hmmer/"
     hmmer_paths = hmmer_dir.glob("*.time")
     hmmer_times = {t.name: t for t in [Time(p) for p in hmmer_paths]}
@@ -612,7 +633,9 @@ def plot_time(results_dir, hits, num_true_positives, num_queries):
 
     plt.legend()
     plt.grid()
-    plt.show()
+
+    plt.savefig("runtime.pdf")
+    # plt.show()
 
 
 if __name__ == "__main__":
@@ -634,11 +657,11 @@ if __name__ == "__main__":
 
     benchmark = Benchmark(benchmark_dir)
 
-    # plot_recall(
-    #     all_hits, benchmark.num_true_positives, benchmark.num_queries)
+    plot_recall(
+        all_hits, benchmark.num_true_positives, benchmark.num_queries)
 
-    # plot_time(results_dir, all_hits,
-    #           benchmark.num_true_positives, benchmark.num_queries)
+    plot_time(results_dir, all_hits,
+              benchmark.num_true_positives, benchmark.num_queries)
 
     plot_nail_bitscore(nail_hits)
     plot_nail_cells(nail_hits, benchmark)
