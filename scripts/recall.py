@@ -77,6 +77,38 @@ class Benchmark:
             length = int(tokens[3])
             self.query_lengths[name] = length
 
+        long_seq_target_paths = (
+            benchmark_dir / "long-seq/target/").glob("*.fa")
+        long_seq_query_paths = (
+            benchmark_dir / "long-seq/query/").glob("*.fa")
+
+        for (q, t) in zip(long_seq_query_paths, long_seq_target_paths):
+            command = ["esl-seqstat", "-a", q]
+            result = subprocess.run(
+                command, stdout=subprocess.PIPE, text=True, check=True)
+            lines = result.stdout.splitlines()
+            for line in lines:
+                if not line.startswith("="):
+                    continue
+
+                tokens = line.split()
+                name = tokens[1]
+                length = int(tokens[2])
+                self.query_lengths[name] = length
+
+            command = ["esl-seqstat", "-a", t]
+            result = subprocess.run(
+                command, stdout=subprocess.PIPE, text=True, check=True)
+            lines = result.stdout.splitlines()
+            for line in lines:
+                if not line.startswith("="):
+                    continue
+
+                tokens = line.split()
+                name = tokens[1]
+                length = int(tokens[2])
+                self.target_lengths[name] = length
+
 
 class Positive:
     def __init__(self, line):
@@ -392,7 +424,7 @@ def plot_nail_bitscore(nail_hits):
     fit_line = np.poly1d(coefficients)
 
     plt.plot(x, fit_line(x), color=colors[3], label="Trend")
-    plt.plot([0, max_val], [0, max_val], color=colors[1], label="y = x")
+    plt.plot([0, max_val], [0, max_val], color=colors[4], label="y = x")
 
     plt.scatter(
         x,
@@ -414,23 +446,33 @@ def plot_nail_bitscore(nail_hits):
 
 def plot_nail_cells(nail_hits, benchmark):
     default_hits = next(filter(lambda h: h.name == "nail default", nail_hits))
+    long_seq_hits = next(filter(lambda h: h.name == "long-seq", nail_hits))
 
     hits_groups = [
         default_hits.false_positives,
         default_hits.true_positives,
+        long_seq_hits.other,
     ]
 
     labels = [
         "Decoys",
         "True Positives",
+        "Long Sequence",
     ]
 
     color = [
         colors[2],
         colors[0],
+        colors[4],
     ]
 
-    for (hits, l, c) in zip(hits_groups, labels, color):
+    markers = [
+        'v',
+        '^',
+        "*",
+    ]
+
+    for (i, (hits, l, c, m)) in enumerate(zip(hits_groups, labels, color, markers)):
         x = []
         y = []
         for hit in hits:
@@ -440,18 +482,20 @@ def plot_nail_cells(nail_hits, benchmark):
             x.append(num_cells)
             y.append(hit.cell_frac)
 
-        coefficients = np.polyfit(np.log10(x), np.log10(y), deg=1)
+        # don't plot a fit line for the long sequences hits
+        if i < 2:
+            coefficients = np.polyfit(np.log10(x), np.log10(y), deg=1)
 
-        x_fit = [1e2, 1e9]
-        y_fit = np.exp(coefficients[1]) * x_fit**coefficients[0]
+            x_fit = [1e2, 1e10]
+            y_fit = np.exp(coefficients[1]) * x_fit**coefficients[0]
 
-        plt.plot(x_fit, y_fit, color=c, zorder=0)
+            plt.plot(x_fit, y_fit, color=c, zorder=0)
 
         plt.scatter(
             x,
             y,
             color=c,
-            marker='^',
+            marker=m,
             label=l,
             linestyle='',
             alpha=0.4
@@ -463,8 +507,8 @@ def plot_nail_cells(nail_hits, benchmark):
     plt.ylabel('Fraction of Cells Computed by Sparse Forward-Backward')
     plt.title('Pfam Domain Benchmark, Cells Computed')
 
-    plt.xlim(1e2, 1e9)
-    plt.ylim(1e-5, 1)
+    plt.xlim(1e2, 1e10)
+    plt.ylim(1e-5, 1.1)
 
     plt.legend()
     plt.grid()
@@ -593,8 +637,8 @@ if __name__ == "__main__":
     # plot_recall(
     #     all_hits, benchmark.num_true_positives, benchmark.num_queries)
 
-    plot_time(results_dir, all_hits,
-              benchmark.num_true_positives, benchmark.num_queries)
+    # plot_time(results_dir, all_hits,
+    #           benchmark.num_true_positives, benchmark.num_queries)
 
     plot_nail_bitscore(nail_hits)
     plot_nail_cells(nail_hits, benchmark)
