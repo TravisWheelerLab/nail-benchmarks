@@ -21,7 +21,7 @@ colors = [
     "#cab2d6",  # (Light Purple)
 ]
 
-figsize = (16, 12)
+figsize = (10, 7)
 
 
 class Benchmark:
@@ -312,18 +312,29 @@ def plot_recall(hits, num_true_positives, num_queries):
     plt.close('all')
     plt.figure(figsize=figsize)
 
-    plotted = [
-        "hmmer",
-        "nail default",
-        "mmseqs sensitive",
-        "mmseqs default",
+    hmmer_hits = next(filter(lambda h: h.name == "hmmer", hits))
+    nail_hits = next(filter(lambda h: h.name == "nail default", hits))
+    mmseqs_hits = next(filter(lambda h: h.name == "mmseqs default", hits))
+    mmseqs_sensitive_hits = next(
+        filter(lambda h: h.name == "mmseqs sensitive", hits))
+
+    hits = [
+        hmmer_hits,
+        nail_hits,
+        mmseqs_sensitive_hits,
+        mmseqs_hits,
     ]
 
-    hits = list(filter(lambda h: h.name in plotted, hits))
+    labels = [
+        "hmmer (default)",
+        "nail (default)",
+        "mmseqs (sensitive)",
+        "mmseqs (default)",
+    ]
 
     ymin = 1.0
     ymax = 0.0
-    for (h, c) in zip(hits, colors):
+    for (h, c, l) in zip(hits, colors, labels):
         (x, y, y_first, (x_fdr, y_fdr)) = h.recall_vs_mean_false(
             num_true_positives, num_queries)
 
@@ -334,7 +345,7 @@ def plot_recall(hits, num_true_positives, num_queries):
             x,
             y,
             color=c,
-            label=h.name
+            label=l
         )
 
         plt.plot(
@@ -350,9 +361,7 @@ def plot_recall(hits, num_true_positives, num_queries):
             xmax=10,
             linestyle='--',
             alpha=0.4,
-            # marker='D',
             color=c,
-            # clip_on=False
         )
 
     plt.plot([], [], color='black', linestyle='', marker='D',
@@ -368,7 +377,7 @@ def plot_recall(hits, num_true_positives, num_queries):
 
     plt.xlabel('Mean False Positives Per Search')
     plt.ylabel('Recall')
-    plt.title('Pfam Domain Benchmark, Recall vs. Mean False Positives Per Search')
+    plt.title('Pfam Domain Benchmark: Recall vs. Mean False Positives Per Search')
 
     plt.xlim(1e-3, 1e1)
     plt.ylim(ymin, ymax)
@@ -458,7 +467,8 @@ def plot_nail_cells(nail_hits, benchmark):
     plt.close('all')
     plt.figure(figsize=figsize)
 
-    default_hits = next(filter(lambda h: h.name == "nail default", nail_hits))
+    default_hits = next(
+        filter(lambda h: h.name == "nail no-filters", nail_hits))
     long_seq_hits = next(filter(lambda h: h.name == "long-seq", nail_hits))
 
     hits_groups = [
@@ -501,14 +511,6 @@ def plot_nail_cells(nail_hits, benchmark):
             x.append(num_cells)
             y.append(hit.cell_frac)
 
-        if i < 2:
-            coefficients = np.polyfit(np.log10(x), np.log10(y), deg=1)
-
-            x_fit = [1e2, 1e10]
-            y_fit = np.exp(coefficients[1]) * x_fit**coefficients[0]
-
-            plt.plot(x_fit, y_fit, color=c, zorder=0)
-
         plt.scatter(
             x,
             y,
@@ -522,7 +524,7 @@ def plot_nail_cells(nail_hits, benchmark):
     plt.yscale('log')
     plt.xlabel('Total Cells Computed by Full Forward-Backward')
     plt.ylabel('Fraction of Cells Computed by Sparse Forward-Backward')
-    plt.title('Pfam Domain Benchmark, Cells Computed')
+    plt.title('Pfam Domain Benchmark: Cells Computed')
 
     plt.xlim(1e2, 1e10)
     plt.ylim(1e-5, 1.1)
@@ -530,7 +532,7 @@ def plot_nail_cells(nail_hits, benchmark):
     plt.legend()
     plt.grid()
 
-    plt.savefig("cells.pdf")
+    plt.savefig("cells.png")
 
 
 class Time:
@@ -558,35 +560,53 @@ def plot_time(results_dir, hits, num_true_positives, num_queries):
     nail_paths = nail_dir.glob("*.time")
     nail_times = {t.name: t for t in [Time(p) for p in nail_paths]}
 
-    times_1 = [
-        hmmer_times["hmmer.1.time"].seconds,
-        nail_times["nail.seed.1.time"].seconds +
-        nail_times["nail.align.1.default.time"].seconds,
-        mmseqs_times["mmseqs.default.1.time"].seconds,
-        mmseqs_times["mmseqs.sensitive.1.time"].seconds,
-        mmseqs_times["mmseqs.prefilter.nail.1.time"].seconds +
-        mmseqs_times["mmseqs.align.nail.1.time"].seconds,
+    hmmer_time = hmmer_times["hmmer.8.time"].seconds,
+
+    nail_default_time = nail_times["nail.seed.8.time"].seconds + \
+        nail_times["nail.align.8.default.time"].seconds
+
+    nail_a8b12_time = nail_times["nail.seed.8.time"].seconds + \
+        nail_times["nail.align.a8b12.time"].seconds
+
+    nail_full_time = nail_times["nail.seed.8.time"].seconds + \
+        nail_times["nail.align.full.time"].seconds
+
+    mmseqs_default_time = mmseqs_times["mmseqs.default.8.time"].seconds
+
+    mmseqs_sensitive_time = mmseqs_times["mmseqs.sensitive.8.time"].seconds
+
+    mmseqs_nail_time = mmseqs_times["mmseqs.prefilter.nail.8.time"].seconds + \
+        mmseqs_times["mmseqs.align.nail.8.time"].seconds
+
+    times = [
+        hmmer_time,
+        nail_full_time,
+        nail_default_time,
+        nail_a8b12_time,
+        mmseqs_nail_time,
+        mmseqs_sensitive_time,
+        mmseqs_default_time,
     ]
 
-    times_8 = [
-        hmmer_times["hmmer.8.time"].seconds,
-        nail_times["nail.seed.8.time"].seconds +
-        nail_times["nail.align.8.default.time"].seconds,
-        mmseqs_times["mmseqs.default.8.time"].seconds,
-        mmseqs_times["mmseqs.sensitive.8.time"].seconds,
-        mmseqs_times["mmseqs.prefilter.nail.8.time"].seconds +
-        mmseqs_times["mmseqs.align.nail.8.time"].seconds,
-    ]
+    hmmer_hits = next(filter(lambda h: h.name == "hmmer", hits))
+    nail_full_hits = next(filter(lambda h: h.name == "nail full", hits))
+    nail_default_hits = next(filter(lambda h: h.name == "nail default", hits))
+    nail_a8b12_hits = next(filter(lambda h: h.name == "nail a8b12", hits))
+    mmseqs_nail_hits = next(filter(lambda h: h.name == "mmseqs nail", hits))
+    mmseqs_sensitive_hits = next(
+        filter(lambda h: h.name == "mmseqs sensitive", hits))
+    mmseqs_default_hits = next(
+        filter(lambda h: h.name == "mmseqs default", hits))
 
-    plotted = [
-        "hmmer",
-        "nail default",
-        "mmseqs sensitive",
-        "mmseqs default",
-        "mmseqs nail",
+    hits = [
+        hmmer_hits,
+        nail_full_hits,
+        nail_default_hits,
+        nail_a8b12_hits,
+        mmseqs_nail_hits,
+        mmseqs_sensitive_hits,
+        mmseqs_default_hits,
     ]
-
-    hits = list(filter(lambda h: h.name in plotted, hits))
 
     recalls = [
         h.recall_vs_mean_false(
@@ -596,36 +616,22 @@ def plot_time(results_dir, hits, num_true_positives, num_queries):
 
     labels = [
         "hmmsearch (default)",
+        "nail (full DP)",
         "nail (default)",
+        "nail (alpha=12, beta=8)",
+        "mmseqs (nail pipeline settings)",
+        "mmseqs (sensitive)",
         "mmseqs (default)",
-        "mmseqs (sensitive: -s 7.5 --max-seqs 1e4",
-        "mmseqs (nail pipeline settings: --k-score 80 --min-ungapped-score 15 --max-seqs 1e4)",
     ]
 
-    for x, y, l, c in zip(recalls, times_1, labels, colors):
-        plt.scatter(
-            x,
-            y,
-            color=c,
-            marker='o',
-            label=l,
-            linestyle='',
-        )
-
-    for x, y, l, c in zip(recalls, times_8, labels, colors):
+    for x, y, l, c in zip(recalls, times, labels, colors):
         plt.scatter(
             x,
             y,
             color=c,
             marker='D',
-            linestyle='',
+            label=l,
         )
-
-    plt.plot([], [], color='black', linestyle='', marker='o',
-             label='1 thread')
-
-    plt.plot([], [], color='black', linestyle='', marker='D',
-             label='8 threads')
 
     plt.xlabel('Recall before First False Positive')
     plt.ylabel('Runtime (sec)')

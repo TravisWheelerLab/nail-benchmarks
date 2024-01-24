@@ -28,7 +28,11 @@ SEED_TIME_8=$RESULTS_DIR/nail.seed.8.time
 ALIGN_DEFAULT_1_TIME=$RESULTS_DIR/nail.align.1.default.time
 ALIGN_DEFAULT_8_TIME=$RESULTS_DIR/nail.align.8.default.time
 
+ALIGN_A8_B12_TIME=$RESULTS_DIR/nail.align.a8b12.time
+
 ALIGN_FULL_TIME=$RESULTS_DIR/nail.align.full.time
+
+ALIGN_NO_FILTERS_TIME=$RESULTS_DIR/nail.align.no-filters.time
 
 PREP=$RESULTS_DIR/prep/
 PREP=$RESULTS_DIR/prep/
@@ -37,8 +41,19 @@ SEEDS=$PREP/seeds.json
 OUT_DEFAULT=$RESULTS_DIR/nail.default.out
 TSV_DEFAULT=$RESULTS_DIR/nail.default.tsv
 
+OUT_A8_B12=$RESULTS_DIR/nail.a8b12.out
+TSV_A8_B12=$RESULTS_DIR/nail.a8b12.tsv
+
 OUT_FULL=$RESULTS_DIR/nail.full.out
 TSV_FULL=$RESULTS_DIR/nail.full.tsv
+
+OUT_FULL=$RESULTS_DIR/nail.full.out
+TSV_FULL=$RESULTS_DIR/nail.full.tsv
+
+OUT_NO_FILTERS=$RESULTS_DIR/nail.no-filters.out
+TSV_NO_FILTERS=$RESULTS_DIR/nail.no-filters.tsv
+
+
 
 rm -rf $RESULTS_DIR
 mkdir -p $RESULTS_DIR
@@ -59,7 +74,12 @@ done
 /usr/bin/time -p -o $SEED_TIME_1 nail seed -t 1 -q $QUERY_HMM -s $SEEDS $PREP
 /usr/bin/time -p -o $SEED_TIME_8 nail seed -t 8 -q $QUERY_HMM -s $SEEDS $PREP
 
+
 /usr/bin/time -p -o $ALIGN_DEFAULT_1_TIME nail align -t 1 -E $E -T $TSV_DEFAULT -O $OUT_DEFAULT $QUERY_HMM $TARGET $SEEDS
 /usr/bin/time -p -o $ALIGN_DEFAULT_8_TIME nail align -t 8 -E $E -T $TSV_DEFAULT -O $OUT_DEFAULT $QUERY_HMM $TARGET $SEEDS
 
+/usr/bin/time -p -o $ALIGN_A8_B12_TIME nail align -t 8 -E $E -A 8 -B 12 -T $TSV_A8_B12 -O $OUT_A8_B12 $QUERY_HMM $TARGET $SEEDS
+
 /usr/bin/time -p -o $ALIGN_FULL_TIME nail align -t 8 --full-dp -E $E -T $TSV_FULL -O $OUT_FULL $QUERY_HMM $TARGET $SEEDS
+
+/usr/bin/time -p -o $ALIGN_NO_FILTERS_TIME nail align -t 8 --forward-thresh 1e9 --cloud-thresh 1e9 -E $E -T $TSV_NO_FILTERS -O $OUT_NO_FILTERS $QUERY_HMM $TARGET $SEEDS
