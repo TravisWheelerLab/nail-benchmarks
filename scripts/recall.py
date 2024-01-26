@@ -8,17 +8,24 @@ from pathlib import Path
 import numpy as np
 import matplotlib.pyplot as plt
 
+# colors = [
+#     "#1f78b4",  # (Blue)
+#     "#33a02c",  # (Green)
+#     "#e31a1c",  # (Red)
+#     "#ff7f00",  # (Orange)
+#     "#6a3d9a",  # (Purple)
+#     "#a6cee3",  # (Light Blue)
+#     "#b2df8a",  # (Light Green)
+#     "#fb9a99",  # (Light Red)
+#     "#fdbf6f",  # (Light Orange)
+#     "#cab2d6",  # (Light Purple)
+# ]
+
 colors = [
-    "#1f78b4",  # (Blue)
-    "#33a02c",  # (Green)
-    "#e31a1c",  # (Red)
-    "#ff7f00",  # (Orange)
-    "#6a3d9a",  # (Purple)
-    "#a6cee3",  # (Light Blue)
-    "#b2df8a",  # (Light Green)
-    "#fb9a99",  # (Light Red)
-    "#fdbf6f",  # (Light Orange)
-    "#cab2d6",  # (Light Purple)
+    "#D81B60",  # red
+    "#1E88E5",  # blue
+    "#FFC107",  # yellow
+    "#004D40",  # green
 ]
 
 figsize = (10, 7)
@@ -135,12 +142,20 @@ class Cols:
         target,
         query,
         evalue,
+        target_start=None,
+        target_end=None,
+        query_start=None,
+        query_end=None,
         score=None,
         bias=None,
         cell_frac=None,
     ):
         self.target = target
         self.query = query
+        self.target_start = target_start
+        self.target_end = target_end
+        self.query_start = query_start
+        self.query_end = query_end
         self.evalue = evalue
         self.score = score
         self.bias = bias
@@ -153,12 +168,20 @@ class Hit:
         query_name,
         target_name,
         evalue,
+        target_start=None,
+        target_end=None,
+        query_start=None,
+        query_end=None,
         score=None,
         bias=None,
         cell_frac=None,
     ):
         self.query_name = query_name
         self.target_name = target_name
+        self.target_start = target_start,
+        self.target_end = target_end,
+        self.query_start = query_start,
+        self.query_end = query_end,
         self.evalue = evalue
         self.score = score
         self.bias = bias
@@ -187,6 +210,22 @@ class Hits:
                 target = line_tokens[cols.target]
                 query_name = line_tokens[cols.query]
 
+                target_start = None
+                if cols.target_start is not None:
+                    target_start = int(line_tokens[cols.target_start])
+
+                target_end = None
+                if cols.target_end is not None:
+                    target_end = int(line_tokens[cols.target_end])
+
+                query_start = None
+                if cols.query_start is not None:
+                    query_start = int(line_tokens[cols.query_start])
+
+                query_end = None
+                if cols.query_end is not None:
+                    query_end = int(line_tokens[cols.query_end])
+
                 evalue = float(line_tokens[cols.evalue])
 
                 score = None
@@ -205,6 +244,10 @@ class Hits:
                     query_name,
                     target,
                     evalue,
+                    target_start,
+                    target_end,
+                    query_start,
+                    query_end,
                     score=score,
                     bias=bias,
                     cell_frac=cell_frac
@@ -216,14 +259,66 @@ class Hits:
                     target_tokens = target.split("/")
                     target_name = target_tokens[0]
 
-                    if (target_name == query_name):
-                        self.true_positives.append(hit)
+                    if (target_start is not None and
+                            target_end is not None and
+                            len(target_tokens) == 3):
+                        target_range = [int(i)
+                                        for i in target_tokens[2].split('-')]
+                        plant_start = target_range[0]
+                        plant_end = target_range[1]
+                        plant_length = plant_end - plant_start + 1
+
+                        overlap_start = max(plant_start, target_start)
+                        overlap_end = min(plant_end, target_end)
+
+                        if overlap_start <= overlap_end:
+                            overlap = overlap_end - overlap_start + 1
+                        else:
+                            overlap = 0
+
+                        overlap_percentage = overlap / plant_length
+
+                        # print(plant_start, plant_end)
+                        # print(target_start, target_end)
+                        # print(f"{overlap_percentage:3.2f}, {hit.evalue}")
+                        # print()
+
+                        if (target_name == query_name and
+                                overlap_percentage >= 0.50):
+                            self.true_positives.append(hit)
+                        elif (target_name == query_name and
+                                overlap_percentage == 0.0):
+
+                            self.false_positives.append(hit)
+                        else:
+                            self.other.append(hit)
+
                     else:
-                        self.other.append(hit)
+                        if (target_name == query_name):
+                            self.true_positives.append(hit)
+                        else:
+                            self.other.append(hit)
 
         def sort_key(h): return h.evalue
 
         self.true_positives.sort(key=sort_key)
+
+        if (self.name == "hmmer" and
+                cols.target_start is not None and
+                cols.target_end is not None):
+            unique_hits = {}
+            for hit in self.true_positives:
+                target_tokens = hit.target_name.split("/")
+                target_name = target_tokens[0]
+
+                if hit.query_name == target_name:
+                    if ((hit.query_name, hit.target_name) not in unique_hits or
+                            hit.evalue < unique_hits[(hit.query_name, hit.target_name)].evalue):
+                        unique_hits[(hit.query_name, hit.target_name)] = hit
+
+            self.true_positives = list(unique_hits.values())
+            self.true_positives.sort(key=sort_key)
+
         self.false_positives.sort(key=sort_key)
         self.other.sort(key=sort_key)
 
@@ -280,19 +375,33 @@ class Hits:
 def read_hmmer_results(results_dir):
     results_dir = results_dir / "hmmer/"
     # full seq E-value
-    cols = Cols(0, 2, 4)
+    # cols = Cols(0, 2, 4)
 
     # best domain E-value
     # cols = Cols(0, 2, 7)
-
     paths = results_dir.glob("*.tbl")
+
+    cols = Cols(0, 3, 12,
+                target_start=17,
+                target_end=18,
+                query_start=15,
+                query_end=16,
+                score=7,
+                )
+
+    paths = results_dir.glob("*.domtbl")
 
     return [Hits(p, cols) for p in paths]
 
 
 def read_mmseqs_results(results_dir):
     results_dir = results_dir / "mmseqs/"
-    cols = Cols(0, 1, 6)
+    cols = Cols(0, 1, 6,
+                target_start=2,
+                target_end=3,
+                query_start=4,
+                query_end=5,
+                )
 
     paths = results_dir.glob("*.tsv")
 
@@ -301,7 +410,15 @@ def read_mmseqs_results(results_dir):
 
 def read_nail_results(results_dir):
     results_dir = results_dir / "nail/"
-    cols = Cols(0, 1, 8, score=6, bias=7, cell_frac=9)
+    cols = Cols(0, 1, 8,
+                target_start=2,
+                target_end=3,
+                query_start=4,
+                query_end=5,
+                score=6,
+                bias=7,
+                cell_frac=9
+                )
 
     paths = results_dir.glob("*.tsv")
 
@@ -332,9 +449,16 @@ def plot_recall(hits, num_true_positives, num_queries):
         "mmseqs (default)",
     ]
 
+    color = [
+        colors[1],
+        colors[2],
+        colors[3],
+        colors[0],
+    ]
+
     ymin = 1.0
     ymax = 0.0
-    for (h, c, l) in zip(hits, colors, labels):
+    for (h, c, l) in zip(hits, color, labels):
         (x, y, y_first, (x_fdr, y_fdr)) = h.recall_vs_mean_false(
             num_true_positives, num_queries)
 
@@ -364,7 +488,7 @@ def plot_recall(hits, num_true_positives, num_queries):
             color=c,
         )
 
-    plt.plot([], [], color='black', linestyle='', marker='D',
+    plt.plot([], [], markeredgecolor='black', color='white', linestyle='', marker='D',
              label='1% False Discovery Rate')
 
     plt.plot([], [], color='black', linestyle='--',
@@ -379,10 +503,19 @@ def plot_recall(hits, num_true_positives, num_queries):
     plt.ylabel('Recall')
     plt.title('Pfam Domain Benchmark: Recall vs. Mean False Positives Per Search')
 
+    plt.tick_params(
+        axis='y',
+        which='both',
+        left=True,
+        labelleft=True,
+        right=True,
+        labelright=True,
+    )
+
     plt.xlim(1e-3, 1e1)
     plt.ylim(ymin, ymax)
 
-    plt.legend()
+    plt.legend(loc='upper left')
 
     plt.savefig("roc.pdf")
     # plt.show()
@@ -424,8 +557,85 @@ def plot_nail_bitscore(nail_hits):
     default_matched_hits.sort(key=s)
     full_matched_hits.sort(key=s)
 
+    n_greater = 0
+    n_lower = 0
+    losses = []
+    gains = []
+    both = []
     for (d, f) in zip(default_matched_hits, full_matched_hits):
         assert (d.target_name == f.target_name)
+
+        perc = int((abs(f.score - d.score) / f.score) * 10000) / 100
+        # perc = int((abs((f.score + f.bias) - (d.score + d.bias)) /
+        #            (f.score + f.bias)) * 10000) / 100
+
+        if d.score < f.score:
+            n_lower += 1
+            losses.append(perc)
+        elif d.score > f.score:
+            n_greater += 1
+            gains.append(perc)
+
+        both.append(perc)
+
+    n = len(default_matched_hits)
+    losses.sort()
+    gains.sort()
+
+    n_less_than_1_percent_loss = len(list(filter(lambda p: p < 1, losses)))
+    n_less_than_2_percent_loss = len(list(filter(lambda p: p < 2, losses)))
+    n_less_than_3_percent_loss = len(list(filter(lambda p: p < 3, losses)))
+    n_less_than_5_percent_loss = len(list(filter(lambda p: p < 5, losses)))
+    n_less_than_10_percent_loss = len(list(filter(lambda p: p < 10, losses)))
+
+    n_less_than_1_percent_gain = len(list(filter(lambda p: p < 1, gains)))
+    n_less_than_2_percent_gain = len(list(filter(lambda p: p < 2, gains)))
+    n_less_than_3_percent_gain = len(list(filter(lambda p: p < 3, gains)))
+    n_less_than_5_percent_gain = len(list(filter(lambda p: p < 5, gains)))
+    n_less_than_10_percent_gain = len(list(filter(lambda p: p < 10, gains)))
+
+    mean_loss = sum(losses) / len(losses)
+    median_loss = losses[int(len(losses) / 2)]
+
+    mean_gain = sum(gains) / len(gains)
+    median_gain = gains[int(len(gains) / 2)]
+
+    mean_score_sparse = sum([h.score for h in default_matched_hits]) / n
+    mean_score_full = sum([h.score for h in full_matched_hits]) / n
+
+    print(f" mean score (sparse): {mean_score_sparse:5.2f}")
+    print(f" mean score (full): {mean_score_full:5.2f}")
+    print()
+
+    print(f"       n higher score: {n_greater} / {n}")
+    print(f"  n less than 1% gain: {n_less_than_1_percent_gain} / {n_greater}")
+    print(f"  n less than 2% gain: {n_less_than_2_percent_gain} / {n_greater}")
+    print(f"  n less than 3% gain: {n_less_than_3_percent_gain} / {n_greater}")
+    print(f"  n less than 5% gain: {n_less_than_5_percent_gain} / {n_greater}")
+    print(
+        f" n less than 10% gain: {n_less_than_10_percent_gain} / {n_greater}")
+    print(f"      median increase: {median_gain:3.3f}%")
+    print(f"        mean increase: {mean_gain:3.3f}%")
+    print()
+    print(f"        n lower score: {n_lower} / {n}")
+    print(f"  n less than 1% loss: {n_less_than_1_percent_loss} / {n_lower}")
+    print(f"  n less than 2% loss: {n_less_than_2_percent_loss} / {n_lower}")
+    print(f"  n less than 3% loss: {n_less_than_3_percent_loss} / {n_lower}")
+    print(f"  n less than 5% loss: {n_less_than_5_percent_loss} / {n_lower}")
+    print(f" n less than 10% loss: {n_less_than_10_percent_loss} / {n_lower}")
+    print(f"      median decrease: {median_loss:3.3f}%")
+    print(f"        mean decrease: {mean_loss:3.3f}%")
+    print()
+    print(
+        f"  n less than 1% diff: {n_less_than_1_percent_gain + n_less_than_1_percent_loss}")
+    print(
+        f"  n less than 2% diff: {n_less_than_2_percent_gain + n_less_than_2_percent_loss}")
+    print(
+        f"  n less than 3% diff: {n_less_than_3_percent_gain + n_less_than_3_percent_loss}")
+    print(
+        f"  n less than 5% diff: {n_less_than_5_percent_gain + n_less_than_5_percent_loss}")
+    print(
+        f" n less than 10% diff: {n_less_than_10_percent_gain + n_less_than_10_percent_loss}")
 
     # x = [h.score + h.bias for h in full_matched_hits]
     # y = [h.score + h.bias for h in default_matched_hits]
@@ -440,24 +650,65 @@ def plot_nail_bitscore(nail_hits):
     coefficients = np.polyfit(x, y, deg=1)
     fit_line = np.poly1d(coefficients)
 
-    plt.plot(x, fit_line(x), color=colors[3], label="Trend")
-    plt.plot([0, max_val], [0, max_val], color=colors[4], label="y = x")
+    plt.plot(x, fit_line(x), color=colors[2], label="Trend")
+    plt.plot([0, max_val], [0, max_val], color=colors[0], label="y = x")
 
     plt.scatter(
         x,
         y,
-        color=colors[0],
+        color=colors[1],
         marker='^',
         label='True Positives',
         s=10,
-        alpha=0.4
+        alpha=0.8
     )
 
     plt.xlabel('Sequence Bitscore of Full Forward-Backward')
     plt.ylabel('Sequence Bitscore of Sparse Forward-Backward')
-    plt.title('Pfam Domain Benchmark, Sequence Bitscore')
-    plt.legend()
+
+    # x = [h.score + h.bias for h in full_matched_hits]
+    # y = [h.score + h.bias for h in default_matched_hits]
+
+    x = [h.score for h in full_matched_hits]
+    y = [h.score for h in default_matched_hits]
+
+    max_x = max(x)
+    max_y = max(y)
+    max_val = max(max_x, max_y)
+
+    coefficients = np.polyfit(x, y, deg=1)
+    fit_line = np.poly1d(coefficients)
+
+    plt.plot(x, fit_line(x), color=colors[2], label="Trend")
+    plt.plot([0, max_val], [0, max_val], color=colors[0], label="y = x")
+
+    plt.scatter(
+        x,
+        y,
+        color=colors[1],
+        marker='^',
+        label='True Positives',
+        s=10,
+        alpha=0.8
+    )
+
+    plt.xlabel('Sequence Bitscore of Full Forward-Backward')
+    plt.ylabel('Sequence Bitscore of Sparse Forward-Backward')
+    plt.title('Pfam Domain Benchmark: Sequence Bitscore')
+    plt.legend(loc='upper left')
     plt.grid()
+
+    plt.tick_params(
+        axis='y',
+        which='both',
+        left=True,
+        labelleft=True,
+        right=True,
+        labelright=True,
+    )
+
+    plt.xlim([0, max_val])
+    plt.ylim([0, max_val])
 
     plt.savefig("bitscore.pdf")
     # plt.show()
@@ -484,9 +735,9 @@ def plot_nail_cells(nail_hits, benchmark):
     ]
 
     color = [
-        colors[2],
         colors[0],
-        colors[4],
+        colors[1],
+        colors[3],
     ]
 
     markers = [
@@ -496,9 +747,9 @@ def plot_nail_cells(nail_hits, benchmark):
     ]
 
     alphas = [
-        0.4,
-        0.4,
-        0.8,
+        0.6,
+        0.6,
+        1.0,
     ]
 
     for (i, (hits, l, c, m, a)) in enumerate(zip(hits_groups, labels, color, markers, alphas)):
@@ -526,10 +777,19 @@ def plot_nail_cells(nail_hits, benchmark):
     plt.ylabel('Fraction of Cells Computed by Sparse Forward-Backward')
     plt.title('Pfam Domain Benchmark: Cells Computed')
 
+    plt.tick_params(
+        axis='y',
+        which='both',
+        left=True,
+        labelleft=True,
+        right=True,
+        labelright=True,
+    )
+
     plt.xlim(1e2, 1e10)
     plt.ylim(1e-5, 1.1)
 
-    plt.legend()
+    plt.legend(loc='upper right')
     plt.grid()
 
     plt.savefig("cells.png")
@@ -565,8 +825,8 @@ def plot_time(results_dir, hits, num_true_positives, num_queries):
     nail_default_time = nail_times["nail.seed.8.time"].seconds + \
         nail_times["nail.align.8.default.time"].seconds
 
-    nail_a8b12_time = nail_times["nail.seed.8.time"].seconds + \
-        nail_times["nail.align.a8b12.time"].seconds
+    # nail_a8b12_time = nail_times["nail.seed.8.time"].seconds + \
+    #     nail_times["nail.align.a8b12.time"].seconds
 
     nail_full_time = nail_times["nail.seed.8.time"].seconds + \
         nail_times["nail.align.full.time"].seconds
@@ -582,7 +842,7 @@ def plot_time(results_dir, hits, num_true_positives, num_queries):
         hmmer_time,
         nail_full_time,
         nail_default_time,
-        nail_a8b12_time,
+        # nail_a8b12_time,
         mmseqs_nail_time,
         mmseqs_sensitive_time,
         mmseqs_default_time,
@@ -591,7 +851,7 @@ def plot_time(results_dir, hits, num_true_positives, num_queries):
     hmmer_hits = next(filter(lambda h: h.name == "hmmer", hits))
     nail_full_hits = next(filter(lambda h: h.name == "nail full", hits))
     nail_default_hits = next(filter(lambda h: h.name == "nail default", hits))
-    nail_a8b12_hits = next(filter(lambda h: h.name == "nail a8b12", hits))
+    # nail_a8b12_hits = next(filter(lambda h: h.name == "nail a8b12", hits))
     mmseqs_nail_hits = next(filter(lambda h: h.name == "mmseqs nail", hits))
     mmseqs_sensitive_hits = next(
         filter(lambda h: h.name == "mmseqs sensitive", hits))
@@ -602,7 +862,7 @@ def plot_time(results_dir, hits, num_true_positives, num_queries):
         hmmer_hits,
         nail_full_hits,
         nail_default_hits,
-        nail_a8b12_hits,
+        # nail_a8b12_hits,
         mmseqs_nail_hits,
         mmseqs_sensitive_hits,
         mmseqs_default_hits,
@@ -618,18 +878,36 @@ def plot_time(results_dir, hits, num_true_positives, num_queries):
         "hmmsearch (default)",
         "nail (full DP)",
         "nail (default)",
-        "nail (alpha=12, beta=8)",
+        # "nail (alpha=12, beta=8)",
         "mmseqs (nail pipeline settings)",
         "mmseqs (sensitive)",
         "mmseqs (default)",
     ]
 
-    for x, y, l, c in zip(recalls, times, labels, colors):
+    color = [
+        colors[1],
+        colors[2],
+        colors[2],
+        colors[0],
+        colors[0],
+        colors[0],
+    ]
+
+    markers = [
+        'o',
+        'o',
+        'D',
+        'o',
+        'D',
+        's',
+    ]
+
+    for x, y, l, c, m in zip(recalls, times, labels, color, markers):
         plt.scatter(
             x,
             y,
             color=c,
-            marker='D',
+            marker=m,
             label=l,
         )
 
@@ -637,7 +915,21 @@ def plot_time(results_dir, hits, num_true_positives, num_queries):
     plt.ylabel('Runtime (sec)')
     plt.title('Pfam Domain Benchmark: Runtime vs Recall before First False Positive')
 
-    plt.legend()
+    plt.yscale('log')
+
+    plt.tick_params(
+        axis='y',
+        which='both',
+        left=True,
+        labelleft=True,
+        right=True,
+        labelright=True,
+    )
+
+    plt.xlim([0.2, 0.8])
+    plt.ylim([1e1, 10e3])
+
+    plt.legend(loc='upper left')
     plt.grid()
 
     plt.savefig("runtime.pdf")
