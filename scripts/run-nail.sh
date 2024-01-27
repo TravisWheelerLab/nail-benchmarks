@@ -78,10 +78,10 @@ echo "running nail seed..."
     -t $THREADS \
     -q $QUERY_HMM \
     -s $SEEDS \
-    --mmseqs_k $K \
-    --mmseqs_k_score $K_SCORE \
-    --mmseqs_min_ungapped_score $MIN_UNGAPPED_SCORE \
-    --mmseqs_max_seqs $MAX_SEQS \
+    --mmseqs-k $K \
+    --mmseqs-k-score $K_SCORE \
+    --mmseqs-min-ungapped_score $MIN_UNGAPPED_SCORE \
+    --mmseqs-max-seqs $MAX_SEQS \
     $PREP
 
 awk '/real/ {print "time:", $2}' $SEED_TIME
