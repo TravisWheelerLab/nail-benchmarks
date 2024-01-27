@@ -8,19 +8,6 @@ from pathlib import Path
 import numpy as np
 import matplotlib.pyplot as plt
 
-# colors = [
-#     "#1f78b4",  # (Blue)
-#     "#33a02c",  # (Green)
-#     "#e31a1c",  # (Red)
-#     "#ff7f00",  # (Orange)
-#     "#6a3d9a",  # (Purple)
-#     "#a6cee3",  # (Light Blue)
-#     "#b2df8a",  # (Light Green)
-#     "#fb9a99",  # (Light Red)
-#     "#fdbf6f",  # (Light Orange)
-#     "#cab2d6",  # (Light Purple)
-# ]
-
 colors = [
     "#D81B60",  # red
     "#1E88E5",  # blue
