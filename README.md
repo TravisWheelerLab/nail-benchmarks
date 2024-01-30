@@ -15,7 +15,8 @@ You'll need the following available on your system path:
 This benchmark was originally run using Pfam version `36.0` and Swissprot `release-2023_05`
 
 To download the data, you can run
-  ./scripts/download-data.sh
+    
+    $ ./scripts/download-data.sh
 
 which will place Pfam seed alignments & Swissprot sequences in the `data/` directory:
 
@@ -50,16 +51,16 @@ data
 
 To build the benchmark, run
 
-  $ ./scripts/build-benchmark.sh
+    $ ./scripts/build-benchmark.sh
 
 ## Run the benchmark
 
 To run the benchmark, run
 
-  $ ./scripts/run-all.sh
+    $ ./scripts/run-all.sh
 
 ## Produce plots
 
 To produce the plots, run
 
-  $ python ./scripts/plots.py ./benchmark/
+    $ python ./scripts/plots.py ./benchmark/
