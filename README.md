@@ -21,7 +21,7 @@ To download the data, you can run
 which will place Pfam seed alignments & Swissprot sequences in the `data/` directory:
 
 ```
-$ tree data
+$ tree data/
 data
 ├── long-seq
 │   ├── query
