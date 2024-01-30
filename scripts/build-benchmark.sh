@@ -15,7 +15,7 @@ MIN_TEST=10
 MAX_TEST=30
 
 MSA=$DATA_DIR/pfam.sto
-FA=$DATA_DIR/data/uniprot_sprot.fasta
+FA=$DATA_DIR/uniprot_sprot.fasta
 
 esl-sfetch --index $FA
 $PROFMARK_BIN -N $N --mintest $MIN_TEST --maxtest $MAX_TEST $BENCHMARK_DIR/$BENCHMARK_NAME $MSA $FA
