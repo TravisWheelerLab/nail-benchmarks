@@ -1,12 +1,17 @@
 #! /bin/sh
 
 if [ "$#" == 0 ]; then
-    echo "usage: ./run-nail.sh <benchmark-dir>"
+    echo "usage: ./run-nail.sh <benchmark-dir> [threads]"
     exit
 fi
 
+if [ -n "$2" ]; then
+    THREADS=$2
+else
+    THREADS=1
+fi
+
 E=1e9
-THREADS=8
 
 K=6
 K_SCORE=80
@@ -16,8 +21,7 @@ MAX_SEQS=1000
 BENCHMARK_DIR=$1
 NAME=$(basename "$BENCHMARK_DIR")
 TARGET=$BENCHMARK_DIR/$NAME.test.fa
-QUERY_MSA=$BENCHMARK_DIR/$NAME.train.msa
-QUERY_HMM=$BENCHMARK_DIR/$NAME.train.hmm
+QUERY=$BENCHMARK_DIR/$NAME.train.hmm
 
 LONG_SEQ_DIR=$BENCHMARK_DIR/long-seq/
 LONG_SEQ_QUERY_DIR=$LONG_SEQ_DIR/query/
@@ -25,25 +29,17 @@ LONG_SEQ_TARGET_DIR=$LONG_SEQ_DIR/target/
 
 RESULTS_DIR=$BENCHMARK_DIR/results/nail/
 
-PREP_TIME=$RESULTS_DIR/nail.prep.time
-SEED_TIME=$RESULTS_DIR/nail.seed.time
-ALIGN_DEFAULT_TIME=$RESULTS_DIR/nail.align.default.time
-ALIGN_FULL_TIME=$RESULTS_DIR/nail.align.full.time
-ALIGN_NO_FILTERS_TIME=$RESULTS_DIR/nail.align.no-filters.time
-
 PREP=$RESULTS_DIR/prep/
-PREP=$RESULTS_DIR/prep/
-SEEDS=$PREP/seeds.json
 
+TIME_DEFAULT=$RESULTS_DIR/nail.default.time
 OUT_DEFAULT=$RESULTS_DIR/nail.default.out
 TSV_DEFAULT=$RESULTS_DIR/nail.default.tsv
 
+TIME_FULL=$RESULTS_DIR/nail.full.time
 OUT_FULL=$RESULTS_DIR/nail.full.out
 TSV_FULL=$RESULTS_DIR/nail.full.tsv
 
-OUT_FULL=$RESULTS_DIR/nail.full.out
-TSV_FULL=$RESULTS_DIR/nail.full.tsv
-
+TIME_NO_FILTERS=$RESULTS_DIR/nail.no-filters.time
 OUT_NO_FILTERS=$RESULTS_DIR/nail.no-filters.out
 TSV_NO_FILTERS=$RESULTS_DIR/nail.no-filters.tsv
 
@@ -61,67 +57,56 @@ for ((i=1; i<=6; i++)); do
   rm tmp.tsv
 done
 
-echo "running nail prep..."
-/usr/bin/time -p -o $PREP_TIME \
-    nail prep \
-    -t $THREADS \
-    --skip-hmmbuild \
-    -p $PREP \
-    $QUERY_MSA $TARGET
-
-awk '/real/ {print "time:", $2}' $PREP_TIME
-echo
-
-echo "running nail seed..."
-/usr/bin/time -p -o $SEED_TIME \
-    nail seed \
-    -t $THREADS \
-    -q $QUERY_HMM \
-    -s $SEEDS \
-    --mmseqs-k $K \
-    --mmseqs-k-score $K_SCORE \
-    --mmseqs-min-ungapped_score $MIN_UNGAPPED_SCORE \
-    --mmseqs-max-seqs $MAX_SEQS \
-    $PREP
-
-awk '/real/ {print "time:", $2}' $SEED_TIME
-echo
-
-echo "running nail align default..."
-/usr/bin/time -p -o $ALIGN_DEFAULT_TIME \
-    nail align \
+echo "running nail default..."
+/usr/bin/time -p -o $TIME_DEFAULT \
+    nail search \
     -t $THREADS \
     -E $E \
     -T $TSV_DEFAULT \
     -O $OUT_DEFAULT \
-    $QUERY_HMM $TARGET $SEEDS
+    -p $PREP \
+    --mmseqs-k $K \
+    --mmseqs-k-score $K_SCORE \
+    --mmseqs-min-ungapped_score $MIN_UNGAPPED_SCORE \
+    --mmseqs-max-seqs $MAX_SEQS \
+    $QUERY $TARGET
 
-awk '/real/ {print "time:", $2}' $ALIGN_DEFAULT_TIME
+awk '/real/ {print "time:", $2}' $TIME_DEFAULT
 echo
 
-echo "running nail align full-dp..."
-/usr/bin/time -p -o $ALIGN_FULL_TIME \
-    nail align \
+echo "running nail full-dp..."
+/usr/bin/time -p -o $TIME_FULL \
+    nail search \
     -t $THREADS \
-    --full-dp \
     -E $E \
     -T $TSV_FULL \
     -O $OUT_FULL \
-    $QUERY_HMM $TARGET $SEEDS
+    -p $PREP \
+    --full-dp \
+    --mmseqs-k $K \
+    --mmseqs-k-score $K_SCORE \
+    --mmseqs-min-ungapped_score $MIN_UNGAPPED_SCORE \
+    --mmseqs-max-seqs $MAX_SEQS \
+    $QUERY $TARGET
 
-awk '/real/ {print "time:", $2}' $ALIGN_FULL_TIME
+awk '/real/ {print "time:", $2}' $TIME_FULL
 echo
 
-echo "running nail align no-filters..."
-/usr/bin/time -p -o $ALIGN_NO_FILTERS_TIME \
-    nail align \
+echo "running nail no-filters..."
+/usr/bin/time -p -o $TIME_NO_FILTERS \
+    nail search \
     -t $THREADS \
-    --forward-thresh 1e9 \
-    --cloud-thresh 1e9 \
     -E $E \
     -T $TSV_NO_FILTERS \
     -O $OUT_NO_FILTERS \
-    $QUERY_HMM $TARGET $SEEDS
+    -p $PREP \
+    --forward-thresh 1e9 \
+    --cloud-thresh 1e9 \
+    --mmseqs-k $K \
+    --mmseqs-k-score $K_SCORE \
+    --mmseqs-min-ungapped_score $MIN_UNGAPPED_SCORE \
+    --mmseqs-max-seqs $MAX_SEQS \
+    $QUERY $TARGET
 
-awk '/real/ {print "time:", $2}' $ALIGN_NO_FILTERS_TIME
+awk '/real/ {print "time:", $2}' $TIME_NO_FILTERS
 echo

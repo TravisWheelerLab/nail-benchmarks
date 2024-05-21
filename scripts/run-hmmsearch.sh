@@ -1,8 +1,14 @@
 #! /bin/sh
 
 if [ "$#" == 0 ]; then
-    echo "usage: ./run-nail.sh <benchmark-dir>"
+    echo "usage: ./run-hmmsearch.sh <benchmark-dir> [threads]"
     exit
+fi
+
+if [ -n "$2" ]; then
+    THREADS=$2
+else
+    THREADS=1
 fi
 
 E=1e9
@@ -14,7 +20,7 @@ QUERY=$BENCHMARK_DIR/$NAME.train.hmm
 
 RESULTS_DIR=$BENCHMARK_DIR/results/hmmer/
 
-TIME_8=$RESULTS_DIR/hmmer.8.time
+TIME=$RESULTS_DIR/hmmer.time
 
 OUT=$RESULTS_DIR/hmmer.out
 TBL=$RESULTS_DIR/hmmer.tbl
@@ -27,4 +33,15 @@ fi
 
 mkdir -p $RESULTS_DIR
 
-/usr/bin/time -p -o $TIME_8 hmmsearch --cpu 8 -E $E -o $OUT --notextw --domtblout $DOM --tblout $TBL $QUERY $TARGET
+echo "running hmmsearch..."
+/usr/bin/time -p -o $TIME \
+    hmmsearch \
+    --cpu $THREADS \
+    -E $E \
+    -o $OUT \
+    --notextw \
+    --domtblout $DOM \
+    --tblout $TBL \
+    $QUERY $TARGET
+
+awk '/real/ {print "time:", $2}' $TIME

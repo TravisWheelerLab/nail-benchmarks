@@ -1,8 +1,15 @@
 #! /bin/sh
 
 if [ "$#" == 0 ]; then
-    echo "usage: ./run-mmseqs.sh <benchmark-dir>"
+    echo "usage: ./run-mmseqs.sh <benchmark-dir> [threads]"
     exit
+fi
+
+
+if [ -n "$2" ]; then
+    THREADS=$2
+else
+    THREADS=1
 fi
 
 E=1e9
@@ -22,8 +29,6 @@ PREP=$RESULTS_DIR/prep/
 TARGET_DB=$PREP/targetDb
 MSA_DB=$PREP/msaDb
 QUERY_DB=$PREP/queryDb
-
-THREADS=8
 
 # K_DEFAULT=6
 # K_SENSITIVE=6

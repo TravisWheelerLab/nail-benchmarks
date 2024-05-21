@@ -1,12 +1,12 @@
-#! /bin/python3
+# /bin/python3
 
-import sys
 import math
 import subprocess
+import sys
 from pathlib import Path
 
-import numpy as np
 import matplotlib.pyplot as plt
+import numpy as np
 
 colors = [
     "#D81B60",  # red
@@ -265,11 +265,6 @@ class Hits:
 
                         overlap_percentage = overlap / plant_length
 
-                        # print(plant_start, plant_end)
-                        # print(target_start, target_end)
-                        # print(f"{overlap_percentage:3.2f}, {hit.evalue}")
-                        # print()
-
                         if (target_name == query_name and
                                 overlap_percentage >= 0.50):
                             self.true_positives.append(hit)
@@ -332,6 +327,7 @@ class Hits:
 
         true_count = 0
         false_count = 0
+        y_first = None
         fdr_point = None
 
         for (hit, is_true) in combined_hits:
@@ -355,6 +351,12 @@ class Hits:
             if val > 0:
                 y_first = y[idx - 1]
                 break
+
+        if y_first is None:
+            y_first = 0
+
+        if fdr_point is None:
+            fdr_point = (0, 0)
 
         return (x, y, y_first, fdr_point)
 
@@ -544,89 +546,6 @@ def plot_nail_bitscore(nail_hits):
     default_matched_hits.sort(key=s)
     full_matched_hits.sort(key=s)
 
-    # n_greater = 0
-    # n_lower = 0
-    # losses = []
-    # gains = []
-    # both = []
-    # for (d, f) in zip(default_matched_hits, full_matched_hits):
-    #     assert (d.target_name == f.target_name)
-
-    #     perc = int((abs(f.score - d.score) / f.score) * 10000) / 100
-    #     # perc = int((abs((f.score + f.bias) - (d.score + d.bias)) /
-    #     #            (f.score + f.bias)) * 10000) / 100
-
-    #     if d.score < f.score:
-    #         n_lower += 1
-    #         losses.append(perc)
-    #     elif d.score > f.score:
-    #         n_greater += 1
-    #         gains.append(perc)
-
-    #     both.append(perc)
-
-    # n = len(default_matched_hits)
-    # losses.sort()
-    # gains.sort()
-
-    # n_less_than_1_percent_loss = len(list(filter(lambda p: p < 1, losses)))
-    # n_less_than_2_percent_loss = len(list(filter(lambda p: p < 2, losses)))
-    # n_less_than_3_percent_loss = len(list(filter(lambda p: p < 3, losses)))
-    # n_less_than_5_percent_loss = len(list(filter(lambda p: p < 5, losses)))
-    # n_less_than_10_percent_loss = len(list(filter(lambda p: p < 10, losses)))
-
-    # n_less_than_1_percent_gain = len(list(filter(lambda p: p < 1, gains)))
-    # n_less_than_2_percent_gain = len(list(filter(lambda p: p < 2, gains)))
-    # n_less_than_3_percent_gain = len(list(filter(lambda p: p < 3, gains)))
-    # n_less_than_5_percent_gain = len(list(filter(lambda p: p < 5, gains)))
-    # n_less_than_10_percent_gain = len(list(filter(lambda p: p < 10, gains)))
-
-    # mean_loss = sum(losses) / len(losses)
-    # median_loss = losses[int(len(losses) / 2)]
-
-    # mean_gain = sum(gains) / len(gains)
-    # median_gain = gains[int(len(gains) / 2)]
-
-    # mean_score_sparse = sum([h.score for h in default_matched_hits]) / n
-    # mean_score_full = sum([h.score for h in full_matched_hits]) / n
-
-    # print(f" mean score (sparse): {mean_score_sparse:5.2f}")
-    # print(f" mean score (full): {mean_score_full:5.2f}")
-    # print()
-
-    # print(f"       n higher score: {n_greater} / {n}")
-    # print(f"  n less than 1% gain: {n_less_than_1_percent_gain} / {n_greater}")
-    # print(f"  n less than 2% gain: {n_less_than_2_percent_gain} / {n_greater}")
-    # print(f"  n less than 3% gain: {n_less_than_3_percent_gain} / {n_greater}")
-    # print(f"  n less than 5% gain: {n_less_than_5_percent_gain} / {n_greater}")
-    # print(
-    #     f" n less than 10% gain: {n_less_than_10_percent_gain} / {n_greater}")
-    # print(f"      median increase: {median_gain:3.3f}%")
-    # print(f"        mean increase: {mean_gain:3.3f}%")
-    # print()
-    # print(f"        n lower score: {n_lower} / {n}")
-    # print(f"  n less than 1% loss: {n_less_than_1_percent_loss} / {n_lower}")
-    # print(f"  n less than 2% loss: {n_less_than_2_percent_loss} / {n_lower}")
-    # print(f"  n less than 3% loss: {n_less_than_3_percent_loss} / {n_lower}")
-    # print(f"  n less than 5% loss: {n_less_than_5_percent_loss} / {n_lower}")
-    # print(f" n less than 10% loss: {n_less_than_10_percent_loss} / {n_lower}")
-    # print(f"      median decrease: {median_loss:3.3f}%")
-    # print(f"        mean decrease: {mean_loss:3.3f}%")
-    # print()
-    # print(
-    #     f"  n less than 1% diff: {n_less_than_1_percent_gain + n_less_than_1_percent_loss}")
-    # print(
-    #     f"  n less than 2% diff: {n_less_than_2_percent_gain + n_less_than_2_percent_loss}")
-    # print(
-    #     f"  n less than 3% diff: {n_less_than_3_percent_gain + n_less_than_3_percent_loss}")
-    # print(
-    #     f"  n less than 5% diff: {n_less_than_5_percent_gain + n_less_than_5_percent_loss}")
-    # print(
-    #     f" n less than 10% diff: {n_less_than_10_percent_gain + n_less_than_10_percent_loss}")
-
-    # x = [h.score + h.bias for h in full_matched_hits]
-    # y = [h.score + h.bias for h in default_matched_hits]
-
     x = [h.score for h in full_matched_hits]
     y = [h.score for h in default_matched_hits]
 
@@ -778,13 +697,11 @@ def plot_time(results_dir, hits, num_true_positives, num_queries):
     nail_paths = nail_dir.glob("*.time")
     nail_times = {t.name: t for t in [Time(p) for p in nail_paths]}
 
-    hmmer_time = hmmer_times["hmmer.8.time"].seconds,
+    hmmer_time = hmmer_times["hmmer.time"].seconds,
 
-    nail_default_time = nail_times["nail.seed.time"].seconds + \
-        nail_times["nail.align.default.time"].seconds
+    nail_default_time = nail_times["nail.default.time"].seconds
 
-    nail_full_time = nail_times["nail.seed.time"].seconds + \
-        nail_times["nail.align.full.time"].seconds
+    nail_full_time = nail_times["nail.full.time"].seconds
 
     mmseqs_default_time = mmseqs_times["mmseqs.default.time"].seconds
 
@@ -796,7 +713,6 @@ def plot_time(results_dir, hits, num_true_positives, num_queries):
         hmmer_time,
         nail_full_time,
         nail_default_time,
-        # nail_a8b12_time,
         mmseqs_nail_time,
         mmseqs_sensitive_time,
         mmseqs_default_time,
@@ -805,7 +721,6 @@ def plot_time(results_dir, hits, num_true_positives, num_queries):
     hmmer_hits = next(filter(lambda h: h.name == "hmmer", hits))
     nail_full_hits = next(filter(lambda h: h.name == "nail full", hits))
     nail_default_hits = next(filter(lambda h: h.name == "nail default", hits))
-    # nail_a8b12_hits = next(filter(lambda h: h.name == "nail a8b12", hits))
     mmseqs_nail_hits = next(filter(lambda h: h.name == "mmseqs nail", hits))
     mmseqs_sensitive_hits = next(
         filter(lambda h: h.name == "mmseqs sensitive", hits))
@@ -816,7 +731,6 @@ def plot_time(results_dir, hits, num_true_positives, num_queries):
         hmmer_hits,
         nail_full_hits,
         nail_default_hits,
-        # nail_a8b12_hits,
         mmseqs_nail_hits,
         mmseqs_sensitive_hits,
         mmseqs_default_hits,
@@ -832,7 +746,6 @@ def plot_time(results_dir, hits, num_true_positives, num_queries):
         "hmmsearch (default)",
         "nail (full DP)",
         "nail (default)",
-        # "nail (alpha=12, beta=8)",
         "mmseqs (nail pipeline settings)",
         "mmseqs (sensitive)",
         "mmseqs (default)",

@@ -7,11 +7,10 @@ elif [ "$#" == 1 ]; then
     N=$1
 fi
 
-shuf pfam.txt > pfam.shuf
+shuf pfam.txt | head -n $N > tmp
 
-LINES="$(head -n $N pfam.shuf)"
+# while read -r query; do
+#     esl-afetch pfam.sto $query
+# done <<< "$LINES"
 
-while read -r query; do
-    # echo "$query"
-    esl-afetch pfam.sto $query
-done <<< "$LINES"
+esl-afetch -f pfam.sto tmp
