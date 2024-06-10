@@ -414,7 +414,7 @@ def read_nail_results(results_dir):
     return [Hits(p, cols) for p in paths]
 
 
-def plot_recall(hits, num_true_positives, num_queries):
+def plot_recall(hits, num_true_positives, num_queries, figures_path):
     plt.close('all')
     plt.figure(figsize=figsize)
 
@@ -506,11 +506,11 @@ def plot_recall(hits, num_true_positives, num_queries):
 
     plt.legend(loc='upper left')
 
-    plt.savefig("roc.pdf")
+    plt.savefig(figures_path / "roc.pdf")
     # plt.show()
 
 
-def plot_nail_bitscore(nail_hits):
+def plot_nail_bitscore(nail_hits, figures_path):
     plt.close('all')
     plt.figure(figsize=figsize)
 
@@ -587,11 +587,11 @@ def plot_nail_bitscore(nail_hits):
     plt.xlim([0, max_val])
     plt.ylim([0, max_val])
 
-    plt.savefig("bitscore.pdf")
+    plt.savefig(figures_path / "bitscore.pdf")
     # plt.show()
 
 
-def plot_nail_cells(nail_hits, benchmark):
+def plot_nail_cells(nail_hits, benchmark, figures_path):
     plt.close('all')
     plt.figure(figsize=figsize)
 
@@ -669,7 +669,7 @@ def plot_nail_cells(nail_hits, benchmark):
     plt.legend(loc='upper right')
     plt.grid()
 
-    plt.savefig("cells.png")
+    plt.savefig(figures_path / "cells.png")
 
 
 class Time:
@@ -681,7 +681,7 @@ class Time:
             self.seconds = float(tokens[1])
 
 
-def plot_time(results_dir, hits, num_true_positives, num_queries):
+def plot_time(results_dir, hits, num_true_positives, num_queries, figures_path):
     plt.close('all')
     plt.figure(figsize=figsize)
 
@@ -799,17 +799,19 @@ def plot_time(results_dir, hits, num_true_positives, num_queries):
     plt.legend(loc='upper left')
     plt.grid()
 
-    plt.savefig("runtime.pdf")
+    plt.savefig(figures_path / "runtime.pdf")
     # plt.show()
 
 
 if __name__ == "__main__":
-    figures_path = None
+    figures_path = Path("figures/")
     if len(sys.argv) < 2:
         print("usage: ./recall.py <benchmark_dir> [figures/]")
         exit()
     elif len(sys.argv) > 2:
-        figures_path = sys.argv[2]
+        figures_path = Path(sys.argv[2])
+
+    figures_path.mkdir(parents=True, exist_ok=True)
 
     benchmark_dir = Path(sys.argv[1])
     results_dir = benchmark_dir / "results/"
@@ -823,10 +825,11 @@ if __name__ == "__main__":
     benchmark = Benchmark(benchmark_dir)
 
     plot_recall(
-        all_hits, benchmark.num_true_positives, benchmark.num_queries)
+        all_hits, benchmark.num_true_positives, benchmark.num_queries, figures_path)
 
     plot_time(results_dir, all_hits,
-              benchmark.num_true_positives, benchmark.num_queries)
+              benchmark.num_true_positives, benchmark.num_queries, figures_path)
 
-    plot_nail_bitscore(nail_hits)
-    plot_nail_cells(nail_hits, benchmark)
+    plot_nail_bitscore(nail_hits, figures_path)
+
+    plot_nail_cells(nail_hits, benchmark, figures_path)

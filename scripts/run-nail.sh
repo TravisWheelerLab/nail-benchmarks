@@ -21,6 +21,7 @@ MAX_SEQS=1000
 BENCHMARK_DIR=$1
 NAME=$(basename "$BENCHMARK_DIR")
 TARGET=$BENCHMARK_DIR/$NAME.test.fa
+# QUERY=$BENCHMARK_DIR/$NAME.train.msa
 QUERY=$BENCHMARK_DIR/$NAME.train.hmm
 
 LONG_SEQ_DIR=$BENCHMARK_DIR/long-seq/
@@ -52,7 +53,7 @@ LONG_SEQ_TSV=$RESULTS_DIR/long-seq.tsv
 for ((i=1; i<=6; i++)); do
   LONG_QUERY="$LONG_SEQ_QUERY_DIR${i}.query.fa"
   LONG_TARGET="$LONG_SEQ_TARGET_DIR${i}.target.fa"
-  nail search -T tmp.tsv -p $PREP $LONG_QUERY $LONG_TARGET > /dev/null
+  nail search -T tmp.tsv --prep $PREP $LONG_QUERY $LONG_TARGET > /dev/null
   cat tmp.tsv >> $LONG_SEQ_TSV
   rm tmp.tsv
 done
@@ -64,7 +65,7 @@ echo "running nail default..."
     -E $E \
     -T $TSV_DEFAULT \
     -O $OUT_DEFAULT \
-    -p $PREP \
+    --prep $PREP \
     --mmseqs-k $K \
     --mmseqs-k-score $K_SCORE \
     --mmseqs-min-ungapped_score $MIN_UNGAPPED_SCORE \
@@ -81,7 +82,7 @@ echo "running nail full-dp..."
     -E $E \
     -T $TSV_FULL \
     -O $OUT_FULL \
-    -p $PREP \
+    --prep $PREP \
     --full-dp \
     --mmseqs-k $K \
     --mmseqs-k-score $K_SCORE \
@@ -99,7 +100,7 @@ echo "running nail no-filters..."
     -E $E \
     -T $TSV_NO_FILTERS \
     -O $OUT_NO_FILTERS \
-    -p $PREP \
+    --prep $PREP \
     --forward-thresh 1e9 \
     --cloud-thresh 1e9 \
     --mmseqs-k $K \
