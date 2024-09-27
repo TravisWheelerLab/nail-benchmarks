@@ -39,8 +39,7 @@ class Benchmark:
         # target lengths
         benchmark_target_fa = benchmark_dir / f"{benchmark_name}.test.fa"
         command = ["esl-seqstat", "-a", benchmark_target_fa]
-        result = subprocess.run(
-            command, stdout=subprocess.PIPE, text=True, check=True)
+        result = subprocess.run(command, stdout=subprocess.PIPE, text=True, check=True)
 
         lines = result.stdout.splitlines()
 
@@ -58,8 +57,7 @@ class Benchmark:
         benchmark_query_hmm = benchmark_dir / f"{benchmark_name}.train.hmm"
 
         command = ["hmmstat", benchmark_query_hmm]
-        result = subprocess.run(
-            command, stdout=subprocess.PIPE, text=True, check=True)
+        result = subprocess.run(command, stdout=subprocess.PIPE, text=True, check=True)
 
         lines = result.stdout.splitlines()
 
@@ -246,9 +244,9 @@ class Hits:
                     target_tokens = target.split("/")
                     target_name = target_tokens[0]
 
-                    if (target_start is not None and
-                            target_end is not None and
-                            len(target_tokens) == 3):
+                    if (target_start is not None
+                            and target_end is not None
+                            and len(target_tokens) == 3):
                         target_range = [int(i)
                                         for i in target_tokens[2].split('-')]
                         plant_start = target_range[0]
@@ -265,11 +263,11 @@ class Hits:
 
                         overlap_percentage = overlap / plant_length
 
-                        if (target_name == query_name and
-                                overlap_percentage >= 0.50):
+                        if (target_name == query_name
+                                and overlap_percentage >= 0.50):
                             self.true_positives.append(hit)
-                        elif (target_name == query_name and
-                                overlap_percentage == 0.0):
+                        elif (target_name == query_name
+                                and overlap_percentage == 0.0):
 
                             self.false_positives.append(hit)
                         else:
@@ -285,17 +283,17 @@ class Hits:
 
         self.true_positives.sort(key=sort_key)
 
-        if (self.name == "hmmer" and
-                cols.target_start is not None and
-                cols.target_end is not None):
+        if (self.name == "hmmer"
+                and cols.target_start is not None
+                and cols.target_end is not None):
             unique_hits = {}
             for hit in self.true_positives:
                 target_tokens = hit.target_name.split("/")
                 target_name = target_tokens[0]
 
                 if hit.query_name == target_name:
-                    if ((hit.query_name, hit.target_name) not in unique_hits or
-                            hit.evalue < unique_hits[(hit.query_name, hit.target_name)].evalue):
+                    if ((hit.query_name, hit.target_name) not in unique_hits
+                            or hit.evalue < unique_hits[(hit.query_name, hit.target_name)].evalue):
                         unique_hits[(hit.query_name, hit.target_name)] = hit
 
             self.true_positives = list(unique_hits.values())
