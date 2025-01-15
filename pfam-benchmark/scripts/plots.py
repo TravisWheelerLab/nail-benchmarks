@@ -8,14 +8,70 @@ from pathlib import Path
 import matplotlib.pyplot as plt
 import numpy as np
 
-colors = [
-    "#D81B60",  # red
-    "#1E88E5",  # blue
-    "#FFC107",  # yellow
-    "#004D40",  # green
+RED_4 = "#D81B60"
+BLUE_4 = "#1E88E5"
+YELLOW_4 = "#FFC107"
+GREEN_4 = "#004D40"
+
+COLORS_4 = [
+    RED_4, BLUE_4, YELLOW_4, GREEN_4
 ]
 
-figsize = (10, 7)
+BLUE_IBM = "#648FFF"
+PURPLE_IBM = "#785EF0"
+RED_IBM = "#DC267F"
+ORANGE_IBM = "#FE6100"
+YELLOW_IBM = "#FFB000"
+
+COLORS_IBM = [
+    BLUE_IBM,
+    PURPLE_IBM,
+    RED_IBM,
+    ORANGE_IBM,
+    YELLOW_IBM,
+]
+
+BLACK_WONG = "#000000"
+ORANGE_WONG = "#E69F00"
+LIGHT_BLUE_WONG = "#56B4E9"
+GREEN_WONG = "#009E73"
+YELLOW_WONG = "#F0E442"
+DARK_BLUE_WONG = "#0072B2"
+ORANGE_WONG = "#D55E00"
+PINK_WONG = "#CC79A7"
+
+COLORS_WONG = [
+    BLACK_WONG,
+    ORANGE_WONG,
+    LIGHT_BLUE_WONG ,
+    GREEN_WONG,
+    YELLOW_WONG,
+    DARK_BLUE_WONG,
+    ORANGE_WONG,
+    PINK_WONG,
+]
+
+TOL_PURPLE = "#332288"
+TOL_GREEN = "#117733"
+TOL_SEAFOAM = "#44AA99"
+TOL_BLUE = "#88CCEE"
+TOL_YELLOW = "#DDCC77"
+TOL_PINK = "#CC6677"
+TOL_PURPLE = "#AA4499"
+
+COLORS_TOL = [
+    TOL_PURPLE,
+    TOL_GREEN,
+    TOL_SEAFOAM ,
+    TOL_BLUE,
+    TOL_YELLOW,
+    TOL_PINK,
+    TOL_PURPLE,
+]
+
+COLORS = COLORS_TOL
+
+figsize = (14, 9)
 
 
 class Benchmark:
@@ -418,12 +474,14 @@ def plot_recall(hits, num_true_positives, num_queries, figures_path):
 
     hmmer_hits = next(filter(lambda h: h.name == "hmmer", hits))
     nail_hits = next(filter(lambda h: h.name == "nail default", hits))
+    nail_double_hits = next(filter(lambda h: h.name == "nail double", hits))
     mmseqs_hits = next(filter(lambda h: h.name == "mmseqs default", hits))
     mmseqs_sensitive_hits = next(
         filter(lambda h: h.name == "mmseqs sensitive", hits))
 
     hits = [
         hmmer_hits,
+        nail_double_hits,
         nail_hits,
         mmseqs_sensitive_hits,
         mmseqs_hits,
@@ -431,16 +489,18 @@ def plot_recall(hits, num_true_positives, num_queries, figures_path):
 
     labels = [
         "hmmer (default)",
+        "nail (--double-seed)",
         "nail (default)",
         "mmseqs (sensitive)",
         "mmseqs (default)",
     ]
 
     color = [
-        colors[1],
-        colors[2],
-        colors[3],
-        colors[0],
+        TOL_BLUE,
+        TOL_GREEN,
+        TOL_PINK,
+        TOL_SEAFOAM,
+        TOL_PURPLE,
     ]
 
     ymin = 1.0
@@ -554,13 +614,13 @@ def plot_nail_bitscore(nail_hits, figures_path):
     coefficients = np.polyfit(x, y, deg=1)
     fit_line = np.poly1d(coefficients)
 
-    plt.plot(x, fit_line(x), color=colors[2], label="Trend")
-    plt.plot([0, max_val], [0, max_val], color=colors[0], label="y = x")
+    plt.plot(x, fit_line(x), color=COLORS[2], label="Trend")
+    plt.plot([0, max_val], [0, max_val], color=COLORS[0], label="y = x")
 
     plt.scatter(
         x,
         y,
-        color=colors[1],
+        color=COLORS_4[1],
         marker='^',
         label='True Positives',
         s=10,
@@ -610,9 +670,9 @@ def plot_nail_cells(nail_hits, benchmark, figures_path):
     ]
 
     color = [
-        colors[0],
-        colors[1],
-        colors[3],
+        COLORS[0],
+        COLORS[1],
+        COLORS[3],
     ]
 
     markers = [
@@ -695,11 +755,15 @@ def plot_time(results_dir, hits, num_true_positives, num_queries, figures_path):
     nail_paths = nail_dir.glob("*.time")
     nail_times = {t.name: t for t in [Time(p) for p in nail_paths]}
 
-    hmmer_time = hmmer_times["hmmer.time"].seconds,
+    hmmer_time = hmmer_times["hmmer.time"].seconds
 
     nail_default_time = nail_times["nail.default.time"].seconds
 
+    nail_double_time = nail_times["nail.double.time"].seconds
+
     nail_full_time = nail_times["nail.full.time"].seconds
+
+    nail_full_double_time = nail_times["nail.full-double.time"].seconds
 
     mmseqs_default_time = mmseqs_times["mmseqs.default.time"].seconds
 
@@ -709,7 +773,9 @@ def plot_time(results_dir, hits, num_true_positives, num_queries, figures_path):
 
     times = [
         hmmer_time,
+        nail_full_double_time,
         nail_full_time,
+        nail_double_time,
         nail_default_time,
         mmseqs_nail_time,
         mmseqs_sensitive_time,
@@ -718,6 +784,8 @@ def plot_time(results_dir, hits, num_true_positives, num_queries, figures_path):
 
     hmmer_hits = next(filter(lambda h: h.name == "hmmer", hits))
     nail_full_hits = next(filter(lambda h: h.name == "nail full", hits))
+    nail_full_double_hits = next(filter(lambda h: h.name == "nail full-double", hits))
+    nail_double_hits = next(filter(lambda h: h.name == "nail double", hits))
     nail_default_hits = next(filter(lambda h: h.name == "nail default", hits))
     mmseqs_nail_hits = next(filter(lambda h: h.name == "mmseqs nail", hits))
     mmseqs_sensitive_hits = next(
@@ -727,12 +795,16 @@ def plot_time(results_dir, hits, num_true_positives, num_queries, figures_path):
 
     hits = [
         hmmer_hits,
+        nail_full_double_hits,
+        nail_double_hits,
         nail_full_hits,
         nail_default_hits,
         mmseqs_nail_hits,
         mmseqs_sensitive_hits,
         mmseqs_default_hits,
     ]
+
+    print(hmmer_hits)
 
     recalls = [
         h.recall_vs_mean_false(
@@ -742,7 +814,9 @@ def plot_time(results_dir, hits, num_true_positives, num_queries, figures_path):
 
     labels = [
         "hmmsearch (default)",
-        "nail (full DP)",
+        "nail (--full-dp, --double-seed)",
+        "nail (--double-seed",
+        "nail (--full-dp)",
         "nail (default)",
         "mmseqs (nail pipeline settings)",
         "mmseqs (sensitive)",
@@ -750,18 +824,22 @@ def plot_time(results_dir, hits, num_true_positives, num_queries, figures_path):
     ]
 
     color = [
-        colors[1],
-        colors[2],
-        colors[2],
-        colors[0],
-        colors[0],
-        colors[0],
+        TOL_BLUE,
+        TOL_GREEN,
+        TOL_GREEN,
+        TOL_GREEN,
+        TOL_GREEN,
+        TOL_PINK,
+        TOL_PINK,
+        TOL_PINK,
     ]
 
     markers = [
         'o',
         'o',
         'D',
+        's',
+        'v',
         'o',
         'D',
         's',
@@ -791,7 +869,7 @@ def plot_time(results_dir, hits, num_true_positives, num_queries, figures_path):
         labelright=True,
     )
 
-    plt.xlim([0.2, 0.7])
+    plt.xlim([0.2, 0.8])
     plt.ylim([1e1, 10e3])
 
     plt.legend(loc='upper left')

@@ -219,7 +219,7 @@ if __name__ == "__main__":
     parser.add_argument(
         '--num_domains',
         type=int,
-        default=1_000,
+        default=5_000,
         help='The number of query SCOP domains to use in the benchmark'
     )
 
@@ -240,7 +240,7 @@ if __name__ == "__main__":
     parser.add_argument(
         '--num_decoys',
         type=int,
-        default=1_000_000,
+        default=5_000_000,
         help='The total number of decoy sequences sampled'
     )
 
