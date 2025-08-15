@@ -16,16 +16,11 @@ E=1e9
 K=6
 K_SCORE=80
 MIN_UNGAPPED_SCORE=15
-MAX_SEQS=1000
+MAX_SEQS=2147483647
 
 BENCHMARK_DIR=$1
-NAME=$(basename "$BENCHMARK_DIR")
-TARGET=$BENCHMARK_DIR/$NAME.test.fa
-QUERY=$BENCHMARK_DIR/$NAME.train.hmm
-
-LONG_SEQ_DIR=$BENCHMARK_DIR/long-seq/
-LONG_SEQ_QUERY_DIR=$LONG_SEQ_DIR/query/
-LONG_SEQ_TARGET_DIR=$LONG_SEQ_DIR/target/
+QUERY=$BENCHMARK_DIR/query.hmm
+TARGET=$BENCHMARK_DIR/target.fa
 
 RESULTS_DIR=$BENCHMARK_DIR/results/nail/
 
@@ -41,20 +36,9 @@ TBL_FULL=$RESULTS_DIR/nail.full.tsv
 TBL_FULL_DOUBLE=$RESULTS_DIR/nail.full-double.tsv
 TBL_NO_FILTERS=$RESULTS_DIR/nail.no-filters.tsv
 
-
 rm -rf $RESULTS_DIR
 mkdir -p $RESULTS_DIR
 mkdir $PREP
-
-echo "running nail on long sequence pairs..."
-LONG_SEQ_TBL=$RESULTS_DIR/long-seq.tsv
-for ((i=1; i<=6; i++)); do
-  LONG_QUERY="$LONG_SEQ_QUERY_DIR${i}.query.fa"
-  LONG_TARGET="$LONG_SEQ_TARGET_DIR${i}.target.fa"
-  nail search --tbl-out tmp.tsv $LONG_QUERY $LONG_TARGET
-  cat tmp.tsv >> $LONG_SEQ_TBL
-  rm tmp.tsv
-done
 
 echo "running nail default..."
 /usr/bin/time -p -o $TIME_DEFAULT \
@@ -71,21 +55,21 @@ echo "running nail default..."
 awk '/real/ {print "time:", $2}' $TIME_DEFAULT
 echo
 
-echo "running nail double..."
-/usr/bin/time -p -o $TIME_DOUBLE \
-    nail search \
-    -t $THREADS \
-    -E $E \
-    --double-seed \
-    --tbl-out $TBL_DOUBLE \
-    --mmseqs-k $K \
-    --mmseqs-k-score $K_SCORE \
-    --mmseqs-min-ungapped-score $MIN_UNGAPPED_SCORE \
-    --mmseqs-max-seqs $MAX_SEQS \
-    $QUERY $TARGET
+# echo "running nail double..."
+# /usr/bin/time -p -o $TIME_DOUBLE \
+#     nail search \
+#     -t $THREADS \
+#     -E $E \
+#     --double-seed \
+#     --tbl-out $TBL_DOUBLE \
+#     --mmseqs-k $K \
+#     --mmseqs-k-score $K_SCORE \
+#     --mmseqs-min-ungapped-score $MIN_UNGAPPED_SCORE \
+#     --mmseqs-max-seqs $MAX_SEQS \
+#     $QUERY $TARGET
 
-awk '/real/ {print "time:", $2}' $TIME_DOUBLE
-echo
+# awk '/real/ {print "time:", $2}' $TIME_DOUBLE
+# echo
 
 echo "running nail full-dp..."
 /usr/bin/time -p -o $TIME_FULL \
@@ -103,22 +87,22 @@ echo "running nail full-dp..."
 awk '/real/ {print "time:", $2}' $TIME_FULL
 echo
 
-echo "running nail full-dp double..."
-/usr/bin/time -p -o $TIME_FULL_DOUBLE \
-    nail search \
-    -t $THREADS \
-    -E $E \
-    --tbl-out $TBL_FULL_DOUBLE \
-    --double-seed \
-    --full-dp \
-    --mmseqs-k $K \
-    --mmseqs-k-score $K_SCORE \
-    --mmseqs-min-ungapped-score $MIN_UNGAPPED_SCORE \
-    --mmseqs-max-seqs $MAX_SEQS \
-    $QUERY $TARGET
+# echo "running nail full-dp double..."
+# /usr/bin/time -p -o $TIME_FULL_DOUBLE \
+#     nail search \
+#     -t $THREADS \
+#     -E $E \
+#     --tbl-out $TBL_FULL_DOUBLE \
+#     --double-seed \
+#     --full-dp \
+#     --mmseqs-k $K \
+#     --mmseqs-k-score $K_SCORE \
+#     --mmseqs-min-ungapped-score $MIN_UNGAPPED_SCORE \
+#     --mmseqs-max-seqs $MAX_SEQS \
+#     $QUERY $TARGET
 
-awk '/real/ {print "time:", $2}' $TIME_FULL_DOUBLE
-echo
+# awk '/real/ {print "time:", $2}' $TIME_FULL_DOUBLE
+# echo
 
 echo "running nail no-filters..."
 /usr/bin/time -p -o $TIME_NO_FILTERS \

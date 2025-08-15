@@ -1,4 +1,4 @@
-# /bin/sh
+#! /bin/sh
 
 PROFMARK_BIN=create-profmark
 BENCHMARK_NAME=benchmark
@@ -20,15 +20,21 @@ QUERY_HMM=$BENCHMARK_NAME.train.hmm
 QUERY_MSA=$BENCHMARK_NAME.train.msa
 TARGET_FA=$BENCHMARK_NAME.test.fa
 
+TRAIN_TEST_ID=0.5
 MIN_TEST=10
 MAX_TEST=30
 
 esl-sfetch --index $FA
 
-$PROFMARK_BIN -N $N --mintest $MIN_TEST --maxtest $MAX_TEST $DIR/$BENCHMARK_NAME $MSA $FA
+$PROFMARK_BIN -N $N \
+    -1 $TRAIN_TEST_ID \
+    --mintest $MIN_TEST \
+    --maxtest $MAX_TEST \
+    $DIR/$BENCHMARK_NAME $MSA $FA
 
 cd $DIR && \
-    hmmbuild $QUERY_HMM $QUERY_MSA && \
+    hmmbuild -- cpu 8 \
+    $QUERY_HMM $QUERY_MSA && \
+    ln -s $QUERY_MSA query.sto && \
     ln -s $QUERY_HMM query.hmm && \
-    ln -s $QUERY_MSA query.msa && \
     ln -s $TARGET_FA target.fa

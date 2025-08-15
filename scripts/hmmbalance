@@ -1,0 +1,54 @@
+#! /usr/bin/python3
+
+import sys
+import os
+
+
+class Index:
+    def __init__(self, path):
+        self.ranges = []
+        start = 0
+        length = 0
+        with open(path) as f:
+            for (i, line) in enumerate(f):
+                if "//" in line:
+                    self.ranges.append((start, i, length))
+                    start = i + 1
+                elif "LENG" in line:
+                    length = int(line.split()[1])
+
+        self.ranges.sort(key=lambda x: x[2])
+
+    def len(self):
+        return len(self.ranges)
+
+    def split(self, n):
+        splits = [[] for _ in range(n)]
+        for i in range(self.len()):
+            splits[i % n].append(self.ranges.pop())
+
+        return splits
+
+
+def write(path, splits):
+    name, ext = os.path.splitext(path)
+
+    hmm_lines = [line for line in open(path)]
+
+    for (spl_idx, spl) in enumerate(splits):
+        with open(f"{name}.{spl_idx}{ext}", "w") as f:
+            for (start, end, _) in spl:
+                for line in hmm_lines[start:end + 1]:
+                    f.write(line)
+
+
+if __name__ == "__main__":
+    if len(sys.argv) != 3:
+        print("usage: hmmbalance <file> <num_splits>")
+        sys.exit(1)
+
+    path = sys.argv[1]
+    n = int(sys.argv[2])
+    index = Index(path)
+    splits = index.split(n)
+    write(path, splits)

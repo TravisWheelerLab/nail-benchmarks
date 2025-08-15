@@ -79,7 +79,7 @@ class Benchmark:
         benchmark_name = benchmark_dir.name
 
         # positive targets
-        benchmark_pos = benchmark_dir / f"{benchmark_name}.pos"
+        benchmark_pos = benchmark_dir / "benchmark.pos"
 
         self.positives = []
         with open(benchmark_pos) as file:
@@ -93,7 +93,7 @@ class Benchmark:
         self.num_true_positives = len(self.positives)
 
         # target lengths
-        benchmark_target_fa = benchmark_dir / f"{benchmark_name}.test.fa"
+        benchmark_target_fa = benchmark_dir / "target.fa"
         command = ["esl-seqstat", "-a", benchmark_target_fa]
         result = subprocess.run(command, stdout=subprocess.PIPE, text=True, check=True)
 
@@ -110,7 +110,7 @@ class Benchmark:
             self.target_lengths[name] = length
 
         # query (model) lengths
-        benchmark_query_hmm = benchmark_dir / f"{benchmark_name}.train.hmm"
+        benchmark_query_hmm = benchmark_dir / "query.hmm"
 
         command = ["hmmstat", benchmark_query_hmm]
         result = subprocess.run(command, stdout=subprocess.PIPE, text=True, check=True)
@@ -422,7 +422,7 @@ def read_hmmer_results(results_dir):
 
     # best domain E-value
     # cols = Cols(0, 2, 7)
-    paths = results_dir.glob("*.tbl")
+    # paths = results_dir.glob("*.tbl")
 
     cols = Cols(0, 3, 12,
                 target_start=17,
@@ -472,12 +472,11 @@ def plot_recall(hits, num_true_positives, num_queries, figures_path):
     plt.close('all')
     plt.figure(figsize=figsize)
 
-    hmmer_hits = next(filter(lambda h: h.name == "hmmer", hits))
-    nail_hits = next(filter(lambda h: h.name == "nail default", hits))
-    nail_double_hits = next(filter(lambda h: h.name == "nail double", hits))
-    mmseqs_hits = next(filter(lambda h: h.name == "mmseqs default", hits))
-    mmseqs_sensitive_hits = next(
-        filter(lambda h: h.name == "mmseqs sensitive", hits))
+    hmmer_hits = next(filter(lambda h: h.name == "hmmer", hits), None)
+    nail_hits = next(filter(lambda h: h.name == "nail default", hits), None)
+    nail_double_hits = next(filter(lambda h: h.name == "nail double", hits), None)
+    mmseqs_hits = next(filter(lambda h: h.name == "mmseqs default", hits), None)
+    mmseqs_sensitive_hits = next(filter(lambda h: h.name == "mmseqs sensitive", hits), None)
 
     hits = [
         hmmer_hits,
@@ -506,6 +505,8 @@ def plot_recall(hits, num_true_positives, num_queries, figures_path):
     ymin = 1.0
     ymax = 0.0
     for (h, c, l) in zip(hits, color, labels):
+        if h is None:
+            continue
         (x, y, y_first, (x_fdr, y_fdr)) = h.recall_vs_mean_false(
             num_true_positives, num_queries)
 
@@ -803,8 +804,6 @@ def plot_time(results_dir, hits, num_true_positives, num_queries, figures_path):
         mmseqs_sensitive_hits,
         mmseqs_default_hits,
     ]
-
-    print(hmmer_hits)
 
     recalls = [
         h.recall_vs_mean_false(
