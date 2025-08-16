@@ -79,7 +79,7 @@ class Stockholm:
     records: Dict[str, StockholmRecord]
 
     @staticmethod
-    def parse(path: str) -> "Stockholm":
+    def from_path(path: str) -> "Stockholm":
         records = {}
         record = StockholmRecord()
 
