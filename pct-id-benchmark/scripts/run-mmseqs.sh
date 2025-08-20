@@ -28,7 +28,7 @@ T4=$RESULTS/mmseqs.fwd-max.time
 
 S_ARGS="$QDB $TDB $ADB $TMP --threads $THREADS"
 F_ARGS="$QDB $TDB $ADB $FDB --threads $THREADS" 
-C_ARGS="--format-output target,query,tstart,tend,qstart,qend,evalue"
+C_ARGS="--format-output target,query,tstart,tend,qstart,qend,bits,evalue"
 
 rm -rf $TMP/*
 echo "running mmseqs seq..."
