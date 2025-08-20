@@ -11,7 +11,7 @@ SWISSPROT_URL := https://ftp.uniprot.org/pub/databases/uniprot/previous_releases
 SWISSPROT_TGZ := $(DATA_DIR)/swissprot.tgz
 SWISSPROT_DIR := $(DATA_DIR)/uniprot_sprot/
 SWISSPROT_FA_GZ := $(SWISSPROT_DIR)/uniprot_sprot.fasta.gz 
-SWISSPROT_FA := $(DATA_DIR)/swissprot.fasta
+SWISSPROT_FA := $(DATA_DIR)/swissprot.fa
 
 .PHONY: none
 none:

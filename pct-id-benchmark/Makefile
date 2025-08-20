@@ -1,6 +1,7 @@
+MAKEFILE_DIR := $(dir $(abspath $(lastword $(MAKEFILE_LIST))))
 THREADS?= 8
 
-PM_BIN := create-profmark
+PM_BIN := $(MAKEFILE_DIR)../tools/bin/create-profmark
 SPLIT_BIN := ./scripts/split-decoys
 
 NAIL:= ./scripts/run-nail.sh
@@ -13,8 +14,8 @@ PM_DIR := profmark
 PM_NAME := $(PM_DIR)/benchmark
 
 SRC_MSA := $(realpath ../data/pfam.sto)
-SRC_FA := $(realpath ../data/uniprot_sprot.fasta)
-SRC_FA_IDX := $(FA).ssi
+SRC_FA := $(realpath ../data/swissprot.fa)
+SRC_FA_IDX := $(SRC_FA).ssi
 
 TRAIN_MSA := $(PM_NAME).train.msa
 TEST_FA := $(PM_NAME).test.fa
@@ -41,11 +42,11 @@ DECOY_RATIO := 100
 
 .PHONY: 100 1000 benchmark run
 
-$(FA_IDX): 
-	@echo indexing \"$(FA)\"...
-	@esl-sfetch --index $(FA) >/dev/null
+$(SRC_FA_IDX): 
+	@echo indexing \"$(SRC_FA)\"...
+	@esl-sfetch --index $(SRC_FA) >/dev/null
 
-$(PM_OUT): $(FA_IDX)
+$(PM_OUT): $(SRC_FA_IDX)
 	@echo running profmark...
 	@mkdir -p $(PM_DIR)
 	@time $(PM_BIN) \
