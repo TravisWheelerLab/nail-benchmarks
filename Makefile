@@ -14,7 +14,10 @@ SWISSPROT_FA := $(DATA_DIR)/swissprot.fasta
 
 DATA := $(PFAM_STO) $(SWISSPROT_FA)
 
-$(SWISSPROT_FA):
+data:
+	mkdir -p data
+
+$(SWISSPROT_FA): data
 	@wget -O $(SWISSPROT_TGZ) $(SWISSPROT_URL)
 	@mkdir -p $(SWISSPROT_DIR)
 	@tar -xzf $(SWISSPROT_TGZ) -C $(SWISSPROT_DIR)
@@ -22,7 +25,7 @@ $(SWISSPROT_FA):
 	@rm -rf $(SWISSPROT_TGZ)
 	@rm -rf $(SWISSPROT_DIR)
 
-$(PFAM_STO): 
+$(PFAM_STO): data
 	@wget -O $(PFAM_GZ) $(PFAM_URL)
 	@gunzip $(PFAM_GZ)
 
