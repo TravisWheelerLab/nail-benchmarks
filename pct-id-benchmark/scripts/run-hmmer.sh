@@ -1,4 +1,4 @@
-#! /bin/sh
+#!/usr/bin/env bash
 HMMSEARCH=../tools/bin/hmmsearch
 PHMMER=../tools/bin/phmmer
 

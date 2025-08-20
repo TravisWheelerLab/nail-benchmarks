@@ -1,4 +1,4 @@
-#! /bin/sh
+#!/usr/bin/env bash
 MMSEQS=../tools/bin/mmseqs
 ESL=../tools/bin/esl-seqstat
 

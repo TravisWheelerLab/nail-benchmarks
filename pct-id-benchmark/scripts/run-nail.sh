@@ -1,4 +1,4 @@
-#! /bin/sh
+#!/usr/bin/env bash
 NAIL=../tools/bin/nail
 
 set -e
@@ -6,6 +6,8 @@ DIR="$(cd -- "$(dirname -- "$0")" && pwd)"
 
 . $DIR/vars.sh
 set_vars "$@"
+
+echo $THREADS
 
 TMP=./tmp-nail/
 mkdir -p $TMP
