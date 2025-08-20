@@ -94,8 +94,8 @@ else
   BLAST_BIN_URL  := none
 endif
 
-TOOLS_DIR := $(MAKEFILE_DIR)/tools
-TOOL_BIN := $(TOOLS_DIR)/bin
+TOOL_DIR := $(MAKEFILE_DIR)/tools
+TOOL_BIN := $(TOOL_DIR)/bin
 
 $(TOOL_BIN):
 	@mkdir -p $@
@@ -111,14 +111,15 @@ MMSEQS      := $(TOOL_BIN)/mmseqs
 
 .PHONY: nail hmmer mmseqs blast last
 
-NAIL_SRC_URL  := https://github.com/TravisWheelerLab/nail/archive/refs/tags/nail-v0.4.0.tar.gz NAIL_SRC_TGZ  := $(TOOLS_DIR)/nail.tgz
+NAIL_SRC_URL  := https://github.com/TravisWheelerLab/nail/archive/refs/tags/nail-v0.4.0.tar.gz
+NAIL_SRC_TGZ  := $(TOOL_DIR)/nail.tgz
 nail: $(TOOL_BIN)
 	@echo TODO: retrieve/build nail
 	@False	
 
-HMMER_SRC_URL := http://eddylab.org/software/hmmer/hmmer-3.3.2.tar.gz
-HMMER_SRC_TGZ := $(TOOLS_DIR)/hmmer.tgz
-HMMER_SRC_DIR := $(TOOLS_DIR)/hmmer
+HMMER_SRC_URL := http://eddylab.org/software/hmmer/hmmer-3.4.tar.gz
+HMMER_SRC_TGZ := $(TOOL_DIR)/hmmer.tgz
+HMMER_SRC_DIR := $(TOOL_DIR)/hmmer
 HMMER_BIN_DIR := $(HMMER_SRC)/bin/
 hmmer: $(TOOL_BIN)
 	@wget -O $(HMMER_SRC_TGZ) $(HMMER_SRC_URL)
@@ -135,8 +136,8 @@ hmmer: $(TOOL_BIN)
 	@ln -sf $(HMMER_SRC_DIR)/profmark/create-profmark $(PROFMARK)
 	@rm $(HMMER_SRC_TGZ)
 
-MMSEQS_BIN_TGZ := $(TOOLS_DIR)/mmseqs.tgz
-MMSEQS_BIN_DIR := $(TOOLS_DIR)/mmseqs
+MMSEQS_BIN_TGZ := $(TOOL_DIR)/mmseqs.tgz
+MMSEQS_BIN_DIR := $(TOOL_DIR)/mmseqs
 MMSEQS_BIN     := $(MMSEQS_BIN_DIR)/bin/mmseqs
 mmseqs: $(TOOL_BIN)
 	@wget -O $(MMSEQS_BIN_TGZ) $(MMSEQS_BIN_URL)
@@ -145,8 +146,8 @@ mmseqs: $(TOOL_BIN)
 	@rm $(MMSEQS_BIN_TGZ)
 	@ln -sf $(MMSEQS_BIN) $(MMSEQS)
 
-# BLAST_BIN_TGZ := $(TOOLS_DIR)/blast.tgz
-# BLAST_BIN_DIR := $(TOOLS_DIR)/blast
+# BLAST_BIN_TGZ := $(TOOL_DIR)/blast.tgz
+# BLAST_BIN_DIR := $(TOOL_DIR)/blast
 # BLAST_BIN_DIR := $(BLAST_BIN_DIR)/bin
 # blast: $(TOOL_BIN)
 # 	false
@@ -156,8 +157,8 @@ mmseqs: $(TOOL_BIN)
 # 	@rm $(BLAST_BIN_TGZ)
 
 # LAST_SRC_URL := https://gitlab.com/mcfrith/last/-/archive/1642/last-1642.tar.gz
-# LAST_SRC_TGZ := $(TOOLS_DIR)/last.tgz
-# LAST_SRC_DIR := $(TOOLS_DIR)/last
+# LAST_SRC_TGZ := $(TOOL_DIR)/last.tgz
+# LAST_SRC_DIR := $(TOOL_DIR)/last
 # LAST_BIN_DIR := $(LAST_SRC)/bin
 # last: $(TOOL_BIN)
 # 	false
@@ -166,3 +167,7 @@ mmseqs: $(TOOL_BIN)
 # 	@tar --strip-components=1 -xzf $(LAST_SRC_TGZ) -C $(LAST_SRC)
 # 	@cd $(LAST_SRC) && make
 # 	@rm $(LAST_SRC_TGZ)
+
+.PHONY: clean
+clean:
+	rm -rf $(TOOL_DIR)
