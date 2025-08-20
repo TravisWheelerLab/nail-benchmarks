@@ -1,6 +1,41 @@
 MAKEFILE_DIR := $(dir $(abspath $(lastword $(MAKEFILE_LIST))))
 .DEFAULT_GOAL := none
 
+# detect platform + best x86_64 simd
+OS   := $(shell uname -s)
+ARCH := $(shell uname -m)
+
+ifeq ($(OS),Darwin)
+  PLATFORM := macos-universal
+else ifeq ($(OS),Linux)
+  ifeq ($(ARCH),aarch64)
+    PLATFORM := linux-arm64
+  else ifeq ($(ARCH),x86_64)
+    CPUFLAGS := $(shell lscpu 2>/dev/null | awk -F: '/Flags|flags/{print $$2}' | tr A-Z a-z); \
+                if [ -z "$$CPUFLAGS" ]; then CPUFLAGS=$$(grep -im1 '^flags' /proc/cpuinfo | cut -d: -f2); fi; \
+                echo $$CPUFLAGS
+    ifneq (,$(findstring avx2,$(CPUFLAGS)))
+      SIMD := avx2
+    else ifneq (,$(findstring avx,$(CPUFLAGS)))
+      SIMD := avx
+    else ifneq (,$(findstring sse4_1,$(CPUFLAGS)))
+      SIMD := sse4.1
+    else ifneq (,$(findstring sse2,$(CPUFLAGS)))
+      SIMD := sse2
+    else
+      SIMD := baseline
+    endif
+    PLATFORM := linux-x86_64-$(SIMD)
+  else
+    PLATFORM := linux-$(ARCH)
+  endif
+else
+  PLATFORM := unknown
+endif
+
+print-platform:
+	@echo $(PLATFORM)
+
 DATA_DIR := $(MAKEFILE_DIR)/data
 
 PFAM_URL := https://ftp.ebi.ac.uk/pub/databases/Pfam/releases/Pfam36.0/Pfam-A.seed.gz
@@ -39,6 +74,26 @@ setup: $(DATA)
 ####################################
 ####################################
 
+ifeq ($(PLATFORM),linux-arm64)
+  MMSEQS_BIN_URL := https://github.com/soedinglab/MMseqs2/releases/download/18-8cc5c/mmseqs-linux-arm64.tar.gz
+  BLAST_BIN_URL  := https://ftp.ncbi.nlm.nih.gov/blast/executables/blast+/LATEST/ncbi-blast-2.17.0+-aarch64-linux.tar.gz
+else ifeq ($(PLATFORM),linux-x86_64-avx2)
+  MMSEQS_BIN_URL := https://github.com/soedinglab/MMseqs2/releases/download/18-8cc5c/mmseqs-linux-avx2.tar.gz
+  BLAST_BIN_URL  := https://ftp.ncbi.nlm.nih.gov/blast/executables/blast+/LATEST/ncbi-blast-2.17.0+-x64-linux.tar.gz
+else ifeq ($(PLATFORM),linux-x86_64-sse2)
+  MMSEQS_BIN_URL := https://github.com/soedinglab/MMseqs2/releases/download/18-8cc5c/mmseqs-linux-sse2.tar.gz
+  BLAST_BIN_URL  := https://ftp.ncbi.nlm.nih.gov/blast/executables/blast+/LATEST/ncbi-blast-2.17.0+-x64-linux.tar.gz
+else ifeq ($(PLATFORM),linux-x86_64-sse4.1)
+  MMSEQS_BIN_URL := https://github.com/soedinglab/MMseqs2/releases/download/18-8cc5c/mmseqs-linux-sse41.tar.gz
+  BLAST_BIN_URL  := https://ftp.ncbi.nlm.nih.gov/blast/executables/blast+/LATEST/ncbi-blast-2.17.0+-x64-linux.tar.gz
+else ifeq ($(PLATFORM),macos-universal)
+  MMSEQS_BIN_URL := https://github.com/soedinglab/MMseqs2/releases/download/18-8cc5c/mmseqs-osx-universal.tar.gz
+  BLAST_BIN_URL  := https://ftp.ncbi.nlm.nih.gov/blast/executables/blast+/LATEST/ncbi-blast-2.17.0+-universal-macosx.tar.gz
+else
+  MMSEQS_BIN_URL := none
+  BLAST_BIN_URL  := none
+endif
+
 TOOLS_DIR := $(MAKEFILE_DIR)/tools
 TOOL_BIN := $(TOOLS_DIR)/bin
 
@@ -51,8 +106,8 @@ HMMSEARCH   := $(TOOL_BIN)/hmmsearch
 ESL_SEQSTAT := $(TOOL_BIN)/esl-seqstat
 PROFMARK    := $(TOOL_BIN)/create-profmark
 MMSEQS      := $(TOOL_BIN)/mmseqs
-BLAST       := $(TOOL_BIN)/blastp
-LAST        := $(TOOL_BIN)/lastal
+# BLAST       := $(TOOL_BIN)/blastp
+# LAST        := $(TOOL_BIN)/lastal
 
 .PHONY: nail hmmer mmseqs blast last
 
@@ -80,7 +135,6 @@ hmmer: $(TOOL_BIN)
 	@ln -sf $(HMMER_SRC_DIR)/profmark/create-profmark $(PROFMARK)
 	@rm $(HMMER_SRC_TGZ)
 
-MMSEQS_BIN_URL := https://github.com/soedinglab/MMseqs2/releases/download/18-8cc5c/mmseqs-osx-universal.tar.gz
 MMSEQS_BIN_TGZ := $(TOOLS_DIR)/mmseqs.tgz
 MMSEQS_BIN_DIR := $(TOOLS_DIR)/mmseqs
 MMSEQS_BIN     := $(MMSEQS_BIN_DIR)/bin/mmseqs
@@ -91,25 +145,24 @@ mmseqs: $(TOOL_BIN)
 	@rm $(MMSEQS_BIN_TGZ)
 	@ln -sf $(MMSEQS_BIN) $(MMSEQS)
 
-# BLAST_BIN_URL := https://ftp.ncbi.nlm.nih.gov/blast/executables/blast+/LATEST/ncbi-blast-2.17.0+-universal-macosx.tar.gz
 # BLAST_BIN_TGZ := $(TOOLS_DIR)/blast.tgz
 # BLAST_BIN_DIR := $(TOOLS_DIR)/blast
 # BLAST_BIN_DIR := $(BLAST_BIN_DIR)/bin
 # blast: $(TOOL_BIN)
+# 	false
 # 	@wget -O $(BLAST_BIN_TGZ) $(BLAST_BIN_URL)
 # 	@mkdir -p $(BLAST_BIN_DIR)
 # 	@tar --strip-components=1 -xzf $(BLAST_BIN_TGZ) -C $(BLAST_BIN_DIR)
 # 	@rm $(BLAST_BIN_TGZ)
-# 	@ln -sf $(BLAST_BIN) $(BLAST)
 
 # LAST_SRC_URL := https://gitlab.com/mcfrith/last/-/archive/1642/last-1642.tar.gz
 # LAST_SRC_TGZ := $(TOOLS_DIR)/last.tgz
 # LAST_SRC_DIR := $(TOOLS_DIR)/last
 # LAST_BIN_DIR := $(LAST_SRC)/bin
 # last: $(TOOL_BIN)
+# 	false
 # 	@wget -O $(LAST_SRC_TGZ) $(LAST_SRC_URL)
 # 	@mkdir -p $(LAST_SRC)
 # 	@tar --strip-components=1 -xzf $(LAST_SRC_TGZ) -C $(LAST_SRC)
 # 	@cd $(LAST_SRC) && make
 # 	@rm $(LAST_SRC_TGZ)
-# 	@ln -sf $(LAST_BIN) $(LAST)
