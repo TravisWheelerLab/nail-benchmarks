@@ -1,5 +1,5 @@
 [package]
-name = "plot-pid"
+name = "pid-plot"
 version = "0.1.0"
 edition = "2024"
 
@@ -7,4 +7,4 @@ edition = "2024"
 bioio = { path = "../bioio" }
 anyhow = "1.0.99"
 glob = "0.3.3"
-plotters = "0.3.7"
+plotly = { version = "0.13", features = ["static_export_default"] }

@@ -7,8 +7,6 @@ DIR="$(cd -- "$(dirname -- "$0")" && pwd)"
 . $DIR/vars.sh
 set_vars "$@"
 
-echo $THREADS
-
 TMP=./tmp-nail/
 mkdir -p $TMP
 

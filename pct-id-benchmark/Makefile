@@ -1,29 +1,5 @@
-MAKEFILE_DIR := $(dir $(abspath $(lastword $(MAKEFILE_LIST))))
-THREADS ?= 8
-
-TOOLS    := $(realpath $(MAKEFILE_DIR)../tools)
-UTIL     := $(realpath $(MAKEFILE_DIR)../util)
-RUST     := $(UTIL)/rust
-RUST_BIN := $(RUST)/target/release
-DATA     := $(realpath $(MAKEFILE_DIR)../data)
-SCRIPTS  := $(MAKEFILE_DIR)/scripts
-
-PROFMARK := $(TOOLS)/bin/create-profmark
-HMMBUILD := $(TOOLS)/bin/hmmbuild
-SPLIT    := $(RUST_BIN)/split-decoys
-PLOT     := $(RUST_BIN)/plot-pid
-
-NAIL   := $(SCRIPTS)/run-nail.sh
-HMMER  := $(SCRIPTS)/run-hmmer.sh
-MMSEQS := $(SCRIPTS)/run-mmseqs.sh
-BLAST  := $(SCRIPTS)/run-blast.sh
-LAST   := $(SCRIPTS)/run-last.sh
-
-PM_DIR     := $(MAKEFILE_DIR)/profmark
-PM_NAME    := $(PM_DIR)/benchmark
-SRC_STO    ?= $(DATA)/pfam.sto
-SRC_FA     := $(DATA)/swissprot.fa
-SRC_FA_IDX := $(SRC_FA).ssi
+THREADS     ?= 8
+DECOY_RATIO ?= 100
 
 # profmark args
 SEED          ?= 67779
@@ -32,7 +8,44 @@ TRAIN_TEST_ID ?= 0.5
 MIN_TEST      ?= 10
 MAX_TEST      ?= 30
 
-# profmark files
+MAKEFILE_DIR := $(dir $(abspath $(lastword $(MAKEFILE_LIST))))
+TOOLS    := $(realpath $(MAKEFILE_DIR)../tools)
+UTIL     := $(realpath $(MAKEFILE_DIR)../util)
+DATA     := $(realpath $(MAKEFILE_DIR)../data)
+SCRIPTS  := $(MAKEFILE_DIR)/scripts
+
+# hmmer util
+PROFMARK := $(TOOLS)/bin/create-profmark
+HMMBUILD := $(TOOLS)/bin/hmmbuild
+
+# rust util
+RUST     := $(UTIL)/rust
+RUST_BIN := $(RUST)/target/release
+
+SPLIT     := $(RUST_BIN)/split-decoys
+SPLIT_SRC := $(RUST)/split-decoys/src/main.rs
+
+PID       := $(RUST_BIN)/pid
+PID_SRC   := $(RUST)/pid/src
+
+PLOT     := $(RUST_BIN)/pid-plot
+PLOT_SRC := $(RUST)/pid-plot/src
+
+# align scripts
+NAIL   := $(SCRIPTS)/run-nail.sh
+HMMER  := $(SCRIPTS)/run-hmmer.sh
+MMSEQS := $(SCRIPTS)/run-mmseqs.sh
+BLAST  := $(SCRIPTS)/run-blast.sh
+LAST   := $(SCRIPTS)/run-last.sh
+
+# profmark input 
+PM_DIR     := $(MAKEFILE_DIR)/profmark
+PM_NAME    := $(PM_DIR)/benchmark
+SRC_STO    ?= $(DATA)/pfam.sto
+SRC_FA     := $(DATA)/swissprot.fa
+SRC_FA_IDX := $(SRC_FA).ssi
+
+# profmark output
 TRAIN_MSA := $(PM_NAME).train.msa
 TEST_FA   := $(PM_NAME).test.fa
 POS_FA    := $(PM_DIR)/positives.fa
@@ -42,17 +55,16 @@ QUERY_STO := $(PM_DIR)/query.sto
 PM_OUT    := $(POS_FA) $(DEC_FA) $(QUERY_STO)
 PM_REMOVE := $(TEST_FA) $(PM_NAME).neg $(PM_NAME).pos $(PM_NAME).tbl
 
-PID         := $(RUST_BIN)/pid
-PID_SRC     := $(RUST)/pid/src
-PID_ARGS    := $(POS_FA) $(DEC_FA) $(QUERY_STO) $(SRC_STO)
-DECOY_RATIO ?= 100
-
-CHECK_PATHS := $(MAKEFILE_DIR) $(TOOLS) $(DATA) $(SRC_FA)	
-
+##########################################
+##########################################
+##########################################
+ 
+CHECK_PATHS := $(MAKEFILE_DIR) $(TOOLS) $(DATA) $(SRC_FA) $(SRC_STO) $(SPLIT_SRC) $(PID_SRC) $(PLOT_SRC)
 .PHONY: $(CHECK_PATHS)
 $(CHECK_PATHS):
-	@if [ ! -e "$@" ]; then \
-		echo "Error: \"$@\" does not exist"; \
+	@if [ -e "$@" ]; then \
+		echo "\"$@\" OK"; \
+	else \
 		exit 1; \
 	fi
 
@@ -85,7 +97,7 @@ $(PID): $(PID_SRC)/main.rs
 
 b%: profmark $(PID)
 	@mkdir -p b-$*
-	@$(PID) b-$* $(PID_ARGS) $* $(DECOY_RATIO)
+	@$(PID) b-$* $(POS_FA) $(DEC_FA) $(QUERY_STO) $(SRC_STO) $* $(DECOY_RATIO)
 	@$(HMMBUILD) b-$*/query.hmm b-$*/query.sto > /dev/null
 
 run-%:
@@ -94,7 +106,10 @@ run-%:
 	@$(MMSEQS) $* $(THREADS)
 	@$(HMMER) $* $(THREADS)
 
-plot-%:
+$(PLOT): $(PLOT_SRC)/main.rs
+	@cd $(PLOT_SRC) && cargo build --release
+
+plot-%: $(PLOT)
 	$(PLOT) $*
 
 clean:
