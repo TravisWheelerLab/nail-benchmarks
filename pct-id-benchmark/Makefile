@@ -1,92 +1,92 @@
 MAKEFILE_DIR := $(dir $(abspath $(lastword $(MAKEFILE_LIST))))
-THREADS?= 8
+THREADS ?= 8
 
-PM_BIN := $(MAKEFILE_DIR)../tools/bin/create-profmark
-SPLIT_BIN := ./scripts/split-decoys
+TOOLS    := $(realpath $(MAKEFILE_DIR)../tools)
+UTIL     := $(realpath $(MAKEFILE_DIR)../util)
+RUST     := $(UTIL)/rust
+RUST_BIN := $(RUST)/target/release
+DATA     := $(realpath $(MAKEFILE_DIR)../data)
+SCRIPTS  := $(MAKEFILE_DIR)/scripts
 
-NAIL:= ./scripts/run-nail.sh
-HMMER:= ./scripts/run-hmmer.sh
-MMSEQS:= ./scripts/run-mmseqs.sh
-BLAST:= ./scripts/run-blast.sh
-LAST:= ./scripts/run-last.sh
+PROFMARK := $(TOOLS)/bin/create-profmark
+HMMBUILD := $(TOOLS)/bin/hmmbuild
+SPLIT    := $(RUST_BIN)/split-decoys
+PLOT     := $(RUST_BIN)/plot-pid
 
-PM_DIR := profmark
-PM_NAME := $(PM_DIR)/benchmark
+NAIL   := $(SCRIPTS)/run-nail.sh
+HMMER  := $(SCRIPTS)/run-hmmer.sh
+MMSEQS := $(SCRIPTS)/run-mmseqs.sh
+BLAST  := $(SCRIPTS)/run-blast.sh
+LAST   := $(SCRIPTS)/run-last.sh
 
-SRC_MSA := $(realpath ../data/pfam.sto)
-SRC_FA := $(realpath ../data/swissprot.fa)
+PM_DIR     := $(MAKEFILE_DIR)/profmark
+PM_NAME    := $(PM_DIR)/benchmark
+SRC_STO    ?= $(DATA)/pfam.sto
+SRC_FA     := $(DATA)/swissprot.fa
 SRC_FA_IDX := $(SRC_FA).ssi
 
+# profmark args
+SEED          ?= 67779
+N_DECOYS      ?= 5000000
+TRAIN_TEST_ID ?= 0.5
+MIN_TEST      ?= 10
+MAX_TEST      ?= 30
+
+# profmark files
 TRAIN_MSA := $(PM_NAME).train.msa
-TEST_FA := $(PM_NAME).test.fa
-
-POS_FA := $(PM_DIR)/positives.fa
-DEC_FA := $(PM_DIR)/decoys.fa
-SRC_STO := $(PM_DIR)/source.sto
+TEST_FA   := $(PM_NAME).test.fa
+POS_FA    := $(PM_DIR)/positives.fa
+DEC_FA    := $(PM_DIR)/decoys.fa
 QUERY_STO := $(PM_DIR)/query.sto
-QUERY_HMM := $(PM_DIR)/query.hmm
-QUERY_CONS := $(PM_DIR)/query.cons.fa
 
-PM_OUT := $(POS_FA) $(DEC_FA) $(QUERY_STO) $(QUERY_HMM) $(QUERY_CONS)
+PM_OUT    := $(POS_FA) $(DEC_FA) $(QUERY_STO)
 PM_REMOVE := $(TEST_FA) $(PM_NAME).neg $(PM_NAME).pos $(PM_NAME).tbl
 
-SEED := 67779
-N_DECOYS := 5000000
-TRAIN_TEST_ID := 0.5
-MIN_TEST := 10
-MAX_TEST := 30
+PID         := $(RUST_BIN)/pid
+PID_SRC     := $(RUST)/pid/src
+PID_ARGS    := $(POS_FA) $(DEC_FA) $(QUERY_STO) $(SRC_STO)
+DECOY_RATIO ?= 100
 
-BUILD_BIN := ./scripts/pid
-BUILD_ARGS := $(POS_FA) $(DEC_FA) $(QUERY_STO) $(SRC_STO)
-DECOY_RATIO := 100
+CHECK_PATHS := $(MAKEFILE_DIR) $(TOOLS) $(DATA) $(SRC_FA)	
 
-.PHONY: 100 1000 benchmark run
+.PHONY: $(CHECK_PATHS)
+$(CHECK_PATHS):
+	@if [ ! -e "$@" ]; then \
+		echo "Error: \"$@\" does not exist"; \
+		exit 1; \
+	fi
 
-$(SRC_FA_IDX): 
+check: $(CHECK_PATHS)
+
+$(SRC_FA_IDX):
 	@echo indexing \"$(SRC_FA)\"...
 	@esl-sfetch --index $(SRC_FA) >/dev/null
 
 $(PM_OUT): $(SRC_FA_IDX)
 	@echo running profmark...
 	@mkdir -p $(PM_DIR)
-	@time $(PM_BIN) \
+	@$(PROFMARK) \
 		-S $(SEED) \
 		-N $(N_DECOYS) \
 		-1 $(TRAIN_TEST_ID) \
 		--cluster \
 		--mintest $(MIN_TEST) \
 		--maxtest $(MAX_TEST) \
-		$(PM_NAME) $(SRC_MSA) $(SRC_FA)
+		$(PM_NAME) $(SRC_STO) $(SRC_FA)
 	
-	@$(SPLIT_BIN) $(TEST_FA)
+	@$(SPLIT) $(TEST_FA)
 	@mv $(TRAIN_MSA) $(QUERY_STO)
-	@hmmbuild --cpu 8 $(QUERY_HMM) $(QUERY_STO) > /dev/null
-	@hmmemit -c $(QUERY_HMM) > $(QUERY_CONS)
-	@ln -sf $(SRC_MSA) $(SRC_STO)
 	@rm $(PM_REMOVE)
 		
 profmark: $(PM_OUT)
 
-10: profmark
-	@mkdir -p b10
-	@ln -sf ../$(QUERY_STO)  b10/query.sto
-	@ln -sf ../$(QUERY_HMM)  b10/query.hmm
-	@ln -sf ../$(QUERY_CONS) b10/query.cons.fa
-	@time $(BUILD_BIN) b10/ $(BUILD_ARGS) 10 $(DECOY_RATIO)
+$(PID): $(PID_SRC)/main.rs
+	@cd $(PID_SRC) && cargo build --release
 
-100: profmark
-	@mkdir -p b100
-	@ln -sf ../$(QUERY_STO)  b100/query.sto
-	@ln -sf ../$(QUERY_HMM)  b100/query.hmm
-	@ln -sf ../$(QUERY_CONS) b100/query.cons.fa
-	@time $(BUILD_BIN) b100/ $(BUILD_ARGS) 100 $(DECOY_RATIO)
-
-benchmark: profmark
-	@mkdir -p benchmark
-	@ln -sf ../$(QUERY_STO)  benchmark/query.sto
-	@ln -sf ../$(QUERY_HMM)  benchmark/query.hmm
-	@ln -sf ../$(QUERY_CONS) benchmark/query.cons.fa
-	@time $(BUILD_BIN) benchmark/ $(BUILD_ARGS) 1000 $(DECOY_RATIO)
+b%: profmark $(PID)
+	@mkdir -p b-$*
+	@$(PID) b-$* $(PID_ARGS) $* $(DECOY_RATIO)
+	@$(HMMBUILD) b-$*/query.hmm b-$*/query.sto > /dev/null
 
 run-%:
 	@echo "benchmarking $*/ with $(THREADS) threads..."
@@ -94,7 +94,8 @@ run-%:
 	@$(MMSEQS) $* $(THREADS)
 	@$(HMMER) $* $(THREADS)
 
+plot-%:
+	$(PLOT) $*
+
 clean:
-	@rm -rf tmp-nail/ tmp-mmseqs/ b10/results/ b100/results benchmark/results/
-
-
+	@rm -rf tmp-nail/ tmp-mmseqs/ b-*/results/ benchmark/results/

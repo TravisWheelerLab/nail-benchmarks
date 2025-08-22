@@ -1,14 +1,19 @@
 use std::{
-    io::{BufRead, BufReader, Read},
+    fmt::Display,
+    io::{BufRead, BufReader, BufWriter, Read, Write},
     path::Path,
 };
 
 use anyhow::{anyhow, Context};
 use indexmap::IndexMap;
 
+pub const HEADER: &str = "# STOCKHOLM 1.0";
+
 #[derive(Default)]
 pub struct StockholmRecord {
     pub id: String,
+    pub gf_meta: Vec<String>,
+    pub gs_meta: Vec<String>,
     pub sequences: IndexMap<String, String>,
 }
 
@@ -18,6 +23,12 @@ impl StockholmRecord {
         for line in lines {
             if line.is_empty() {
                 continue;
+            }
+
+            if line.starts_with("#=GF") {
+                rec.gf_meta.push(line.clone());
+            } else if line.starts_with("#=GS") {
+                rec.gs_meta.push(line.clone());
             }
 
             if line.starts_with("#=GF ID") {
@@ -45,6 +56,20 @@ impl StockholmRecord {
             }
         }
         Ok(rec)
+    }
+}
+
+impl Display for StockholmRecord {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        writeln!(f, "{HEADER}")?;
+        self.gf_meta.iter().try_for_each(|s| writeln!(f, "{s}"))?;
+        writeln!(f)?;
+        self.gs_meta.iter().try_for_each(|s| writeln!(f, "{s}"))?;
+        writeln!(f)?;
+        self.sequences
+            .iter()
+            .try_for_each(|(n, s)| writeln!(f, "{n} {s}"))?;
+        writeln!(f, "//")
     }
 }
 
@@ -86,5 +111,13 @@ impl Stockholm {
         }
 
         Ok(sto)
+    }
+
+    pub fn write<W: Write>(&self, buf: W) -> anyhow::Result<()> {
+        let mut out = BufWriter::new(buf);
+        self.records
+            .values()
+            .try_for_each(|r| writeln!(out, "{r}"))
+            .context("Stockholm::write() failed")
     }
 }

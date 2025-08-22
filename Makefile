@@ -105,6 +105,7 @@ PHMMER      := $(TOOL_BIN)/phmmer
 HMMSEARCH   := $(TOOL_BIN)/hmmsearch
 ESL_SEQSTAT := $(TOOL_BIN)/esl-seqstat
 PROFMARK    := $(TOOL_BIN)/create-profmark
+HMMBUILD    := $(TOOL_BIN)/hmmbuild
 MMSEQS      := $(TOOL_BIN)/mmseqs
 # BLAST       := $(TOOL_BIN)/blastp
 # LAST        := $(TOOL_BIN)/lastal
@@ -133,6 +134,7 @@ hmmer: $(TOOL_BIN)
 	@ln -sf $(HMMER_BIN_DIR)/hmmsearch $(HMMSEARCH)
 	@ln -sf $(HMMER_BIN_DIR)/phmmer $(PHMMER)
 	@ln -sf $(HMMER_BIN_DIR)/esl-seqstat $(ESL_SEQSTAT)
+	@ln -sf $(HMMER_BIN_DIR)/hmmbuild $(HMMBUILD)
 	@ln -sf $(HMMER_SRC_DIR)/profmark/create-profmark $(PROFMARK)
 	@rm $(HMMER_SRC_TGZ)
 

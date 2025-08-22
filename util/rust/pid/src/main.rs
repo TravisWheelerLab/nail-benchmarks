@@ -1,13 +1,19 @@
+use std::collections::HashSet;
 use std::fmt::Display;
 use std::fs::File;
 use std::io::{BufWriter, Write};
 use std::{collections::HashMap, env, path::Path};
 
+use anyhow::{bail, Context};
 use bioio::fasta::FastaRecord;
 use bioio::{fasta::Fasta, stockholm::Stockholm};
 
 use rand::rng;
 use rand::seq::index::sample;
+
+// TODO:
+// - benchmark info tbl
+//  - bin info
 
 const N_BINS: usize = 41;
 const BIN_START: usize = 10;
@@ -109,12 +115,15 @@ fn main() -> anyhow::Result<()> {
     };
 
     let bm_dir = Path::new(&args[1]);
-    let positive_fa = Fasta::from_path(&args[2])?;
-    let decoy_fa = Fasta::from_path(&args[3])?;
-    let query_sto = Stockholm::from_path(&args[4])?;
-    let src_sto = Stockholm::from_path(&args[5])?;
-    let n_sample: usize = args[6].parse()?;
-    let decoy_ratio: usize = args[7].parse()?;
+    if !bm_dir.is_dir() {
+        bail!("bm_dir: {bm_dir:?} is not a directory");
+    }
+    let positive_fa = Fasta::from_path(&args[2]).context("failed to parse positive fa")?;
+    let decoy_fa = Fasta::from_path(&args[3]).context("failed to parse deocy fa")?;
+    let query_sto = Stockholm::from_path(&args[4]).context("failed to parse query sto")?;
+    let src_sto = Stockholm::from_path(&args[5]).context("failed to parse source sto")?;
+    let n_sample: usize = args[6].parse().context("failed to parse n_sample")?;
+    let decoy_ratio: usize = args[7].parse().context("failed to parse decoy ratio")?;
 
     let mut targets_by_fam: HashMap<String, Vec<Target>> = HashMap::new();
 
@@ -139,7 +148,7 @@ fn main() -> anyhow::Result<()> {
             .push(Target { name, domain });
     });
 
-    let mut bins: Vec<Vec<Pair>> = vec![vec![]; 51];
+    let mut pairs_by_bin: Vec<Vec<Pair>> = vec![vec![]; BIN_START + N_BINS];
 
     targets_by_fam.iter().for_each(|(fam, targets)| {
         let query_msa = query_sto.records.get(fam).unwrap();
@@ -179,7 +188,7 @@ fn main() -> anyhow::Result<()> {
                 panic!("unexpected high %ID: {best_pid}");
             }
 
-            bins[bin].push(Pair {
+            pairs_by_bin[bin].push(Pair {
                 family: fam.clone(),
                 query: best_q_name,
                 target: target.name.to_string(),
@@ -187,75 +196,142 @@ fn main() -> anyhow::Result<()> {
         }
     });
 
-    let mut target_writer = BufWriter::new(File::create(bm_dir.join("target.fa"))?);
+    let fams_by_bin: Vec<Vec<&str>> = pairs_by_bin
+        .iter()
+        .map(|bin_pairs| {
+            bin_pairs
+                .iter()
+                .map(|p| p.family.as_str())
+                // collect to has to remove dupes
+                .collect::<HashSet<_>>()
+                .into_iter()
+                .collect()
+        })
+        .collect();
+
+    let fams_included: Vec<&str> = fams_by_bin
+        .iter()
+        .flatten()
+        .copied()
+        .collect::<HashSet<&str>>()
+        .into_iter()
+        .collect();
+
+    let mut target_writer = BufWriter::new(
+        File::create(bm_dir.join("target.fa")).context("failed to open target.fa for output")?,
+    );
+    let mut tbl_writer = BufWriter::new(
+        File::create(bm_dir.join("benchmark.tbl"))
+            .context("failed to open benchmark.tbl for output")?,
+    );
+    writeln!(tbl_writer, "#%ID family query target")?;
+
     let mut queries: HashMap<String, FastaRecord> = HashMap::new();
     let mut rng = rng();
 
-    let min_bin_size = bins.iter().skip(BIN_START).map(|b| b.len()).min().unwrap();
+    let min_bin_size = pairs_by_bin
+        .iter()
+        .skip(BIN_START)
+        .map(|b| b.len())
+        .min()
+        .unwrap();
+
     let n_sample = n_sample.min(min_bin_size).max(MIN_SAMPLE);
     println!("sampling {n_sample} from each bin...");
 
-    (10..=50).try_for_each(|bin| {
-        let length = bins[bin].len();
+    (BIN_START..BIN_START + N_BINS)
+        .try_for_each(|bin| {
+            let length = pairs_by_bin[bin].len();
 
-        let sample = if length >= n_sample {
-            let mut sample = sample(&mut rng, bins[bin].len(), n_sample).into_vec();
-            sample.sort();
-            sample
-        } else {
-            let l = bins[bin].len();
-            println!("warning: bin {bin}% has {l:>3}/{n_sample} samples");
-            (0..l).collect()
-        };
-
-        let pairs: Vec<&Pair> = sample.into_iter().map(|i| &bins[bin][i]).collect();
-
-        pairs.iter().try_for_each(|p| {
-            let query = FastaRecord {
-                name: format!("{}|{}", p.family, p.query),
-                extra: "".to_string(),
-                sequence: query_sto
-                    .records
-                    .get(&p.family)
-                    .expect("")
-                    .sequences
-                    .get(&p.query)
-                    .unwrap()
-                    .replace(['-', '.'], ""),
-            };
-            match queries.get(&query.name) {
-                Some(r) => {
-                    assert!(*r == query);
-                }
-                None => {
-                    queries.insert(query.name.clone(), query);
-                }
+            let sample_indices = if length >= n_sample {
+                let mut sample = sample(&mut rng, pairs_by_bin[bin].len(), n_sample).into_vec();
+                sample.sort();
+                sample
+            } else {
+                let l = pairs_by_bin[bin].len();
+                println!("warning: bin {bin}% has {l:>3}/{n_sample} samples");
+                (0..l).collect()
             };
 
-            let mut target = positive_fa.records.get(&p.target).unwrap().clone();
-            let domain_coords = target.name.split('/').nth(2).unwrap();
-            target.name = format!("{}:{}|{}%|{}", p.family, domain_coords, bin, p.query);
+            let pair_samples: Vec<&Pair> = sample_indices
+                .into_iter()
+                .map(|i| &pairs_by_bin[bin][i])
+                .collect();
 
-            writeln!(target_writer, "{target}")
+            pair_samples
+                .iter()
+                .enumerate()
+                .try_for_each(|(pair_idx, p)| {
+                    let query = FastaRecord {
+                        name: format!("{}|{}", p.family, p.query),
+                        extra: "".to_string(),
+                        sequence: query_sto
+                            .records
+                            .get(&p.family)
+                            .expect("")
+                            .sequences
+                            .get(&p.query)
+                            .unwrap()
+                            .replace(['-', '.'], ""),
+                    };
+                    match queries.get(&query.name) {
+                        Some(r) => {
+                            assert!(*r == query);
+                        }
+                        None => {
+                            queries.insert(query.name.clone(), query);
+                        }
+                    };
+
+                    let mut target = positive_fa.records.get(&p.target).unwrap().clone();
+                    let domain_coords = target.name.split('/').nth(2).unwrap();
+                    let domain = target.extra.split_whitespace().nth(1).unwrap();
+                    target.name = format!("{}|{}|{}%:{}", p.family, domain_coords, bin, pair_idx);
+
+                    writeln!(target_writer, "{target}").context("failed to write to target.fa")?;
+                    writeln!(tbl_writer, "{bin}% {} {} {}", p.family, p.query, domain)
+                        .context("failed to write to benchmark.tbl")
+                })
         })
-    })?;
+        .context("bin sampling failed")?;
 
-    let n_decoys = n_sample * N_BINS * decoy_ratio;
-    println!("taking {n_decoys} decoys...");
-    decoy_fa
-        .records
-        .values()
-        .take(n_decoys)
-        .try_for_each(|r| writeln!(target_writer, "{r}"))?;
+    if decoy_fa.records.is_empty() {
+        println!("no decoys available");
+    } else {
+        let n_decoys = n_sample * N_BINS * decoy_ratio;
+        println!("taking {n_decoys} decoys...");
+        decoy_fa
+            .records
+            .values()
+            .take(n_decoys)
+            .try_for_each(|r| writeln!(target_writer, "{r}"))?;
+    }
 
-    let mut query_writer = BufWriter::new(File::create(bm_dir.join("query.fa"))?);
+    let mut query_fa_writer = BufWriter::new(
+        File::create(bm_dir.join("query.fa")).context("failed to open query.fa for output")?,
+    );
 
     let mut queries: Vec<FastaRecord> = queries.into_values().collect();
     queries.sort_by(|a, b| a.name.cmp(&b.name));
 
-    queries
+    queries.iter().try_for_each(|q| {
+        writeln!(query_fa_writer, "{q}").context("failed to write to query.fa")
+    })?;
+
+    let mut query_sto_writer = BufWriter::new(
+        File::create(bm_dir.join("query.sto")).context("failed to open query.sto for output")?,
+    );
+
+    let query_names = queries
         .iter()
-        .try_for_each(|q| writeln!(query_writer, "{q}"))?;
+        .map(|q| q.name.split('|').next().unwrap())
+        .collect::<Vec<_>>();
+
+    query_sto
+        .records
+        .iter()
+        .filter(|(fam, _)| query_names.contains(&fam.as_str()))
+        .try_for_each(|(_, r)| writeln!(query_sto_writer, "{r}"))?;
 
     Ok(())
 }

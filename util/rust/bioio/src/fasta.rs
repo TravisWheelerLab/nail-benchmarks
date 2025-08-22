@@ -4,7 +4,7 @@ use std::{
     path::Path,
 };
 
-use anyhow::Context;
+use anyhow::{anyhow, Context};
 use indexmap::IndexMap;
 
 #[derive(Default, Clone, PartialEq)]
@@ -51,14 +51,17 @@ impl Fasta {
                 }
                 rec = FastaRecord::default();
 
-                let tokens = line.splitn(2, char::is_whitespace).collect::<Vec<_>>();
-                rec.name = tokens[0].to_string();
-                rec.extra = tokens[1].to_string();
+                let mut tokens = line.splitn(2, char::is_whitespace);
+                rec.name = tokens.next().ok_or(anyhow!("no name"))?.to_string();
+                rec.extra = tokens.next().unwrap_or_default().to_string();
             } else {
                 rec.sequence.push_str(&line)
             }
         }
-        fasta.records.insert(rec.name.to_string(), rec);
+
+        if rec != FastaRecord::default() {
+            fasta.records.insert(rec.name.to_string(), rec);
+        }
 
         Ok(fasta)
     }
