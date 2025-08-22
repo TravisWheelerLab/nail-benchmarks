@@ -121,7 +121,7 @@ nail: $(TOOL_BIN)
 HMMER_SRC_URL := http://eddylab.org/software/hmmer/hmmer-3.4.tar.gz
 HMMER_SRC_TGZ := $(TOOL_DIR)/hmmer.tgz
 HMMER_SRC_DIR := $(TOOL_DIR)/hmmer
-HMMER_BIN_DIR := $(HMMER_SRC)/bin/
+HMMER_BIN_DIR := $(HMMER_SRC_DIR)/bin/
 hmmer: $(TOOL_BIN)
 	@wget -O $(HMMER_SRC_TGZ) $(HMMER_SRC_URL)
 	@mkdir -p $(HMMER_SRC_DIR)
