@@ -15,8 +15,9 @@ DATA     := $(realpath $(MAKEFILE_DIR)../data)
 SCRIPTS  := $(MAKEFILE_DIR)/scripts
 
 # hmmer util
-PROFMARK := $(TOOLS)/bin/create-profmark
-HMMBUILD := $(TOOLS)/bin/hmmbuild
+PROFMARK   := $(TOOLS)/bin/create-profmark
+HMMBUILD   := $(TOOLS)/bin/hmmbuild
+HMMBALANCE := $(UTIL)/scripts/hmmbalance
 
 # rust util
 RUST     := $(UTIL)/rust

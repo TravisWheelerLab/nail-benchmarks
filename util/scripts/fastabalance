@@ -9,14 +9,19 @@ class Index:
         self.ranges = []
         start = 0
         length = 0
+
         with open(path) as f:
             for (i, line) in enumerate(f):
-                if "//" in line:
-                    self.ranges.append((start, i, length))
-                    start = i + 1
-                elif "LENG" in line:
-                    length = int(line.split()[1])
+                if i == 0:
+                    continue
 
+                if line.startswith(">"):
+                    self.ranges.append((start, i - 1, length))
+                    start = i
+                else:
+                    length += len(line)
+
+        self.ranges.append((start, i, length))
         self.ranges.sort(key=lambda x: x[2])
 
     def len(self):
@@ -30,33 +35,33 @@ class Index:
         return splits
 
 
-def write(hmm_path, out_dir, splits):
+def write(fa_path, out_dir, splits):
     os.makedirs(out_dir, exist_ok=True)
-    _, ext = os.path.splitext(hmm_path)
+    _, ext = os.path.splitext(fa_path)
 
-    hmm_lines = [line for line in open(hmm_path)]
+    fa_lines = [line for line in open(fa_path)]
 
     for (spl_idx, spl) in enumerate(splits):
         with open(f"{out_dir}/{spl_idx}{ext}", "w") as f:
             for (start, end, _) in spl:
-                for line in hmm_lines[start:end + 1]:
+                for line in fa_lines[start:end + 1]:
                     f.write(line)
 
 
 if __name__ == "__main__":
     if len(sys.argv) < 3:
-        print("usage: hmmbalance <file> <num_splits> [out_dir]")
+        print("usage: fastabalance <file> <num_splits> [out_dir]")
         sys.exit(1)
 
-    hmm_path = sys.argv[1]
+    fa_path = sys.argv[1]
     n = int(sys.argv[2])
-    index = Index(hmm_path)
+    index = Index(fa_path)
     splits = index.split(n)
 
     if len(sys.argv) > 3:
         out_dir = sys.argv[3]
     else:
-        name, _ = os.path.splitext(hmm_path)
+        name, _ = os.path.splitext(fa_path)
         out_dir = f"{name}-splits"
 
-    write(hmm_path, out_dir, splits)
+    write(fa_path, out_dir, splits)

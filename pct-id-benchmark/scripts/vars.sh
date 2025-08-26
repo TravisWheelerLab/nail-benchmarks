@@ -9,16 +9,21 @@ set_vars() {
     else
         export THREADS=8
     fi
-
+    
+    if (( THREADS % 4 != 0 )); then
+        echo "threads: $THREADS"
+        echo "threads must be a multiple of 4 (just trust me)"
+        exit
+    fi
+    
     export DIR=$1
+    export BENCH_TBL=$DIR/benchmark.tbl
     export QUERY_HMM=$DIR/query.hmm
     export QUERY_MSA=$DIR/query.sto
     export QUERY_FA=$DIR/query.fa
     export QUERY_CONS_FA=$DIR/query.cons.fa
     export TARGET=$DIR/target.fa
-
     export VAR E=1e9
-
     export RESULTS=$DIR/results/
     mkdir -p $RESULTS
 }

@@ -10,7 +10,11 @@ use bioio::tools::{hmmer, mmseqs, nail, Hit};
 
 use anyhow::{anyhow, bail};
 
-use plotly::{common::Mode, ImageFormat, Layout, Plot, Scatter};
+use plotly::{
+    common::{DashType, Font, Line, Marker, MarkerSymbol, Mode, Title},
+    layout::{Axis, AxisRange, TicksDirection},
+    ImageFormat, Layout, Plot, Scatter,
+};
 
 const N_BINS: usize = 41;
 const BIN_START: usize = 10;
@@ -36,52 +40,6 @@ const COLORS: [&str; 8] = [
     TOL_MAGENTA,
     TOL_OLIVE,
 ];
-
-fn template() -> plotly::layout::Template {
-    use plotly::{
-        common::{ColorBar, Font, Title},
-        layout::{Axis, AxisRange, ColorAxis, LayoutTemplate, Template, TicksDirection},
-    };
-    let layout_template = LayoutTemplate::new()
-        .color_axis(ColorAxis::new().color_bar(ColorBar::new().outline_width(0)))
-        .colorway(COLORS.to_vec())
-        .font(Font::new().color("#2a3f5f"))
-        .paper_background_color("#FFFFFF")
-        .plot_background_color("#FFFFFF")
-        .title(Title::new().x(0.05))
-        .x_axis(
-            Axis::new()
-                .auto_margin(true)
-                .show_line(true)
-                .line_color("black")
-                .line_width(2)
-                .ticks(TicksDirection::Outside)
-                .tick_width(2)
-                .tick_color("black")
-                .mirror(true)
-                .grid_color("#e5e5e5")
-                .zero_line_color("#e5e5e5")
-                .zero_line_width(1)
-                .tick_suffix("%")
-                .range(AxisRange::new(50, 0)),
-        )
-        .y_axis(
-            Axis::new()
-                .auto_margin(true)
-                .show_line(true)
-                .line_color("black")
-                .line_width(2)
-                .ticks(TicksDirection::Outside)
-                .tick_width(2)
-                .tick_color("black")
-                .mirror(true)
-                .grid_color("#e5e5e5")
-                .zero_line_color("#e5e5e5")
-                .zero_line_width(1)
-                .range(AxisRange::new(0, 1.0)),
-        );
-    Template::new().layout(layout_template)
-}
 
 struct TargetInfo<'a> {
     family: &'a str,
@@ -199,7 +157,47 @@ fn main() -> anyhow::Result<()> {
 
     let mut plot = Plot::new();
 
-    let layout = Layout::new().template(template());
+    let ticks: Vec<usize> = (0..=10).map(|i| (i * 5)).collect();
+    let layout = Layout::new()
+        .colorway(COLORS.to_vec())
+        .font(Font::new().color("#2a3f5f"))
+        .paper_background_color("#FFFFFF")
+        .plot_background_color("#FFFFFF")
+        .title(Title::new().x(0.05))
+        .x_axis(
+            Axis::new()
+                .range(AxisRange::new(50, 0))
+                .auto_margin(true)
+                .show_line(true)
+                .line_color("black")
+                .line_width(2)
+                .ticks(TicksDirection::Outside)
+                .tick_width(2)
+                .tick_length(5)
+                .tick_color("black")
+                .tick_values(ticks.iter().map(|t| *t as f64).collect())
+                .tick_text(ticks.iter().map(|t| format!("{t}%")).collect())
+                .mirror(true)
+                .show_grid(false)
+                .zero_line_color("#e5e5e5")
+                .zero_line_width(1),
+        )
+        .y_axis(
+            Axis::new()
+                .range(AxisRange::new(0, 1.0))
+                .auto_margin(true)
+                .show_line(true)
+                .line_color("black")
+                .line_width(2)
+                .ticks(TicksDirection::Outside)
+                .tick_width(2)
+                .tick_color("black")
+                .mirror(true)
+                .show_grid(false)
+                .zero_line_color("#e5e5e5")
+                .zero_line_width(1),
+        );
+
     plot.set_layout(layout);
 
     for (name, hit_list) in hits.into_iter() {
@@ -220,6 +218,7 @@ fn main() -> anyhow::Result<()> {
                     h,
                 )
             })
+            // include only same-family hits & decoys
             .filter(|(q_fam, t_fam, _)| q_fam == t_fam || t_fam.starts_with("decoy"))
             .for_each(|(q_fam, _, hit)| {
                 let key = (q_fam, hit.target.to_string());
@@ -246,7 +245,7 @@ fn main() -> anyhow::Result<()> {
 
         let mut decoys_found = 0;
         for hit in hit_list.iter() {
-            match hit.target.contains("decoy") {
+            match hit.target.starts_with("decoy") {
                 true => {
                     decoys_found += 1;
                     if decoys_found >= decoy_cnt {
@@ -279,10 +278,15 @@ fn main() -> anyhow::Result<()> {
             .skip(BIN_START)
             .unzip();
 
-        plot.add_trace(Scatter::new(x, y).name(name).mode(Mode::Lines));
+        plot.add_trace(
+            Scatter::new(x, y)
+                .name(&name)
+                .mode(Mode::LinesMarkers)
+                .line(Line::new().width(3.0)),
+        );
     }
 
-    plot.write_image("plot", ImageFormat::SVG, 960, 720, 1.0)
+    plot.write_image("plot", ImageFormat::PNG, 960, 720, 1.0)
         .expect("Failed to export plot");
 
     Ok(())

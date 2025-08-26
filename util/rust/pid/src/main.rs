@@ -1,4 +1,3 @@
-use std::collections::HashSet;
 use std::fmt::Display;
 use std::fs::File;
 use std::io::{BufWriter, Write};
@@ -125,9 +124,29 @@ fn main() -> anyhow::Result<()> {
     let n_sample: usize = args[6].parse().context("failed to parse n_sample")?;
     let decoy_ratio: usize = args[7].parse().context("failed to parse decoy ratio")?;
 
+    let positive_fa: HashMap<String, FastaRecord> = positive_fa
+        .records
+        .into_iter()
+        .filter(|(name, _)| {
+            let mut range = name.split('/').next_back().expect("no range").split('-');
+            let s: usize = range
+                .next()
+                .expect("no start")
+                .parse()
+                .expect("failed to parse start");
+            let e: usize = range
+                .next()
+                .expect("no end")
+                .parse()
+                .expect("failed to parse end");
+
+            e - s >= 300
+        })
+        .collect();
+
     let mut targets_by_fam: HashMap<String, Vec<Target>> = HashMap::new();
 
-    positive_fa.records.iter().for_each(|(name, rec)| {
+    positive_fa.iter().for_each(|(name, rec)| {
         let name = name.clone();
         let fam = name
             .split('/')
@@ -196,27 +215,6 @@ fn main() -> anyhow::Result<()> {
         }
     });
 
-    let fams_by_bin: Vec<Vec<&str>> = pairs_by_bin
-        .iter()
-        .map(|bin_pairs| {
-            bin_pairs
-                .iter()
-                .map(|p| p.family.as_str())
-                // collect to has to remove dupes
-                .collect::<HashSet<_>>()
-                .into_iter()
-                .collect()
-        })
-        .collect();
-
-    let fams_included: Vec<&str> = fams_by_bin
-        .iter()
-        .flatten()
-        .copied()
-        .collect::<HashSet<&str>>()
-        .into_iter()
-        .collect();
-
     let mut target_writer = BufWriter::new(
         File::create(bm_dir.join("target.fa")).context("failed to open target.fa for output")?,
     );
@@ -224,19 +222,19 @@ fn main() -> anyhow::Result<()> {
         File::create(bm_dir.join("benchmark.tbl"))
             .context("failed to open benchmark.tbl for output")?,
     );
-    writeln!(tbl_writer, "#%ID family query target")?;
+    writeln!(tbl_writer, "#target domain query")?;
 
     let mut queries: HashMap<String, FastaRecord> = HashMap::new();
     let mut rng = rng();
 
-    let min_bin_size = pairs_by_bin
-        .iter()
-        .skip(BIN_START)
-        .map(|b| b.len())
-        .min()
-        .unwrap();
+    // let min_bin_size = pairs_by_bin
+    //     .iter()
+    //     .skip(BIN_START)
+    //     .map(|b| b.len())
+    //     .min()
+    //     .unwrap();
 
-    let n_sample = n_sample.min(min_bin_size).max(MIN_SAMPLE);
+    // let n_sample = n_sample.min(min_bin_size).max(MIN_SAMPLE);
     println!("sampling {n_sample} from each bin...");
 
     (BIN_START..BIN_START + N_BINS)
@@ -283,13 +281,13 @@ fn main() -> anyhow::Result<()> {
                         }
                     };
 
-                    let mut target = positive_fa.records.get(&p.target).unwrap().clone();
+                    let mut target = positive_fa.get(&p.target).unwrap().clone();
                     let domain_coords = target.name.split('/').nth(2).unwrap();
                     let domain = target.extra.split_whitespace().nth(1).unwrap();
                     target.name = format!("{}|{}|{}%:{}", p.family, domain_coords, bin, pair_idx);
 
                     writeln!(target_writer, "{target}").context("failed to write to target.fa")?;
-                    writeln!(tbl_writer, "{bin}% {} {} {}", p.family, p.query, domain)
+                    writeln!(tbl_writer, "{} {} {}", target.name, domain, p.query)
                         .context("failed to write to benchmark.tbl")
                 })
         })
