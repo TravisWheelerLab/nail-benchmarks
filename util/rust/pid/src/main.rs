@@ -10,13 +10,11 @@ use bioio::{fasta::Fasta, stockholm::Stockholm};
 use rand::rng;
 use rand::seq::index::sample;
 
-// TODO:
-// - benchmark info tbl
-//  - bin info
-
 const N_BINS: usize = 41;
 const BIN_START: usize = 10;
-const MIN_SAMPLE: usize = 10;
+const BIN_MAX: usize = N_BINS + BIN_START - 1;
+
+const MIN_LENGTH: usize = 200;
 
 #[derive(Clone)]
 struct Pair {
@@ -140,7 +138,7 @@ fn main() -> anyhow::Result<()> {
                 .parse()
                 .expect("failed to parse end");
 
-            e - s >= 300
+            e - s >= MIN_LENGTH
         })
         .collect();
 
@@ -167,7 +165,7 @@ fn main() -> anyhow::Result<()> {
             .push(Target { name, domain });
     });
 
-    let mut pairs_by_bin: Vec<Vec<Pair>> = vec![vec![]; BIN_START + N_BINS];
+    let mut pairs_by_bin: Vec<Vec<Pair>> = vec![vec![]; BIN_MAX + 1];
 
     targets_by_fam.iter().for_each(|(fam, targets)| {
         let query_msa = query_sto.records.get(fam).unwrap();
@@ -189,7 +187,18 @@ fn main() -> anyhow::Result<()> {
             .map(|n| src_msa.sequences.get(n).unwrap())
             .collect();
 
-        for (t_seq, target) in src_target_seqs.iter().zip(targets.iter()) {
+        for (t_seq, target) in src_target_seqs
+            .iter()
+            .filter(|s| {
+                s.as_bytes()
+                    .iter()
+                    .map(|b| *b as usize)
+                    .filter(|b| AMINO[*b])
+                    .sum::<usize>()
+                    >= MIN_LENGTH
+            })
+            .zip(targets.iter())
+        {
             let mut best_pid = 0.0;
             let mut best_q_name = "".to_string();
 
