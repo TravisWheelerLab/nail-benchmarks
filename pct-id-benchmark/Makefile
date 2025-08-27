@@ -114,4 +114,4 @@ plot-%: $(PLOT)
 	$(PLOT) $*
 
 clean:
-	@rm -rf tmp-nail/ tmp-mmseqs/ b-*/results/ benchmark/results/
+	@rm -rf tmp-*/ b-*/results/ benchmark/results/

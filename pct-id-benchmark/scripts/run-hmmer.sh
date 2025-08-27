@@ -19,9 +19,9 @@ TBL_1=$RESULTS/hmmer.seq.tbl
 DOM_1=$RESULTS/hmmer.seq.domtbl
 TIME_1=$RESULTS/hmmer.seq.time
 
-TBL_2=$RESULTS/hmmer.hmm.tbl
-DOM_2=$RESULTS/hmmer.hmm.domtbl
-TIME_2=$RESULTS/hmmer.hmm.time
+TBL_2=$RESULTS/hmmer.prf.tbl
+DOM_2=$RESULTS/hmmer.prf.domtbl
+TIME_2=$RESULTS/hmmer.prf.time
 
 S_ARGS="--cpu $SPLIT_THREADS -E $E -o /dev/null"
 

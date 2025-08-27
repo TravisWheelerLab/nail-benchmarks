@@ -107,7 +107,8 @@ ESL_SEQSTAT := $(TOOL_BIN)/esl-seqstat
 PROFMARK    := $(TOOL_BIN)/create-profmark
 HMMBUILD    := $(TOOL_BIN)/hmmbuild
 MMSEQS      := $(TOOL_BIN)/mmseqs
-# BLAST       := $(TOOL_BIN)/blastp
+BLASTP      := $(TOOL_BIN)/blastp
+MAKEBLASTDB := $(TOOL_BIN)/makeblastdb
 # LAST        := $(TOOL_BIN)/lastal
 
 .PHONY: nail hmmer mmseqs blast last
@@ -139,24 +140,25 @@ hmmer: $(TOOL_BIN)
 	@rm $(HMMER_SRC_TGZ)
 
 MMSEQS_BIN_TGZ := $(TOOL_DIR)/mmseqs.tgz
-MMSEQS_BIN_DIR := $(TOOL_DIR)/mmseqs
-MMSEQS_BIN     := $(MMSEQS_BIN_DIR)/bin/mmseqs
+MMSEQS_DIR     := $(TOOL_DIR)/mmseqs
+MMSEQS_BIN     := $(MMSEQS_DIR)/bin/mmseqs
 mmseqs: $(TOOL_BIN)
 	@wget -O $(MMSEQS_BIN_TGZ) $(MMSEQS_BIN_URL)
-	@mkdir -p $(MMSEQS_BIN_DIR)
-	@tar --strip-components=1 -xzf $(MMSEQS_BIN_TGZ) -C $(MMSEQS_BIN_DIR)
+	@mkdir -p $(MMSEQS_DIR)
+	@tar --strip-components=1 -xzf $(MMSEQS_BIN_TGZ) -C $(MMSEQS_DIR)
 	@rm $(MMSEQS_BIN_TGZ)
 	@ln -sf $(MMSEQS_BIN) $(MMSEQS)
 
-# BLAST_BIN_TGZ := $(TOOL_DIR)/blast.tgz
-# BLAST_BIN_DIR := $(TOOL_DIR)/blast
-# BLAST_BIN_DIR := $(BLAST_BIN_DIR)/bin
-# blast: $(TOOL_BIN)
-# 	false
-# 	@wget -O $(BLAST_BIN_TGZ) $(BLAST_BIN_URL)
-# 	@mkdir -p $(BLAST_BIN_DIR)
-# 	@tar --strip-components=1 -xzf $(BLAST_BIN_TGZ) -C $(BLAST_BIN_DIR)
-# 	@rm $(BLAST_BIN_TGZ)
+BLAST_BIN_TGZ := $(TOOL_DIR)/blast.tgz
+BLAST_DIR     := $(TOOL_DIR)/blast
+BLAST_BIN_DIR := $(BLAST_DIR)/bin
+blast: $(TOOL_BIN)
+	@wget -O $(BLAST_BIN_TGZ) $(BLAST_BIN_URL)
+	@mkdir -p $(BLAST_DIR)
+	@tar --strip-components=1 -xzf $(BLAST_BIN_TGZ) -C $(BLAST_DIR)
+	@rm $(BLAST_BIN_TGZ)
+	@ln -sf $(BLAST_BIN_DIR)/blastp $(BLASTP)
+	@ln -sf $(BLAST_BIN_DIR)/makeblastdb $(MAKEBLASTDB)
 
 # LAST_SRC_URL := https://gitlab.com/mcfrith/last/-/archive/1642/last-1642.tar.gz
 # LAST_SRC_TGZ := $(TOOL_DIR)/last.tgz
