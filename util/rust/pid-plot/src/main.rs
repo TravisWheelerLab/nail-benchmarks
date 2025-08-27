@@ -8,18 +8,17 @@ use std::{
 
 use bioio::tools::{hmmer, mmseqs, nail, Hit};
 
-use anyhow::{anyhow, bail};
-
-use plotly::{
-    common::{DashType, Font, Line, Marker, MarkerSymbol, Mode, Title},
-    layout::{Axis, AxisRange, TicksDirection},
-    ImageFormat, Layout, Plot, Scatter,
-};
+use anyhow::anyhow;
+use plotters::prelude::*;
 
 const N_BINS: usize = 41;
 const BIN_START: usize = 10;
-const MAX_BIN: usize = N_BINS + BIN_START - 1;
-const FPR: f32 = 0.01;
+const BIN_MAX: usize = N_BINS + BIN_START - 1;
+
+const X_MIN: usize = 10;
+const X_MAX: usize = 30;
+
+const FPR: f32 = 0.001;
 
 const TOL_PURPLE: &str = "#332288";
 const TOL_GREEN: &str = "#117733";
@@ -81,22 +80,16 @@ fn main() -> anyhow::Result<()> {
     let args: Vec<String> = env::args().collect();
 
     if args.len() < 2 {
-        println!("usage: pid <benchmark_dir> [figures]");
+        println!("usage: pid <benchmark_dir>");
         return Ok(());
     };
 
     let bm_dir = Path::new(&args[1]);
     let results_dir = bm_dir.join("results");
 
-    let fig_dir = if args.len() > 2 {
-        Path::new(&args[2])
-    } else {
-        Path::new("./figures/")
-    };
-
     let tbl = BufReader::new(File::open(bm_dir.join("benchmark.tbl"))?);
 
-    let mut target_cnt_by_bin = [0usize; MAX_BIN + 1];
+    let mut target_cnt_by_bin = [0usize; BIN_MAX + 1];
     let mut queries = HashSet::new();
 
     for line in tbl
@@ -104,23 +97,30 @@ fn main() -> anyhow::Result<()> {
         .map_while(Result::ok)
         .filter(|l| !l.starts_with('#'))
     {
-        let tokens: Vec<&str> = line.split_whitespace().collect();
+        let mut tokens = line.split_whitespace().next().unwrap().split('|');
 
-        match tokens[0].strip_suffix('%') {
-            Some(bin) => match bin.parse::<usize>() {
-                Ok(b) => target_cnt_by_bin[b] += 1,
-                Err(_) => bail!("failed to parse bin from: {}", tokens[0]),
-            },
-            None => bail!("failed to parse bin from: {}", tokens[0]),
-        }
-        queries.insert(tokens[1].to_string());
+        queries.insert(
+            tokens
+                .next()
+                .expect("no query in benchmark table entry")
+                .to_string(),
+        );
+
+        tokens
+            .next_back()
+            .expect("no bin in benchmark table entry")
+            .split('%')
+            .next()
+            .expect("failed to split bin from id")
+            .parse()
+            .map(|b: usize| target_cnt_by_bin[b] += 1)?;
     }
 
     let queries = queries.iter().collect::<Vec<_>>();
     println!("queries found: {}", queries.len());
 
     println!("target bin distribution:");
-    (BIN_START..=MAX_BIN)
+    (BIN_START..=BIN_MAX)
         .collect::<Vec<usize>>()
         .chunks(5)
         .for_each(|bins| {
@@ -131,163 +131,174 @@ fn main() -> anyhow::Result<()> {
 
     let decoy_cnt = (FPR * queries.len() as f32) as usize;
 
-    let mut hits = HashMap::new();
+    let mut hits = Vec::new();
     let name_fn = |p: PathBuf| Some((p.clone(), p.file_stem()?.to_str()?.to_string()));
 
     for (path, name) in glob::glob(results_dir.join("hmmer*.domtbl").to_str().unwrap())?
         .filter_map(Result::ok)
         .filter_map(name_fn)
     {
-        hits.insert(name, hmmer::parse_domtbl(File::open(path)?)?);
+        hits.push((name, hmmer::parse_domtbl(File::open(path)?)?));
     }
 
     for (path, name) in glob::glob(results_dir.join("mmseqs*.tbl").to_str().unwrap())?
         .filter_map(Result::ok)
         .filter_map(name_fn)
     {
-        hits.insert(name, mmseqs::parse_tbl(File::open(path)?)?);
+        hits.push((name, mmseqs::parse_tbl(File::open(path)?)?));
     }
 
     for (path, name) in glob::glob(results_dir.join("nail*.tbl").to_str().unwrap())?
         .filter_map(Result::ok)
         .filter_map(name_fn)
     {
-        hits.insert(name, nail::parse_tbl(File::open(path)?)?);
+        hits.push((name, nail::parse_tbl(File::open(path)?)?));
     }
 
-    let mut plot = Plot::new();
+    let root = SVGBackend::new("plot.svg", (1280, 720)).into_drawing_area();
+    root.fill(&WHITE)?;
 
-    let ticks: Vec<usize> = (0..=10).map(|i| (i * 5)).collect();
-    let layout = Layout::new()
-        .colorway(COLORS.to_vec())
-        .font(Font::new().color("#2a3f5f"))
-        .paper_background_color("#FFFFFF")
-        .plot_background_color("#FFFFFF")
-        .title(Title::new().x(0.05))
-        .x_axis(
-            Axis::new()
-                .range(AxisRange::new(50, 0))
-                .auto_margin(true)
-                .show_line(true)
-                .line_color("black")
-                .line_width(2)
-                .ticks(TicksDirection::Outside)
-                .tick_width(2)
-                .tick_length(5)
-                .tick_color("black")
-                .tick_values(ticks.iter().map(|t| *t as f64).collect())
-                .tick_text(ticks.iter().map(|t| format!("{t}%")).collect())
-                .mirror(true)
-                .show_grid(false)
-                .zero_line_color("#e5e5e5")
-                .zero_line_width(1),
-        )
-        .y_axis(
-            Axis::new()
-                .range(AxisRange::new(0, 1.0))
-                .auto_margin(true)
-                .show_line(true)
-                .line_color("black")
-                .line_width(2)
-                .ticks(TicksDirection::Outside)
-                .tick_width(2)
-                .tick_color("black")
-                .mirror(true)
-                .show_grid(false)
-                .zero_line_color("#e5e5e5")
-                .zero_line_width(1),
-        );
+    let mut chart = ChartBuilder::on(&root)
+        .caption("CAPTION", ("sans-serif", 20))
+        .margin(20)
+        .x_label_area_size(30)
+        .y_label_area_size(30)
+        .build_cartesian_2d(X_MIN..X_MAX, 0.0f32..1.0)?;
 
-    plot.set_layout(layout);
+    chart
+        .configure_mesh()
+        .disable_mesh()
+        .x_label_formatter(&|x| format!("{}%", X_MAX - x + X_MIN))
+        .draw()?;
 
-    for (name, hit_list) in hits.into_iter() {
-        // what: filter the hit list such that for each (fam, target)
-        //       pair, retain only the best (lowest E-value) match
-        //
-        //       also, filter out family mismatch hits while we're at it
-        //
-        //  why: since we're benchmarking pairwise-family search
-        //
-        let mut hit_hash: HashMap<(String, String), Hit> = HashMap::new();
-        hit_list
-            .into_iter()
-            .map(|h| {
-                (
-                    h.query.split('|').next().unwrap().to_string(),
-                    h.target.split('|').next().unwrap().to_string(),
-                    h,
-                )
-            })
-            // include only same-family hits & decoys
-            .filter(|(q_fam, t_fam, _)| q_fam == t_fam || t_fam.starts_with("decoy"))
-            .for_each(|(q_fam, _, hit)| {
-                let key = (q_fam, hit.target.to_string());
+    let filtered_hits = hits
+        .into_iter()
+        .map(|(name, hit_list)| {
+            // what: filter the hit list such that for each (fam, target)
+            //       pair, retain only the best (lowest E-value) match
+            //
+            //       also, filter out family mismatch hits while we're at it
+            //
+            //  why: since we're benchmarking pairwise-family search
+            //
+            let mut hit_hash: HashMap<(String, String), Hit> = HashMap::new();
+            hit_list
+                .into_iter()
+                .map(|h| {
+                    (
+                        h.query.split('|').next().unwrap().to_string(),
+                        h.target.split('|').next().unwrap().to_string(),
+                        h,
+                    )
+                })
+                // include only same-family hits & decoys
+                .filter(|(q_fam, t_fam, _)| q_fam == t_fam || t_fam.starts_with("decoy"))
+                .for_each(|(q_fam, _, hit)| {
+                    let key = (q_fam, hit.target.to_string());
 
-                match hit_hash.entry(key) {
-                    Entry::Occupied(mut entry) if hit.e_value < entry.get().e_value => {
-                        entry.insert(hit);
+                    match hit_hash.entry(key) {
+                        Entry::Occupied(mut entry) if hit.e_value < entry.get().e_value => {
+                            entry.insert(hit);
+                        }
+                        Entry::Vacant(v) => {
+                            v.insert(hit);
+                        }
+                        _ => {}
                     }
-                    Entry::Vacant(v) => {
-                        v.insert(hit);
-                    }
-                    _ => {}
-                }
+                });
+
+            let mut filtered_hit_list: Vec<Hit> = hit_hash.into_values().collect();
+            filtered_hit_list.sort_by(|a, b| {
+                a.e_value
+                    .partial_cmp(&b.e_value)
+                    .expect("NaN E-value encountered")
             });
-        let mut hit_list: Vec<Hit> = hit_hash.into_values().collect();
 
-        hit_list.sort_by(|a, b| {
-            a.e_value
-                .partial_cmp(&b.e_value)
-                .expect("NaN E-value encountered")
-        });
+            (name, filtered_hit_list)
+        })
+        .collect::<Vec<_>>();
 
-        let mut num_hits_by_bin = vec![0usize; BIN_START + N_BINS];
+    let mut point_data = filtered_hits
+        .into_iter()
+        .map(|(name, hit_list)| {
+            let mut num_hits_by_bin = vec![0usize; BIN_MAX + 1];
 
-        let mut decoys_found = 0;
-        for hit in hit_list.iter() {
-            match hit.target.starts_with("decoy") {
-                true => {
-                    decoys_found += 1;
-                    if decoys_found >= decoy_cnt {
-                        break;
+            let mut decoys_found = 0;
+            for hit in hit_list.iter() {
+                match hit.target.starts_with("decoy") {
+                    true => {
+                        decoys_found += 1;
+                        if decoys_found >= decoy_cnt {
+                            break;
+                        }
                     }
-                }
-                false => {
-                    let info = extract_target_info(hit)?;
-                    num_hits_by_bin[info.bin] += 1;
+                    false => {
+                        let info = extract_target_info(hit).expect("failed to extract target info");
+                        num_hits_by_bin[info.bin] += 1;
+                    }
                 }
             }
-        }
 
-        let recall_by_bin: Vec<f32> = num_hits_by_bin
-            .into_iter()
-            .enumerate()
-            .map(|(b, n)| {
-                let tot = target_cnt_by_bin[b];
-                if tot != 0 {
-                    n as f32 / tot as f32
-                } else {
-                    0.0
-                }
-            })
-            .collect();
+            let recall_by_bin: Vec<f32> = num_hits_by_bin
+                .into_iter()
+                .enumerate()
+                .map(|(b, n)| {
+                    let tot = target_cnt_by_bin[b];
+                    if tot != 0 {
+                        n as f32 / tot as f32
+                    } else {
+                        0.0
+                    }
+                })
+                .collect();
 
-        let (x, y): (Vec<usize>, Vec<f32>) = recall_by_bin
-            .into_iter()
-            .enumerate()
-            .skip(BIN_START)
-            .unzip();
+            let points = recall_by_bin
+                .into_iter()
+                .enumerate()
+                .skip(BIN_START)
+                .map(|(b, r)| (X_MAX - b + X_MIN, r))
+                .collect::<Vec<_>>();
 
-        plot.add_trace(
-            Scatter::new(x, y)
-                .name(&name)
-                .mode(Mode::LinesMarkers)
-                .line(Line::new().width(3.0)),
-        );
+            (name, points)
+        })
+        .collect::<Vec<_>>();
+
+    point_data.sort_by(|a, b| {
+        let s1: f32 = a.1.iter().map(|(_, y)| y).sum();
+        let s2: f32 = b.1.iter().map(|(_, y)| y).sum();
+
+        s1.partial_cmp(&s2).expect("NaN encountered")
+    });
+
+    let hex_to_rgb = |hex: &str| -> RGBColor {
+        let hex = hex.trim_start_matches('#');
+        let r = u8::from_str_radix(&hex[0..2], 16).unwrap();
+        let g = u8::from_str_radix(&hex[2..4], 16).unwrap();
+        let b = u8::from_str_radix(&hex[4..6], 16).unwrap();
+        RGBColor(r, g, b)
+    };
+
+    for ((name, points), color) in point_data.iter().zip(COLORS) {
+        let color = hex_to_rgb(color);
+        chart
+            .draw_series(LineSeries::new(points.clone(), color.stroke_width(3)))?
+            .label(name)
+            .legend(move |(x, y)| Rectangle::new([(x, y - 5), (x + 10, y + 5)], color.filled()));
+
+        chart.draw_series(
+            points
+                .iter()
+                .map(|(x, y)| Circle::new((*x, *y), 4, color.filled())),
+        )?;
+
+        chart.draw_series(
+            points
+                .iter()
+                .map(|(x, y)| Circle::new((*x, *y), 1, WHITE.filled())),
+        )?;
     }
 
-    plot.write_image("plot", ImageFormat::PNG, 960, 720, 1.0)
-        .expect("Failed to export plot");
+    chart.configure_series_labels().border_style(BLACK).draw()?;
 
     Ok(())
 }
