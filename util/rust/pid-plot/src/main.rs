@@ -6,7 +6,7 @@ use std::{
     path::{Path, PathBuf},
 };
 
-use bioio::tools::{hmmer, mmseqs, nail, Hit};
+use bioio::tbl::{parse_blast_tbl, parse_hmmer_domtbl, parse_nail_tbl, Hit};
 
 use anyhow::anyhow;
 use plotters::prelude::*;
@@ -138,21 +138,21 @@ fn main() -> anyhow::Result<()> {
         .filter_map(Result::ok)
         .filter_map(name_fn)
     {
-        hits.push((name, hmmer::parse_domtbl(File::open(path)?)?));
+        hits.push((name, parse_hmmer_domtbl(File::open(path)?)?));
     }
 
     for (path, name) in glob::glob(results_dir.join("mmseqs*.tbl").to_str().unwrap())?
         .filter_map(Result::ok)
         .filter_map(name_fn)
     {
-        hits.push((name, mmseqs::parse_tbl(File::open(path)?)?));
+        hits.push((name, parse_blast_tbl(File::open(path)?)?));
     }
 
     for (path, name) in glob::glob(results_dir.join("nail*.tbl").to_str().unwrap())?
         .filter_map(Result::ok)
         .filter_map(name_fn)
     {
-        hits.push((name, nail::parse_tbl(File::open(path)?)?));
+        hits.push((name, parse_nail_tbl(File::open(path)?)?));
     }
 
     let root = SVGBackend::new("plot.svg", (1280, 720)).into_drawing_area();
