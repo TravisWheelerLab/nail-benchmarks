@@ -6,10 +6,11 @@ use std::{
     path::{Path, PathBuf},
 };
 
-use bioio::tbl::{parse_blast_tbl, parse_hmmer_domtbl, parse_nail_tbl, Hit};
+use bioio::tbl::{BlastTable, Hit, HitTable, HmmerDomTable, NailTable};
 
-use anyhow::anyhow;
-use plotters::prelude::*;
+use anyhow::{anyhow, bail, Context};
+use glob::glob;
+use plotters::{element::DashedPathElement, prelude::*};
 
 const N_BINS: usize = 41;
 const BIN_START: usize = 10;
@@ -39,6 +40,14 @@ const COLORS: [&str; 8] = [
     TOL_MAGENTA,
     TOL_OLIVE,
 ];
+
+fn hex_to_rgb(hex: &str) -> RGBColor {
+    let hex = hex.trim_start_matches('#');
+    let r = u8::from_str_radix(&hex[0..2], 16).unwrap();
+    let g = u8::from_str_radix(&hex[2..4], 16).unwrap();
+    let b = u8::from_str_radix(&hex[4..6], 16).unwrap();
+    RGBColor(r, g, b)
+}
 
 struct TargetInfo<'a> {
     family: &'a str,
@@ -131,29 +140,51 @@ fn main() -> anyhow::Result<()> {
 
     let decoy_cnt = (FPR * queries.len() as f32) as usize;
 
-    let mut hits = Vec::new();
-    let name_fn = |p: PathBuf| Some((p.clone(), p.file_stem()?.to_str()?.to_string()));
+    let mut tables: Vec<HitTable> = vec![];
+    let mut tools: HashSet<String> = HashSet::new();
 
-    for (path, name) in glob::glob(results_dir.join("hmmer*.domtbl").to_str().unwrap())?
-        .filter_map(Result::ok)
-        .filter_map(name_fn)
+    for path in glob(
+        results_dir
+            .join("*tbl")
+            .to_str()
+            .context("invalid *tbl glob")?,
+    )?
+    .filter_map(Result::ok)
     {
-        hits.push((name, parse_hmmer_domtbl(File::open(path)?)?));
+        let file = File::open(&path)?;
+        let mut name = path
+            .file_stem()
+            .and_then(|s| s.to_str())
+            .context("invalid path")?
+            .splitn(2, '.');
+
+        let tool = name.next().context("no tbl prefix")?;
+        let suffix = name.next().context("no tbl suffix")?;
+        let name = format!("{tool} {suffix}");
+
+        tools.insert(tool.to_string());
+
+        let tbl = match tool {
+            "hmmer" => HitTable::parse::<_, HmmerDomTable>(file, &name),
+            "nail" => HitTable::parse::<_, NailTable>(file, &name),
+            _ => HitTable::parse::<_, BlastTable>(file, &name),
+        }?;
+
+        tables.push(tbl);
     }
 
-    for (path, name) in glob::glob(results_dir.join("mmseqs*.tbl").to_str().unwrap())?
-        .filter_map(Result::ok)
-        .filter_map(name_fn)
-    {
-        hits.push((name, parse_blast_tbl(File::open(path)?)?));
+    if tools.len() > COLORS.len() {
+        bail!("not enough colors");
     }
 
-    for (path, name) in glob::glob(results_dir.join("nail*.tbl").to_str().unwrap())?
-        .filter_map(Result::ok)
-        .filter_map(name_fn)
-    {
-        hits.push((name, parse_nail_tbl(File::open(path)?)?));
-    }
+    let mut tools: Vec<String> = tools.into_iter().collect();
+    tools.sort();
+
+    let color_by_tool: HashMap<String, RGBColor> = tools
+        .into_iter()
+        .zip(COLORS)
+        .map(|(t, c)| (t, hex_to_rgb(c)))
+        .collect();
 
     let root = SVGBackend::new("plot.svg", (1280, 720)).into_drawing_area();
     root.fill(&WHITE)?;
@@ -171,9 +202,9 @@ fn main() -> anyhow::Result<()> {
         .x_label_formatter(&|x| format!("{}%", X_MAX - x + X_MIN))
         .draw()?;
 
-    let filtered_hits = hits
+    let filtered_tables: Vec<HitTable> = tables
         .into_iter()
-        .map(|(name, hit_list)| {
+        .map(|tbl| {
             // what: filter the hit list such that for each (fam, target)
             //       pair, retain only the best (lowest E-value) match
             //
@@ -181,8 +212,10 @@ fn main() -> anyhow::Result<()> {
             //
             //  why: since we're benchmarking pairwise-family search
             //
-            let mut hit_hash: HashMap<(String, String), Hit> = HashMap::new();
-            hit_list
+            //  how: build a hash that maps (fam, target) -> hit, where a hit
+            //       replaces an existing entry if it has a better E-value
+            let mut hits_by_pair: HashMap<(String, String), Hit> = HashMap::new();
+            tbl.hits
                 .into_iter()
                 .map(|h| {
                     (
@@ -196,35 +229,39 @@ fn main() -> anyhow::Result<()> {
                 .for_each(|(q_fam, _, hit)| {
                     let key = (q_fam, hit.target.to_string());
 
-                    match hit_hash.entry(key) {
-                        Entry::Occupied(mut entry) if hit.e_value < entry.get().e_value => {
-                            entry.insert(hit);
+                    match hits_by_pair.get(&key) {
+                        Some(existing) => {
+                            if hit.e_value < existing.e_value {
+                                hits_by_pair.insert(key, hit);
+                            }
                         }
-                        Entry::Vacant(v) => {
-                            v.insert(hit);
+                        None => {
+                            hits_by_pair.insert(key, hit);
                         }
-                        _ => {}
                     }
                 });
 
-            let mut filtered_hit_list: Vec<Hit> = hit_hash.into_values().collect();
-            filtered_hit_list.sort_by(|a, b| {
+            let mut filtered_hits: Vec<Hit> = hits_by_pair.into_values().collect();
+            filtered_hits.sort_by(|a, b| {
                 a.e_value
                     .partial_cmp(&b.e_value)
                     .expect("NaN E-value encountered")
             });
 
-            (name, filtered_hit_list)
+            HitTable {
+                name: tbl.name,
+                hits: filtered_hits,
+            }
         })
-        .collect::<Vec<_>>();
+        .collect();
 
-    let mut point_data = filtered_hits
+    let mut point_data = filtered_tables
         .into_iter()
-        .map(|(name, hit_list)| {
+        .map(|tbl| {
             let mut num_hits_by_bin = vec![0usize; BIN_MAX + 1];
 
             let mut decoys_found = 0;
-            for hit in hit_list.iter() {
+            for hit in tbl.hits.iter() {
                 match hit.target.starts_with("decoy") {
                     true => {
                         decoys_found += 1;
@@ -259,7 +296,7 @@ fn main() -> anyhow::Result<()> {
                 .map(|(b, r)| (X_MAX - b + X_MIN, r))
                 .collect::<Vec<_>>();
 
-            (name, points)
+            (tbl.name, points)
         })
         .collect::<Vec<_>>();
 
@@ -270,20 +307,41 @@ fn main() -> anyhow::Result<()> {
         s1.partial_cmp(&s2).expect("NaN encountered")
     });
 
-    let hex_to_rgb = |hex: &str| -> RGBColor {
-        let hex = hex.trim_start_matches('#');
-        let r = u8::from_str_radix(&hex[0..2], 16).unwrap();
-        let g = u8::from_str_radix(&hex[2..4], 16).unwrap();
-        let b = u8::from_str_radix(&hex[4..6], 16).unwrap();
-        RGBColor(r, g, b)
-    };
+    for (name, points) in point_data.iter() {
+        let mut tokens = name.split_whitespace();
+        let tool = tokens.next().context("no name")?;
+        let search_type = tokens.next().context("no search type")?;
+        let color = color_by_tool.get(tool).context("no color for tool")?;
 
-    for ((name, points), color) in point_data.iter().zip(COLORS) {
-        let color = hex_to_rgb(color);
-        chart
-            .draw_series(LineSeries::new(points.clone(), color.stroke_width(3)))?
-            .label(name)
-            .legend(move |(x, y)| Rectangle::new([(x, y - 5), (x + 10, y + 5)], color.filled()));
+        match search_type {
+            "seq" => {
+                chart
+                    .draw_series(DashedLineSeries::new(
+                        points.clone(),
+                        5,
+                        3,
+                        color.stroke_width(3),
+                    ))?
+                    .label(name)
+                    .legend(move |(x, y)| {
+                        DashedPathElement::new(
+                            vec![(x, y), (x + 21, y)],
+                            5,
+                            3,
+                            color.stroke_width(3),
+                        )
+                    });
+            }
+            "prf" => {
+                chart
+                    .draw_series(LineSeries::new(points.clone(), color.stroke_width(3)))?
+                    .label(name)
+                    .legend(move |(x, y)| {
+                        PathElement::new(vec![(x, y), (x + 21, y)], color.stroke_width(3))
+                    });
+            }
+            _ => bail!("bad search type"),
+        }
 
         chart.draw_series(
             points

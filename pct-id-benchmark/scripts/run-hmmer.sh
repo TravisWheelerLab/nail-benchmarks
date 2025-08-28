@@ -15,11 +15,9 @@ N_SPLITS=$(( THREADS / 4 ))
 SPLIT_THREADS=4
 SPLIT_DIR=$DIR/query-splits
 
-TBL_1=$RESULTS/hmmer.seq.tbl
 DOM_1=$RESULTS/hmmer.seq.domtbl
 TIME_1=$RESULTS/hmmer.seq.time
 
-TBL_2=$RESULTS/hmmer.prf.tbl
 DOM_2=$RESULTS/hmmer.prf.domtbl
 TIME_2=$RESULTS/hmmer.prf.time
 
@@ -32,12 +30,10 @@ echo "balance time: $(echo $SPLIT_TIME | awk '{print $2 "s"}')"
 parallel \
     "${TIME} -o ${SPLIT_DIR}/{/.}.time \
     $PHMMER $S_ARGS \
-    --tblout ${SPLIT_DIR}/{/.}.tbl \
     --domtblout ${SPLIT_DIR}/{/.}.domtbl \
     {} ${TARGET}" \
     ::: "${SPLIT_DIR}"/*.fa
 
-cat $SPLIT_DIR/*.tbl > $TBL_1
 cat $SPLIT_DIR/*.domtbl > $DOM_1
 cat $SPLIT_DIR/*.time > $TIME_1
 rm -rf $SPLIT_DIR
@@ -52,12 +48,10 @@ echo "balance time: $(echo $SPLIT_TIME | awk '{print $2 "s"}')"
 parallel \
     "${TIME} -o ${SPLIT_DIR}/{/.}.time \
     $HMMSEARCH $S_ARGS \
-    --tblout ${SPLIT_DIR}/{/.}.tbl \
     --domtblout ${SPLIT_DIR}/{/.}.domtbl \
     {} ${TARGET}" \
     ::: "${SPLIT_DIR}"/*.hmm
 
-cat $SPLIT_DIR/*.tbl > $TBL_2
 cat $SPLIT_DIR/*.domtbl > $DOM_2
 cat $SPLIT_DIR/*.time > $TIME_2
 rm -rf $SPLIT_DIR

@@ -23,7 +23,7 @@ set_vars() {
     export QUERY_FA=$DIR/query.fa
     export QUERY_CONS_FA=$DIR/query.cons.fa
     export TARGET=$DIR/target.fa
-    export VAR E=1e9
+    export VAR E=10
     export RESULTS=$DIR/results/
     mkdir -p $RESULTS
 }
