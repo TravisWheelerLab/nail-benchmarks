@@ -7,27 +7,29 @@ DIR="$(cd -- "$(dirname -- "$0")" && pwd)"
 . $DIR/vars.sh
 set_vars "$@"
 
-TMP=./tmp-nail/
+TMP=./tmp/nail/
 mkdir -p $TMP
 
 STATS=$RESULTS/nail.stats
-O1=$RESULTS/nail.seq.tbl
-T1=$RESULTS/nail.seq.time
-O2=$RESULTS/nail.prf.tbl
-T2=$RESULTS/nail.prf.time
+TBL_1=$RESULTS/nail.seq.tbl
+TIME_1=$RESULTS/nail.seq.time
+TBL_2=$RESULTS/nail.prf.tbl
+TIME_2=$RESULTS/nail.prf.time
 
 S_ARGS="-s -t $THREADS -E $E --tmp-dir $TMP"
 
 echo "running nail seq..."
-/usr/bin/time -p -o $T1 \
+/usr/bin/time -p -o $TIME_1 \
     $NAIL search $S_ARGS \
-    --tbl-out $O1 \
+    --tbl-out $TBL_1 \
     $QUERY_FA $TARGET >> $STATS
-cat $T1 | grep real
+cat $TIME_1 | grep real | awk '{print $2 "s"}'
+echo
 
 echo "running nail hmm..."
-/usr/bin/time -p -o $T2 \
+/usr/bin/time -p -o $TIME_2 \
     $NAIL search $S_ARGS \
-    --tbl-out $O2 \
+    --tbl-out $TBL_2 \
     $QUERY_HMM $TARGET >> $STATS
-cat $T2 | grep real
+cat $TIME_2 | grep real | awk '{print $2 "s"}'
+echo

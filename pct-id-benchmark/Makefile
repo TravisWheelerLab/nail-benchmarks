@@ -33,11 +33,12 @@ PLOT     := $(RUST_BIN)/pid-plot
 PLOT_SRC := $(RUST)/pid-plot/src
 
 # align scripts
-NAIL   := $(SCRIPTS)/run-nail.sh
-HMMER  := $(SCRIPTS)/run-hmmer.sh
-MMSEQS := $(SCRIPTS)/run-mmseqs.sh
-BLAST  := $(SCRIPTS)/run-blast.sh
-LAST   := $(SCRIPTS)/run-last.sh
+NAIL    := $(SCRIPTS)/run-nail.sh
+HMMER   := $(SCRIPTS)/run-hmmer.sh
+MMSEQS  := $(SCRIPTS)/run-mmseqs.sh
+BLAST   := $(SCRIPTS)/run-blast.sh
+LAST    := $(SCRIPTS)/run-last.sh
+DIAMOND := $(SCRIPTS)/run-diamond.sh
 
 # profmark input 
 PM_DIR     := $(MAKEFILE_DIR)/profmark
@@ -106,6 +107,9 @@ run-%:
 	@$(NAIL) $* $(THREADS)
 	@$(MMSEQS) $* $(THREADS)
 	@$(HMMER) $* $(THREADS)
+	@$(BLAST) $* $(THREADS)
+	@$(LAST) $* $(THREADS)
+	@$(DIAMOND) $* $(THREADS)
 
 $(PLOT): $(PLOT_SRC)/main.rs
 	@cd $(PLOT_SRC) && cargo build --release
@@ -114,4 +118,4 @@ plot-%: $(PLOT)
 	$(PLOT) $*
 
 clean:
-	@rm -rf tmp-*/ b-*/results/ benchmark/results/
+	@rm -rf tmp/ b-*/results/ benchmark/results/

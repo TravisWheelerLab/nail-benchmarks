@@ -8,7 +8,7 @@ DIR="$(cd -- "$(dirname -- "$0")" && pwd)"
 . $DIR/vars.sh
 set_vars "$@"
 
-TMP=./tmp-mmseqs/
+TMP=./tmp/mmseqs/
 mkdir -p $TMP
 
 MDB=$TMP/msaDB
@@ -17,16 +17,13 @@ TDB=$TMP/targetDB
 ADB=$TMP/alignDB
 FDB=$TMP/forwardDB
 
-O1=$RESULTS/mmseqs.seq.tbl
-T1=$RESULTS/mmseqs.seq.time
-O2=$RESULTS/mmseqs.prf.tbl
-T2=$RESULTS/mmseqs.prf.time
-# O3=$RESULTS/mmseqs.fwd.tbl
-# T3=$RESULTS/mmseqs.fwd.time
+TBL_1=$RESULTS/mmseqs.seq.tbl
+TIME_1=$RESULTS/mmseqs.seq.time
+TBL_2=$RESULTS/mmseqs.prf.tbl
+TIME_2=$RESULTS/mmseqs.prf.time
 
 S_ARGS="$QDB $TDB $ADB $TMP --threads $THREADS"
-# F_ARGS="$QDB $TDB $ADB $FDB --threads $THREADS" 
-C_ARGS="--format-output target,query,tstart,tend,qstart,qend,bits,evalue"
+C_ARGS="--format-mode 0"
 
 rm -rf $TMP/*
 echo "running mmseqs seq..."
@@ -34,9 +31,10 @@ echo "running mmseqs seq..."
     $MMSEQS createdb $TARGET $TDB
     $MMSEQS createdb $QUERY_FA $QDB
     $MMSEQS search $S_ARGS -e $E
-    $MMSEQS convertalis $QDB $TDB $ADB $O1 $C_ARGS
-) | /usr/bin/time -p -o "$T1" cat >/dev/null
-cat $T1 | grep real
+    $MMSEQS convertalis $QDB $TDB $ADB $TBL_1 $C_ARGS
+) | /usr/bin/time -p -o "$TIME_1" cat >/dev/null
+cat $TIME_1 | grep real | awk '{print $2 "s"}'
+echo
 
 rm -rf $TMP/*
 echo "running mmseqs profile..."
@@ -45,21 +43,7 @@ echo "running mmseqs profile..."
     $MMSEQS msa2profile $MDB $QDB --match-mode 1
     $MMSEQS createdb $TARGET $TDB
     $MMSEQS search $S_ARGS -e $E
-    $MMSEQS convertalis $QDB $TDB $ADB $O2 $C_ARGS
-) | /usr/bin/time -p -o "$T2" cat >/dev/null
-cat $T2 | grep real
-
-# rm -rf $TMP/*
-# N_TARGET=$($ESL "$TARGET" | grep seq | awk '{print $NF}')
-# PRE_E=$(echo "0.01 * $N_TARGET" | bc -l)
-# echo "running mmseqs fwbw..."
-# (
-#     $MMSEQS convertmsa $QUERY_MSA $MDB --identifier-field 0
-#     $MMSEQS msa2profile $MDB $QDB --match-mode 1
-#     $MMSEQS createdb $TARGET $TDB
-#     $MMSEQS search $S_ARGS -e $PRE_E -k 6 --k-score 80 --max-seqs 2147483647
-#     $MMSEQS fwbw $F_ARGS -e $E
-#     $MMSEQS convertalis $QDB $TDB $FDB $O3 $C_ARGS
-# ) | /usr/bin/time -p -o "$T3" cat >/dev/null
-# cat $T3 | grep real
-
+    $MMSEQS convertalis $QDB $TDB $ADB $TBL_2 $C_ARGS
+) | /usr/bin/time -p -o "$TIME_2" cat >/dev/null
+cat $TIME_2 | grep real | awk '{print $2 "s"}'
+echo

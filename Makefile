@@ -75,23 +75,29 @@ setup: $(DATA)
 ####################################
 
 ifeq ($(PLATFORM),linux-arm64)
-  MMSEQS_BIN_URL := https://github.com/soedinglab/MMseqs2/releases/download/18-8cc5c/mmseqs-linux-arm64.tar.gz
-  BLAST_BIN_URL  := https://ftp.ncbi.nlm.nih.gov/blast/executables/blast+/LATEST/ncbi-blast-2.17.0+-aarch64-linux.tar.gz
+  MMSEQS_BIN_URL  := https://github.com/soedinglab/MMseqs2/releases/download/18-8cc5c/mmseqs-linux-arm64.tar.gz
+  BLAST_BIN_URL   := https://ftp.ncbi.nlm.nih.gov/blast/executables/blast+/LATEST/ncbi-blast-2.17.0+-aarch64-linux.tar.gz
+  DIAMOND_BIN_URL := none
 else ifeq ($(PLATFORM),linux-x86_64-avx2)
-  MMSEQS_BIN_URL := https://github.com/soedinglab/MMseqs2/releases/download/18-8cc5c/mmseqs-linux-avx2.tar.gz
-  BLAST_BIN_URL  := https://ftp.ncbi.nlm.nih.gov/blast/executables/blast+/LATEST/ncbi-blast-2.17.0+-x64-linux.tar.gz
+  MMSEQS_BIN_URL  := https://github.com/soedinglab/MMseqs2/releases/download/18-8cc5c/mmseqs-linux-avx2.tar.gz
+  BLAST_BIN_URL   := https://ftp.ncbi.nlm.nih.gov/blast/executables/blast+/LATEST/ncbi-blast-2.17.0+-x64-linux.tar.gz
+  DIAMOND_BIN_URL := https://github.com/bbuchfink/diamond/releases/download/v2.1.13/diamond-linux64.tar.gz
 else ifeq ($(PLATFORM),linux-x86_64-sse2)
-  MMSEQS_BIN_URL := https://github.com/soedinglab/MMseqs2/releases/download/18-8cc5c/mmseqs-linux-sse2.tar.gz
-  BLAST_BIN_URL  := https://ftp.ncbi.nlm.nih.gov/blast/executables/blast+/LATEST/ncbi-blast-2.17.0+-x64-linux.tar.gz
+  MMSEQS_BIN_URL  := https://github.com/soedinglab/MMseqs2/releases/download/18-8cc5c/mmseqs-linux-sse2.tar.gz
+  BLAST_BIN_URL   := https://ftp.ncbi.nlm.nih.gov/blast/executables/blast+/LATEST/ncbi-blast-2.17.0+-x64-linux.tar.gz
+  DIAMOND_BIN_URL := https://github.com/bbuchfink/diamond/releases/download/v2.1.13/diamond-linux64.tar.gz
 else ifeq ($(PLATFORM),linux-x86_64-sse4.1)
-  MMSEQS_BIN_URL := https://github.com/soedinglab/MMseqs2/releases/download/18-8cc5c/mmseqs-linux-sse41.tar.gz
-  BLAST_BIN_URL  := https://ftp.ncbi.nlm.nih.gov/blast/executables/blast+/LATEST/ncbi-blast-2.17.0+-x64-linux.tar.gz
+  MMSEQS_BIN_URL  := https://github.com/soedinglab/MMseqs2/releases/download/18-8cc5c/mmseqs-linux-sse41.tar.gz
+  BLAST_BIN_URL   := https://ftp.ncbi.nlm.nih.gov/blast/executables/blast+/LATEST/ncbi-blast-2.17.0+-x64-linux.tar.gz
+  DIAMOND_BIN_URL := https://github.com/bbuchfink/diamond/releases/download/v2.1.13/diamond-linux64.tar.gz
 else ifeq ($(PLATFORM),macos-universal)
-  MMSEQS_BIN_URL := https://github.com/soedinglab/MMseqs2/releases/download/18-8cc5c/mmseqs-osx-universal.tar.gz
-  BLAST_BIN_URL  := https://ftp.ncbi.nlm.nih.gov/blast/executables/blast+/LATEST/ncbi-blast-2.17.0+-universal-macosx.tar.gz
+  MMSEQS_BIN_URL  := https://github.com/soedinglab/MMseqs2/releases/download/18-8cc5c/mmseqs-osx-universal.tar.gz
+  BLAST_BIN_URL   := https://ftp.ncbi.nlm.nih.gov/blast/executables/blast+/LATEST/ncbi-blast-2.17.0+-universal-macosx.tar.gz
+  DIAMOND_BIN_URL := https://github.com/bbuchfink/diamond/releases/download/v2.1.13/diamond-macos.tar.gz
 else
-  MMSEQS_BIN_URL := none
-  BLAST_BIN_URL  := none
+  MMSEQS_BIN_URL  := none
+  BLAST_BIN_URL   := none
+  DIAMOND_BIN_URL := none
 endif
 
 TOOL_DIR := $(MAKEFILE_DIR)/tools
@@ -109,9 +115,11 @@ HMMBUILD    := $(TOOL_BIN)/hmmbuild
 MMSEQS      := $(TOOL_BIN)/mmseqs
 BLASTP      := $(TOOL_BIN)/blastp
 MAKEBLASTDB := $(TOOL_BIN)/makeblastdb
-# LAST        := $(TOOL_BIN)/lastal
+LASTAL      := $(TOOL_BIN)/lastal
+LASTDB      := $(TOOL_BIN)/lastdb
+DIAMOND     := $(TOOL_BIN)/diamond
 
-.PHONY: nail hmmer mmseqs blast last
+.PHONY: nail hmmer mmseqs blast last diamond
 
 NAIL_SRC_URL  := https://github.com/TravisWheelerLab/nail/archive/refs/tags/nail-v0.4.0.tar.gz
 NAIL_SRC_TGZ  := $(TOOL_DIR)/nail.tgz
@@ -160,17 +168,25 @@ blast: $(TOOL_BIN)
 	@ln -sf $(BLAST_BIN_DIR)/blastp $(BLASTP)
 	@ln -sf $(BLAST_BIN_DIR)/makeblastdb $(MAKEBLASTDB)
 
-# LAST_SRC_URL := https://gitlab.com/mcfrith/last/-/archive/1642/last-1642.tar.gz
-# LAST_SRC_TGZ := $(TOOL_DIR)/last.tgz
-# LAST_SRC_DIR := $(TOOL_DIR)/last
-# LAST_BIN_DIR := $(LAST_SRC)/bin
-# last: $(TOOL_BIN)
-# 	false
-# 	@wget -O $(LAST_SRC_TGZ) $(LAST_SRC_URL)
-# 	@mkdir -p $(LAST_SRC)
-# 	@tar --strip-components=1 -xzf $(LAST_SRC_TGZ) -C $(LAST_SRC)
-# 	@cd $(LAST_SRC) && make
-# 	@rm $(LAST_SRC_TGZ)
+LAST_SRC_URL := https://gitlab.com/mcfrith/last/-/archive/1642/last-1642.tar.gz
+LAST_SRC_TGZ := $(TOOL_DIR)/last.tgz
+LAST_SRC_DIR := $(TOOL_DIR)/last
+LAST_BIN_DIR := $(LAST_SRC_DIR)/bin
+last: $(TOOL_BIN)
+	@wget -O $(LAST_SRC_TGZ) $(LAST_SRC_URL)
+	@mkdir -p $(LAST_SRC_DIR)
+	@tar --strip-components=1 -xzf $(LAST_SRC_TGZ) -C $(LAST_SRC_DIR)
+	@cd $(LAST_SRC_DIR) && make
+	@rm $(LAST_SRC_TGZ)
+	@ln -sf $(LAST_BIN_DIR)/lastal $(LASTAL)
+	@ln -sf $(LAST_BIN_DIR)/lastdb $(LASTDB)
+
+DIAMOND_BIN_TGZ := $(TOOL_DIR)/diamond.tgz
+DIAMOND_BIN     := $(TOOL_DIR)/diamond
+diamond: $(TOOL_BIN)
+	@wget -O $(DIAMOND_BIN_TGZ) $(DIAMOND_BIN_URL)
+	@tar -xzf $(DIAMOND_BIN_TGZ) -C $(TOOL_BIN)
+	@rm $(DIAMOND_BIN_TGZ)
 
 .PHONY: clean
 clean:
