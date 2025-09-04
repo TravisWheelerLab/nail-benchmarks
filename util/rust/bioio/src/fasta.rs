@@ -7,18 +7,18 @@ use std::{
 use anyhow::{anyhow, Context};
 use indexmap::IndexMap;
 
-#[derive(Default, Clone, PartialEq)]
+#[derive(Default, Clone, PartialEq, Eq, Hash)]
 pub struct FastaRecord {
     pub name: String,
     pub extra: String,
-    pub sequence: String,
+    pub seq: String,
 }
 
 impl Display for FastaRecord {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         writeln!(f, ">{} {}", self.name, self.extra)?;
         let mut chunks = self
-            .sequence
+            .seq
             .as_bytes()
             .chunks(60)
             .map(|c| std::str::from_utf8(c).unwrap());
@@ -55,7 +55,7 @@ impl Fasta {
                 rec.name = tokens.next().ok_or(anyhow!("no name"))?.to_string();
                 rec.extra = tokens.next().unwrap_or_default().to_string();
             } else {
-                rec.sequence.push_str(&line)
+                rec.seq.push_str(&line)
             }
         }
 

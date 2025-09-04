@@ -1,9 +1,9 @@
 use std::{
-    collections::{hash_map::Entry, HashMap, HashSet},
+    collections::{HashMap, HashSet},
     env,
     fs::File,
     io::{BufRead, BufReader},
-    path::{Path, PathBuf},
+    path::Path,
 };
 
 use bioio::tbl::{BlastTable, Hit, HitTable, HmmerDomTable, NailTable};
@@ -316,12 +316,9 @@ fn main() -> anyhow::Result<()> {
         match search_type {
             "seq" => {
                 chart
-                    .draw_series(DashedLineSeries::new(
-                        points.clone(),
-                        5,
-                        3,
-                        color.stroke_width(3),
-                    ))?
+                    .draw_series(points.windows(2).map(|p| {
+                        DashedPathElement::new(vec![p[0], p[1]], 5, 3, color.stroke_width(3))
+                    }))?
                     .label(name)
                     .legend(move |(x, y)| {
                         DashedPathElement::new(

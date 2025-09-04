@@ -23,9 +23,6 @@ HMMBALANCE := $(UTIL)/scripts/hmmbalance
 RUST     := $(UTIL)/rust
 RUST_BIN := $(RUST)/target/release
 
-SPLIT     := $(RUST_BIN)/split-decoys
-SPLIT_SRC := $(RUST)/split-decoys/src/main.rs
-
 PID       := $(RUST_BIN)/pid
 PID_SRC   := $(RUST)/pid/src
 
@@ -48,14 +45,11 @@ SRC_FA     := $(DATA)/swissprot.fa
 SRC_FA_IDX := $(SRC_FA).ssi
 
 # profmark output
-TRAIN_MSA := $(PM_NAME).train.msa
-TEST_FA   := $(PM_NAME).test.fa
-POS_FA    := $(PM_DIR)/positives.fa
-DEC_FA    := $(PM_DIR)/decoys.fa
-QUERY_STO := $(PM_DIR)/query.sto
-
-PM_OUT    := $(POS_FA) $(DEC_FA) $(QUERY_STO)
-PM_REMOVE := $(TEST_FA) $(PM_NAME).neg $(PM_NAME).pos $(PM_NAME).tbl
+TRAIN_MSA  := $(PM_NAME).train.msa
+TEST_MSA   := $(PM_NAME).test.msa
+QUERY_STO  := $(PM_DIR)/query.sto
+TARGET_STO := $(PM_DIR)/target.sto
+PM_OUT     := $(QUERY_STO) $(TARGET_STO)
 
 ##########################################
 ##########################################
@@ -72,11 +66,7 @@ $(CHECK_PATHS):
 
 check: $(CHECK_PATHS)
 
-$(SRC_FA_IDX):
-	@echo indexing \"$(SRC_FA)\"...
-	@esl-sfetch --index $(SRC_FA) >/dev/null
-
-$(PM_OUT): $(SRC_FA_IDX)
+$(PM_OUT):
 	@echo running profmark...
 	@mkdir -p $(PM_DIR)
 	@$(PROFMARK) \
@@ -84,31 +74,45 @@ $(PM_OUT): $(SRC_FA_IDX)
 		-N $(N_DECOYS) \
 		-1 $(TRAIN_TEST_ID) \
 		--cluster \
+		--onlysplit \
 		--mintest $(MIN_TEST) \
 		--maxtest $(MAX_TEST) \
-		$(PM_NAME) $(SRC_STO) $(SRC_FA)
+		$(PM_NAME) $(SRC_STO)
 	
-	@$(SPLIT) $(TEST_FA)
 	@mv $(TRAIN_MSA) $(QUERY_STO)
-	@rm $(PM_REMOVE)
+	@mv $(TEST_MSA) $(TARGET_STO)
+	@rm $(PM_NAME).tbl
 		
 profmark: $(PM_OUT)
 
+pmark:
+	@echo running profmark...
+	@mkdir -p $(PM_DIR)
+	@$(PROFMARK) \
+		-S $(SEED) \
+		-N $(N_DECOYS) \
+		-1 $(TRAIN_TEST_ID) \
+		--cluster \
+		--onlysplit \
+		--mintest $(MIN_TEST) \
+		--maxtest $(MAX_TEST) \
+		$(PM_NAME) $(SRC_STO)
+	
 $(PID): $(PID_SRC)/main.rs
 	@cd $(PID_SRC) && cargo build --release
 
 b%: profmark $(PID)
 	@mkdir -p b-$*
-	@$(PID) b-$* $(POS_FA) $(DEC_FA) $(QUERY_STO) $(SRC_STO) $* $(DECOY_RATIO)
+	@$(PID) b-$* $(QUERY_STO) $(TARGET_STO) $(SRC_STO) $(SRC_FA) $* $(DECOY_RATIO)
 	@$(HMMBUILD) b-$*/query.hmm b-$*/query.sto > /dev/null
 
 run-%:
 	@echo "benchmarking $*/ with $(THREADS) threads..."
-	@$(NAIL) $* $(THREADS)
-	@$(MMSEQS) $* $(THREADS)
-	@$(HMMER) $* $(THREADS)
-	@$(BLAST) $* $(THREADS)
-	@$(LAST) $* $(THREADS)
+	@$(NAIL)    $* $(THREADS)
+	@$(MMSEQS)  $* $(THREADS)
+	@$(HMMER)   $* $(THREADS)
+	@$(BLAST)   $* $(THREADS)
+	@$(LAST)    $* $(THREADS)
 	@$(DIAMOND) $* $(THREADS)
 
 $(PLOT): $(PLOT_SRC)/main.rs
