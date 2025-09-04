@@ -102,8 +102,10 @@ $(PID): $(PID_SRC)/main.rs
 	@cd $(PID_SRC) && cargo build --release
 
 b%: profmark $(PID)
+	@echo building benchmark...
 	@mkdir -p b-$*
 	@$(PID) b-$* $(QUERY_STO) $(TARGET_STO) $(SRC_STO) $(SRC_FA) $* $(DECOY_RATIO)
+	@echo building query.hmm...
 	@$(HMMBUILD) b-$*/query.hmm b-$*/query.sto > /dev/null
 
 run-%:
