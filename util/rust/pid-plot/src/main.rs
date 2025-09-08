@@ -3,23 +3,25 @@ use std::{
     env,
     fs::File,
     io::{BufRead, BufReader},
+    iter::once,
     path::Path,
 };
 
-use bioio::tbl::{BlastTable, Hit, HitTable, HmmerDomTable, NailTable};
+use bioio::tbl::{BlastTable, Hit, HitTable, HmmerTable, NailTable};
 
 use anyhow::{anyhow, bail, Context};
 use glob::glob;
 use plotters::{element::DashedPathElement, prelude::*};
 
 const N_BINS: usize = 41;
-const BIN_START: usize = 10;
-const BIN_MAX: usize = N_BINS + BIN_START - 1;
+const BIN_MIN: usize = 10;
+const BIN_MAX: usize = N_BINS + BIN_MIN - 1;
 
 const X_MIN: usize = 10;
-const X_MAX: usize = 30;
+const X_MAX: usize = 25;
+const X_CNT: usize = X_MAX - X_MIN + 1;
 
-const FPR: f32 = 0.001;
+const FPR: f32 = 10.0;
 
 const TOL_PURPLE: &str = "#332288";
 const TOL_GREEN: &str = "#117733";
@@ -33,10 +35,10 @@ const TOL_OLIVE: &str = "#999933";
 const COLORS: [&str; 8] = [
     TOL_PURPLE,
     TOL_GREEN,
-    TOL_TEAL,
     TOL_BLUE,
     TOL_YELLOW,
     TOL_PINK,
+    TOL_TEAL,
     TOL_MAGENTA,
     TOL_OLIVE,
 ];
@@ -49,40 +51,25 @@ fn hex_to_rgb(hex: &str) -> RGBColor {
     RGBColor(r, g, b)
 }
 
-struct TargetInfo<'a> {
-    family: &'a str,
-    id: usize,
+struct TargetInfo {
     bin: usize,
-    start: usize,
-    end: usize,
 }
 
 fn extract_target_info(hit: &Hit) -> anyhow::Result<TargetInfo> {
     //>Exo_endo_phos|83-289|10%:0 domain: O13348_MAGGR/17-223
     let mut tokens = hit.target.split('|');
 
-    let family = tokens.next().ok_or(anyhow!("no family"))?;
-
-    let mut range = tokens.next().ok_or(anyhow!("no range"))?.split('-');
-    let start = range.next().ok_or(anyhow!("no start"))?.parse()?;
-    let end = range.next().ok_or(anyhow!("no end"))?.parse()?;
-
-    let mut binfo = tokens.next().ok_or(anyhow!("no bin"))?.split(':');
-    let bin = binfo
+    let bin = tokens
+        .next_back()
+        .ok_or(anyhow!("no bin"))?
+        .split(':')
         .next()
         .ok_or(anyhow!("no bin"))?
         .strip_suffix('%')
         .ok_or(anyhow!("no %"))?
         .parse()?;
-    let id = binfo.next().ok_or(anyhow!("no id"))?.parse()?;
 
-    Ok(TargetInfo {
-        family,
-        id,
-        bin,
-        start,
-        end,
-    })
+    Ok(TargetInfo { bin })
 }
 
 fn main() -> anyhow::Result<()> {
@@ -106,39 +93,31 @@ fn main() -> anyhow::Result<()> {
         .map_while(Result::ok)
         .filter(|l| !l.starts_with('#'))
     {
-        let mut tokens = line.split_whitespace().next().unwrap().split('|');
-
-        queries.insert(
-            tokens
-                .next()
-                .expect("no query in benchmark table entry")
-                .to_string(),
-        );
+        let mut tokens = line.split_whitespace();
 
         tokens
-            .next_back()
+            .next()
             .expect("no bin in benchmark table entry")
             .split('%')
             .next()
             .expect("failed to split bin from id")
             .parse()
             .map(|b: usize| target_cnt_by_bin[b] += 1)?;
+
+        queries.insert(
+            tokens
+                .next_back()
+                .expect("no query in benchmark table entry")
+                .to_string(),
+        );
     }
 
     let queries = queries.iter().collect::<Vec<_>>();
     println!("queries found: {}", queries.len());
 
-    println!("target bin distribution:");
-    (BIN_START..=BIN_MAX)
-        .collect::<Vec<usize>>()
-        .chunks(5)
-        .for_each(|bins| {
-            bins.iter()
-                .for_each(|b| print!("{b}%: {} | ", target_cnt_by_bin[*b]));
-            println!();
-        });
+    let decoy_cnt = (FPR * queries.len() as f32).ceil() as usize;
 
-    let decoy_cnt = (FPR * queries.len() as f32) as usize;
+    println!("decoy count: {decoy_cnt}");
 
     let mut tables: Vec<HitTable> = vec![];
     let mut tools: HashSet<String> = HashSet::new();
@@ -165,42 +144,13 @@ fn main() -> anyhow::Result<()> {
         tools.insert(tool.to_string());
 
         let tbl = match tool {
-            "hmmer" => HitTable::parse::<_, HmmerDomTable>(file, &name),
+            "hmmer" => HitTable::parse::<_, HmmerTable>(file, &name),
             "nail" => HitTable::parse::<_, NailTable>(file, &name),
             _ => HitTable::parse::<_, BlastTable>(file, &name),
         }?;
 
         tables.push(tbl);
     }
-
-    if tools.len() > COLORS.len() {
-        bail!("not enough colors");
-    }
-
-    let mut tools: Vec<String> = tools.into_iter().collect();
-    tools.sort();
-
-    let color_by_tool: HashMap<String, RGBColor> = tools
-        .into_iter()
-        .zip(COLORS)
-        .map(|(t, c)| (t, hex_to_rgb(c)))
-        .collect();
-
-    let root = SVGBackend::new("plot.svg", (1280, 720)).into_drawing_area();
-    root.fill(&WHITE)?;
-
-    let mut chart = ChartBuilder::on(&root)
-        .caption("CAPTION", ("sans-serif", 20))
-        .margin(20)
-        .x_label_area_size(30)
-        .y_label_area_size(30)
-        .build_cartesian_2d(X_MIN..X_MAX, 0.0f32..1.0)?;
-
-    chart
-        .configure_mesh()
-        .disable_mesh()
-        .x_label_formatter(&|x| format!("{}%", X_MAX - x + X_MIN))
-        .draw()?;
 
     let filtered_tables: Vec<HitTable> = tables
         .into_iter()
@@ -266,6 +216,7 @@ fn main() -> anyhow::Result<()> {
                     true => {
                         decoys_found += 1;
                         if decoys_found >= decoy_cnt {
+                            println!("{} {:.2} {:.2e}", tbl.name, hit.score, hit.e_value);
                             break;
                         }
                     }
@@ -291,9 +242,11 @@ fn main() -> anyhow::Result<()> {
 
             let points = recall_by_bin
                 .into_iter()
+                .rev()
+                .skip(BIN_MAX - X_MAX)
                 .enumerate()
-                .skip(BIN_START)
-                .map(|(b, r)| (X_MAX - b + X_MIN, r))
+                .take(X_CNT)
+                .map(|(x, recall)| (x as f32, recall))
                 .collect::<Vec<_>>();
 
             (tbl.name, points)
@@ -307,6 +260,166 @@ fn main() -> anyhow::Result<()> {
         s1.partial_cmp(&s2).expect("NaN encountered")
     });
 
+    point_data.reverse();
+
+    // ------------------------------------------------
+    // --- plotting -----------------------------------
+    // ------------------------------------------------
+
+    if tools.len() > COLORS.len() {
+        bail!("not enough colors");
+    }
+
+    let mut tools: Vec<String> = tools.into_iter().collect();
+    tools.sort();
+
+    let color_by_tool: HashMap<String, RGBColor> = tools
+        .into_iter()
+        .zip(COLORS)
+        .map(|(t, c)| (t, hex_to_rgb(c)))
+        .collect();
+
+    let width = 600;
+    let height = 500;
+    let root = SVGBackend::new("plot.svg", (width, height)).into_drawing_area();
+    root.fill(&WHITE)?;
+    let (top, bottom) = root.split_vertically((height / 4) * 3);
+
+    let x_label_fmt = |x: &f32| -> String {
+        if *x as usize % 5 == 0 {
+            format!("{}%", X_MAX as f32 - x)
+        } else {
+            "".to_string()
+        }
+    };
+
+    let black = RGBColor(12, 4, 4);
+    let grey = &full_palette::GREY_800;
+    let x_range = 0f32..(X_CNT - 1) as f32;
+    let axis_style = grey.stroke_width(2);
+    let axis_desc_style = ("sans-serif", 12, &black);
+    let label_style = ("Arial", 10, grey);
+
+    let mut recall_chart = ChartBuilder::on(&top)
+        .caption(
+            "Recall by decreasing % pairwise identity",
+            ("sans-serif", 20),
+        )
+        .margin(20)
+        .margin_bottom(0)
+        .x_label_area_size(18)
+        .top_x_label_area_size(40)
+        .y_label_area_size(40)
+        .right_y_label_area_size(40)
+        .build_cartesian_2d(x_range.clone(), 0.0f32..1.0)?
+        .set_secondary_coord(x_range.clone(), 0.0f32..1.0);
+
+    recall_chart
+        .configure_mesh()
+        .disable_mesh()
+        .x_labels(X_CNT)
+        .x_label_formatter(&x_label_fmt)
+        .x_label_offset(3)
+        .x_desc("decreasing % pairwise identity")
+        .y_desc(format!("fraction of TP found at {FPR} FP per query"))
+        .axis_style(axis_style)
+        .axis_desc_style(axis_desc_style)
+        .label_style(label_style)
+        .draw()?;
+
+    recall_chart
+        .configure_secondary_axes()
+        .x_labels(X_CNT)
+        .x_label_formatter(&x_label_fmt)
+        .x_label_offset(3)
+        .y_desc("")
+        .axis_style(axis_style)
+        .axis_desc_style(axis_desc_style)
+        .label_style(label_style)
+        .draw()?;
+
+    recall_chart.draw_series(DashedLineSeries::new(
+        [(0.0, 0.5), (X_MAX as f32, 0.5)],
+        10,
+        7,
+        BLACK.mix(0.75).stroke_width(1),
+    ))?;
+
+    let max_bin_cnt = (*target_cnt_by_bin.iter().max().unwrap() as f32 / 100.0).round() * 100.0;
+
+    let mut bin_chart = ChartBuilder::on(&bottom)
+        .margin(20)
+        .margin_top(0)
+        .x_label_area_size(10)
+        .top_x_label_area_size(10)
+        .y_label_area_size(40)
+        .right_y_label_area_size(40)
+        .build_cartesian_2d(x_range.clone(), 0.0f32..max_bin_cnt)?
+        .set_secondary_coord(x_range.clone(), 0.0f32..max_bin_cnt);
+
+    bin_chart
+        .configure_mesh()
+        .disable_mesh()
+        .x_labels(X_CNT)
+        .x_label_formatter(&x_label_fmt)
+        .x_label_offset(3)
+        .y_labels(6)
+        .y_label_formatter(&|y| format!("{}", max_bin_cnt - y))
+        .y_desc("# of sequence pairs")
+        .axis_style(axis_style)
+        .axis_desc_style(axis_desc_style)
+        .label_style(label_style)
+        .draw()?;
+
+    bin_chart
+        .configure_secondary_axes()
+        .x_labels(X_CNT)
+        .x_label_formatter(&|_| "".to_string())
+        .x_label_offset(3)
+        .y_labels(6)
+        .y_label_formatter(&|y| format!("{}", max_bin_cnt - y))
+        .y_desc("")
+        .axis_style(axis_style)
+        .axis_desc_style(axis_desc_style)
+        .label_style(label_style)
+        .draw()?;
+
+    let bin_cnt_points = target_cnt_by_bin
+        .iter()
+        .rev()
+        .skip(BIN_MAX - X_MAX)
+        .enumerate()
+        .take(X_CNT)
+        .map(|(x, cnt)| (x as f32, max_bin_cnt - *cnt as f32))
+        .collect::<Vec<_>>();
+
+    let bin_chart_color = hex_to_rgb(TOL_MAGENTA);
+
+    bin_chart.draw_series([Polygon::new(
+        once((0.0f32, max_bin_cnt))
+            .chain(bin_cnt_points.iter().cloned())
+            .chain(once((BIN_MAX as f32, max_bin_cnt)))
+            .collect::<Vec<_>>(),
+        bin_chart_color.mix(0.60),
+    )])?;
+
+    bin_chart.draw_series(LineSeries::new(
+        bin_cnt_points.clone(),
+        bin_chart_color.stroke_width(2),
+    ))?;
+
+    bin_chart.draw_series(
+        bin_cnt_points
+            .iter()
+            .map(|(x, y)| Circle::new((*x, *y), 3, bin_chart_color.filled())),
+    )?;
+
+    bin_chart.draw_series(
+        bin_cnt_points
+            .iter()
+            .map(|(x, y)| Circle::new((*x, *y), 1, WHITE.filled())),
+    )?;
+
     for (name, points) in point_data.iter() {
         let mut tokens = name.split_whitespace();
         let tool = tokens.next().context("no name")?;
@@ -315,9 +428,9 @@ fn main() -> anyhow::Result<()> {
 
         match search_type {
             "seq" => {
-                chart
+                recall_chart
                     .draw_series(points.windows(2).map(|p| {
-                        DashedPathElement::new(vec![p[0], p[1]], 5, 3, color.stroke_width(3))
+                        DashedPathElement::new(vec![p[0], p[1]], 5, 3, color.stroke_width(2))
                     }))?
                     .label(name)
                     .legend(move |(x, y)| {
@@ -330,8 +443,8 @@ fn main() -> anyhow::Result<()> {
                     });
             }
             "prf" => {
-                chart
-                    .draw_series(LineSeries::new(points.clone(), color.stroke_width(3)))?
+                recall_chart
+                    .draw_series(LineSeries::new(points.clone(), color.stroke_width(2)))?
                     .label(name)
                     .legend(move |(x, y)| {
                         PathElement::new(vec![(x, y), (x + 21, y)], color.stroke_width(3))
@@ -340,20 +453,26 @@ fn main() -> anyhow::Result<()> {
             _ => bail!("bad search type"),
         }
 
-        chart.draw_series(
+        recall_chart.draw_series(
             points
                 .iter()
-                .map(|(x, y)| Circle::new((*x, *y), 4, color.filled())),
+                .map(|(x, y)| Circle::new((*x, *y), 3, color.filled())),
         )?;
 
-        chart.draw_series(
+        recall_chart.draw_series(
             points
                 .iter()
                 .map(|(x, y)| Circle::new((*x, *y), 1, WHITE.filled())),
         )?;
     }
 
-    chart.configure_series_labels().border_style(BLACK).draw()?;
+    recall_chart
+        .configure_series_labels()
+        .border_style(BLACK)
+        .margin(5)
+        .background_style(WHITE.filled())
+        .position(SeriesLabelPosition::UpperRight)
+        .draw()?;
 
     Ok(())
 }

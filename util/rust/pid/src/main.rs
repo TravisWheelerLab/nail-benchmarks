@@ -8,22 +8,14 @@ use anyhow::{bail, Context};
 use bioio::fasta::FastaRecord;
 use bioio::{fasta::Fasta, stockholm::Stockholm};
 
-use rand::seq::IndexedRandom;
+use rand::seq::{IndexedRandom, SliceRandom};
 use rand::{rng, Rng};
-use rand_distr::{Distribution, Normal};
 
 const N_BINS: usize = 41;
 const BIN_START: usize = 10;
 const BIN_END: usize = N_BINS + BIN_START - 1;
 
 const MIN_LENGTH: usize = 200;
-
-const DECOY_MEAN: f64 = 400.0;
-const DECOY_STD_DEV: f64 = 50.0;
-const DECOY_MIN_LEN: isize = 200;
-const DECOY_MAX_LEN: isize = 600;
-const DECOY_MIN_FRAG: usize = 2;
-const DECOY_MAX_FRAG: usize = 4;
 
 #[derive(Clone)]
 struct Pair {
@@ -227,15 +219,13 @@ fn main() -> anyhow::Result<()> {
         }
     }
 
-    let mut target_writer = BufWriter::new(
-        File::create(bm_dir.join("target.fa")).context("failed to open target.fa for output")?,
-    );
     let mut tbl_writer = BufWriter::new(
         File::create(bm_dir.join("benchmark.tbl"))
             .context("failed to open benchmark.tbl for output")?,
     );
     writeln!(tbl_writer, "#identity family target query")?;
 
+    let mut targets: Vec<FastaRecord> = Vec::new();
     // store queries in a hash to prevent duplicates, since it's
     // possible that two targets share a most similar query
     let mut queries: HashSet<FastaRecord> = HashSet::new();
@@ -281,9 +271,8 @@ fn main() -> anyhow::Result<()> {
                 })
                 .context("failed to build target fasta record")?;
 
+            targets.push(target);
             queries.insert(query);
-
-            writeln!(target_writer, "{target}").context("failed to write to target.fa")?;
 
             writeln!(
                 tbl_writer,
@@ -294,6 +283,14 @@ fn main() -> anyhow::Result<()> {
         }
     }
     println!("done");
+
+    let mut target_writer = BufWriter::new(
+        File::create(bm_dir.join("target.fa")).context("failed to open target.fa for output")?,
+    );
+
+    targets
+        .iter()
+        .try_for_each(|t| writeln!(target_writer, "{t}").context("failed to write to target.fa"))?;
 
     let mut query_fa_writer = BufWriter::new(
         File::create(bm_dir.join("query.fa")).context("failed to open query.fa for output")?,
@@ -326,47 +323,45 @@ fn main() -> anyhow::Result<()> {
 
     println!("sampling {n_decoys} decoys from a source of {n_src} seqs...");
 
-    let len_distribution = Normal::new(DECOY_MEAN, DECOY_STD_DEV).unwrap();
+    let mut src_bytes: &[u8] = &[];
     for decoy_idx in 0..n_decoys {
-        let decoy_len = (len_distribution.sample(&mut rng).round() as isize)
-            .clamp(DECOY_MIN_LEN, DECOY_MAX_LEN) as usize;
-        let frag_cnt: usize = rng.random_range(DECOY_MIN_FRAG..=DECOY_MAX_FRAG);
-        let mut points: Vec<f64> = (0..frag_cnt).map(|_| rng.random_range(0.0..=1.0)).collect();
+        // pick a length by taking a random target
+        let decoy_len = targets
+            .get(rng.random_range(0..targets.len()))
+            .context("bad fasta index")?
+            .seq
+            .len();
 
-        points.append(&mut vec![0.0, 1.0]);
-        points.sort_by(|a, b| a.partial_cmp(b).expect("NaN encountered"));
-
-        let mut decoy_bytes = Vec::new();
-        for frag_len in points
-            .windows(2)
-            .map(|p| ((p[1] - p[0]) * decoy_len as f64).round() as usize)
-        {
-            let mut n_to_add = frag_len;
-            while n_to_add > 0 {
-                let src_bytes = src_fa
-                    .records
-                    .get_index(rng.random_range(0..n_src))
-                    .context("bad fasta index")?
-                    .1
-                    .seq
-                    .as_bytes();
-
-                let byte_sample = src_bytes.choose_multiple(&mut rng, n_to_add).copied();
-
-                n_to_add -= byte_sample.len();
-                decoy_bytes.extend(byte_sample);
-            }
+        // grab from the source seqs until we
+        // find one of at least that length
+        while src_bytes.len() < decoy_len {
+            src_bytes = src_fa
+                .records
+                .get_index(rng.random_range(0..n_src))
+                .context("bad fasta index")?
+                .1
+                .seq
+                .as_bytes();
         }
+
+        let max_start = src_bytes.len() - decoy_len;
+        let start = rng.random_range(0..=max_start);
+        let end = start + decoy_len;
+
+        let mut sample: Vec<u8> = src_bytes[start..end].to_vec();
+        sample.shuffle(&mut rng);
 
         let decoy = FastaRecord {
             name: format!("decoy{decoy_idx}"),
             extra: "".to_string(),
-            seq: std::str::from_utf8(&decoy_bytes)
+            seq: std::str::from_utf8(&sample)
                 .context("failed to build decoy seq")?
                 .to_string(),
         };
 
         writeln!(target_writer, "{decoy}").context("failed to write to target.fa")?;
+
+        src_bytes = &[]
     }
     println!("done");
 

@@ -20,6 +20,7 @@ $LASTDB -p $TARGET_DB $TARGET
 echo "running last..."
 /usr/bin/time -p -o $TIME_1 \
     $LASTAL $TARGET_DB $QUERY_FA \
+    -m 100 \
     -f BlastTab \
     -P $THREADS \
     > $TBL_1

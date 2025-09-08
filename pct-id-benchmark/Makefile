@@ -5,8 +5,8 @@ DECOY_RATIO ?= 100
 SEED          ?= 67779
 N_DECOYS      ?= 5000000
 TRAIN_TEST_ID ?= 0.5
-MIN_TEST      ?= 10
-MAX_TEST      ?= 30
+MIN_TEST      ?= 1
+MAX_TEST      ?= 100
 
 MAKEFILE_DIR := $(dir $(abspath $(lastword $(MAKEFILE_LIST))))
 TOOLS    := $(realpath $(MAKEFILE_DIR)../tools)
@@ -106,7 +106,8 @@ b%: profmark $(PID)
 	@mkdir -p b-$*
 	@$(PID) b-$* $(QUERY_STO) $(TARGET_STO) $(SRC_STO) $(SRC_FA) $* $(DECOY_RATIO)
 	@echo building query.hmm...
-	@$(HMMBUILD) b-$*/query.hmm b-$*/query.sto > /dev/null
+	@$(HMMBUILD) --cpu $(THREADS) b-$*/query.hmm b-$*/query.sto > /dev/null
+	@echo done
 
 run-%:
 	@echo "benchmarking $*/ with $(THREADS) threads..."
