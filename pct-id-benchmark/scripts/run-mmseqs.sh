@@ -22,7 +22,7 @@ TIME_1=$RESULTS/mmseqs.seq.time
 TBL_2=$RESULTS/mmseqs.prf.tbl
 TIME_2=$RESULTS/mmseqs.prf.time
 
-S_ARGS="$QDB $TDB $ADB $TMP --threads $THREADS"
+S_ARGS="$QDB $TDB $ADB $TMP --threads $THREADS" -s 7.5  --max-seqs 1000
 C_ARGS="--format-mode 0"
 
 rm -rf $TMP/*

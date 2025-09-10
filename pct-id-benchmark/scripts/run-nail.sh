@@ -16,7 +16,7 @@ TIME_1=$RESULTS/nail.seq.time
 TBL_2=$RESULTS/nail.prf.tbl
 TIME_2=$RESULTS/nail.prf.time
 
-S_ARGS="-s -t $THREADS -E $E --tmp-dir $TMP"
+S_ARGS="-s -t $THREADS -E $E --tmp-dir $TMP --double-seed"
 
 echo "running nail seq..."
 /usr/bin/time -p -o $TIME_1 \

@@ -21,7 +21,7 @@ const X_MIN: usize = 10;
 const X_MAX: usize = 25;
 const X_CNT: usize = X_MAX - X_MIN + 1;
 
-const FPR: f32 = 10.0;
+const FPR: f32 = 0.01;
 
 const TOL_PURPLE: &str = "#332288";
 const TOL_GREEN: &str = "#117733";
@@ -281,7 +281,7 @@ fn main() -> anyhow::Result<()> {
 
     let width = 600;
     let height = 500;
-    let root = SVGBackend::new("plot.svg", (width, height)).into_drawing_area();
+    let root = SVGBackend::new("pid.svg", (width, height)).into_drawing_area();
     root.fill(&WHITE)?;
     let (top, bottom) = root.split_vertically((height / 4) * 3);
 
