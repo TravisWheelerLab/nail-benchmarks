@@ -3,8 +3,7 @@ DECOY_RATIO ?= 100
 
 # profmark args
 SEED          ?= 67779
-N_DECOYS      ?= 5000000
-TRAIN_TEST_ID ?= 0.5
+TRAIN_TEST_ID ?= 0.26
 MIN_TEST      ?= 1
 MAX_TEST      ?= 100
 
@@ -17,6 +16,7 @@ SCRIPTS  := $(MAKEFILE_DIR)/scripts
 # hmmer util
 PROFMARK   := $(TOOLS)/bin/create-profmark
 HMMBUILD   := $(TOOLS)/bin/hmmbuild
+HMMEMIT    := $(TOOLS)/bin/hmmemit
 HMMBALANCE := $(UTIL)/scripts/hmmbalance
 
 # rust util
@@ -71,7 +71,6 @@ $(PM_OUT):
 	@mkdir -p $(PM_DIR)
 	@$(PROFMARK) \
 		-S $(SEED) \
-		-N $(N_DECOYS) \
 		-1 $(TRAIN_TEST_ID) \
 		--cluster \
 		--onlysplit \
@@ -107,15 +106,15 @@ b%: profmark $(PID)
 	@$(PID) b-$* $(QUERY_STO) $(TARGET_STO) $(SRC_STO) $(SRC_FA) $* $(DECOY_RATIO)
 	@echo building query.hmm...
 	@$(HMMBUILD) --cpu $(THREADS) b-$*/query.hmm b-$*/query.sto > /dev/null
+	@$(HMMEMIT) -c b-$*/query.hmm > b-$*/query.cons.fa
 	@echo done
 
 run-%:
 	@echo "benchmarking $*/ with $(THREADS) threads..."
+	@$(HMMER)   $* $(THREADS)
 	@$(NAIL)    $* $(THREADS)
 	@$(MMSEQS)  $* $(THREADS)
-	@$(HMMER)   $* $(THREADS)
 	@$(BLAST)   $* $(THREADS)
-	@$(LAST)    $* $(THREADS)
 	@$(DIAMOND) $* $(THREADS)
 
 $(PLOT): $(PLOT_SRC)/main.rs

@@ -17,16 +17,18 @@ TDB=$TMP/targetDB
 ADB=$TMP/alignDB
 FDB=$TMP/forwardDB
 
-TBL_1=$RESULTS/mmseqs.seq.tbl
-TIME_1=$RESULTS/mmseqs.seq.time
-TBL_2=$RESULTS/mmseqs.prf.tbl
-TIME_2=$RESULTS/mmseqs.prf.time
+TBL_1=$RESULTS/mmseqs.pair.tbl
+TIME_1=$RESULTS/mmseqs.pair.time
+TBL_2=$RESULTS/mmseqs.cons.tbl
+TIME_2=$RESULTS/mmseqs.cons.time
+TBL_3=$RESULTS/mmseqs.prf.tbl
+TIME_3=$RESULTS/mmseqs.prf.time
 
-S_ARGS="$QDB $TDB $ADB $TMP --threads $THREADS" -s 7.5  --max-seqs 1000
+S_ARGS="$QDB $TDB $ADB $TMP --threads $THREADS -s 7.5  --max-seqs 1000"
 C_ARGS="--format-mode 0"
 
 rm -rf $TMP/*
-echo "running mmseqs seq..."
+echo "running mmseqs seq pairwise..."
 (
     $MMSEQS createdb $TARGET $TDB
     $MMSEQS createdb $QUERY_FA $QDB
@@ -37,13 +39,24 @@ cat $TIME_1 | grep real | awk '{print $2 "s"}'
 echo
 
 rm -rf $TMP/*
+echo "running mmseqs seq consensus..."
+(
+    $MMSEQS createdb $TARGET $TDB
+    $MMSEQS createdb $QUERY_CONS_FA $QDB
+    $MMSEQS search $S_ARGS -e $E
+    $MMSEQS convertalis $QDB $TDB $ADB $TBL_2 $C_ARGS
+) | /usr/bin/time -p -o "$TIME_2" cat >/dev/null
+cat $TIME_2 | grep real | awk '{print $2 "s"}'
+echo
+
+rm -rf $TMP/*
 echo "running mmseqs profile..."
 (
     $MMSEQS convertmsa $QUERY_MSA $MDB --identifier-field 0
     $MMSEQS msa2profile $MDB $QDB --match-mode 1
     $MMSEQS createdb $TARGET $TDB
     $MMSEQS search $S_ARGS -e $E
-    $MMSEQS convertalis $QDB $TDB $ADB $TBL_2 $C_ARGS
-) | /usr/bin/time -p -o "$TIME_2" cat >/dev/null
-cat $TIME_2 | grep real | awk '{print $2 "s"}'
+    $MMSEQS convertalis $QDB $TDB $ADB $TBL_3 $C_ARGS
+) | /usr/bin/time -p -o "$TIME_3" cat >/dev/null
+cat $TIME_3 | grep real | awk '{print $2 "s"}'
 echo

@@ -11,12 +11,14 @@ TMP=./tmp/diamond
 mkdir -p $TMP
 TARGET_DB=$TMP/target_db
 
-TBL_1=$RESULTS/diamond.seq.tbl
-TIME_1=$RESULTS/diamond.seq.time
+TBL_1=$RESULTS/diamond.pair.tbl
+TIME_1=$RESULTS/diamond.pair.time
+TBL_2=$RESULTS/diamond.cons.tbl
+TIME_2=$RESULTS/diamond.cons.time
 
 $DIAMOND makedb --in $TARGET --db $TARGET_DB > /dev/null 2>&1
 
-echo "running diamond..."
+echo "running diamond pairwise..."
 /usr/bin/time -p -o $TIME_1 \
     $DIAMOND blastp --query $QUERY_FA \
     --db $TARGET_DB \
@@ -26,4 +28,16 @@ echo "running diamond..."
     --threads $THREADS \
     > /dev/null 2>&1
 cat $TIME_1 | grep real | awk '{print $2 "s"}'
+echo
+
+echo "running diamond consensus..."
+/usr/bin/time -p -o $TIME_2 \
+    $DIAMOND blastp --query $QUERY_CONS_FA \
+    --db $TARGET_DB \
+    --out $TBL_2 \
+    --outfmt 6 \
+    --evalue $E \
+    --threads $THREADS \
+    > /dev/null 2>&1
+cat $TIME_2 | grep real | awk '{print $2 "s"}'
 echo

@@ -15,15 +15,18 @@ N_SPLITS=$(( THREADS / 4 ))
 SPLIT_THREADS=4
 SPLIT_DIR=$DIR/query-splits
 
-TBL_1=$RESULTS/hmmer.seq.tbl
-TIME_1=$RESULTS/hmmer.seq.time
+TBL_1=$RESULTS/hmmer.pair.tbl
+TIME_1=$RESULTS/hmmer.pair.time
 
-TBL_2=$RESULTS/hmmer.prf.tbl
-TIME_2=$RESULTS/hmmer.prf.time
+TBL_2=$RESULTS/hmmer.cons.tbl
+TIME_2=$RESULTS/hmmer.cons.time
+
+TBL_3=$RESULTS/hmmer.prf.tbl
+TIME_3=$RESULTS/hmmer.prf.time
 
 S_ARGS="--cpu $SPLIT_THREADS -E $E -o /dev/null"
 
-echo "running phmmer.."
+echo "running phmmer pairwise.."
 SPLIT_TIME=$($TIME $FASTABALANCE $QUERY_FA $N_SPLITS $SPLIT_DIR 2>&1)
 echo "balance time: $(echo $SPLIT_TIME | awk '{print $2 "s"}')"
 
@@ -41,6 +44,24 @@ echo "split times:"
 cat $TIME_1 | grep real | awk '{print $2 "s"}'
 echo
 
+echo "running phmmer consensus.."
+SPLIT_TIME=$($TIME $FASTABALANCE $QUERY_CONS_FA $N_SPLITS $SPLIT_DIR 2>&1)
+echo "balance time: $(echo $SPLIT_TIME | awk '{print $2 "s"}')"
+
+parallel \
+    "${TIME} -o ${SPLIT_DIR}/{/.}.time \
+    $PHMMER $S_ARGS \
+    --tblout ${SPLIT_DIR}/{/.}.tbl \
+    {} ${TARGET}" \
+    ::: "${SPLIT_DIR}"/*.fa
+
+cat $SPLIT_DIR/*.tbl > $TBL_2
+cat $SPLIT_DIR/*.time > $TIME_2
+rm -rf $SPLIT_DIR
+echo "split times:"
+cat $TIME_2 | grep real | awk '{print $2 "s"}'
+echo
+
 echo "running hmmsearch..."
 SPLIT_TIME=$($TIME $HMMBALANCE $QUERY_HMM $N_SPLITS $SPLIT_DIR 2>&1)
 echo "balance time: $(echo $SPLIT_TIME | awk '{print $2 "s"}')"
@@ -52,10 +73,10 @@ parallel \
     {} ${TARGET}" \
     ::: "${SPLIT_DIR}"/*.hmm
 
-cat $SPLIT_DIR/*.tbl > $TBL_2
-cat $SPLIT_DIR/*.time > $TIME_2
+cat $SPLIT_DIR/*.tbl > $TBL_3
+cat $SPLIT_DIR/*.time > $TIME_3
 rm -rf $SPLIT_DIR
 echo "split times:"
-cat $TIME_2 | grep real | awk '{print $2 "s"}'
+cat $TIME_3 | grep real | awk '{print $2 "s"}'
 echo
 
