@@ -1,4 +1,5 @@
 use std::{
+    fmt::Display,
     fs::File,
     io::{BufRead, BufReader, Read},
     path::Path,
@@ -6,6 +7,7 @@ use std::{
 
 use anyhow::Context;
 
+#[derive(Clone)]
 pub struct Hit {
     pub query: String,
     pub target: String,
@@ -15,6 +17,12 @@ pub struct Hit {
     pub target_end: Option<usize>,
     pub score: f64,
     pub e_value: f64,
+}
+
+impl Display for Hit {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{} {} {:.2e}", self.query, self.target, self.e_value)
+    }
 }
 
 pub trait HitColumns {

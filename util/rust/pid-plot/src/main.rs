@@ -115,7 +115,7 @@ fn main() -> anyhow::Result<()> {
     let bm_dir = Path::new(&args[1]);
 
     let benchmark = Benchmark::new(bm_dir.join("benchmark.tbl"))?;
-    let tables = Tables::new(bm_dir.join("results"))?;
+    let tables = Tables::new(bm_dir.join("results"), &benchmark)?;
 
     lollipop(&benchmark, &tables)?;
 
@@ -123,8 +123,9 @@ fn main() -> anyhow::Result<()> {
 }
 
 struct Benchmark {
-    queries: Vec<String>,
+    families: Vec<String>,
     target_cnt_by_pid: [usize; PID_MAX + 1],
+    pairs: HashMap<String, String>,
 }
 
 impl Benchmark {
@@ -132,7 +133,8 @@ impl Benchmark {
         let tbl_reader = BufReader::new(File::open(tbl_path)?);
 
         let mut target_cnt_by_pid = [0usize; PID_MAX + 1];
-        let mut queries = HashSet::new();
+        let mut families = HashSet::new();
+        let mut pairs = HashMap::new();
 
         for line in tbl_reader
             .lines()
@@ -152,30 +154,85 @@ impl Benchmark {
 
             target_cnt_by_pid[pid] += 1;
 
-            queries.insert(
+            families.insert(
                 tokens
-                    .next_back()
+                    .next()
+                    .context("no family in benchmark table entry")?
+                    .to_string(),
+            );
+
+            pairs.insert(
+                tokens
+                    .next()
+                    .context("no target in benchmark table entry")?
+                    .to_string(),
+                tokens
+                    .next()
                     .context("no query in benchmark table entry")?
                     .to_string(),
             );
         }
 
         Ok(Self {
-            queries: queries.into_iter().collect::<Vec<_>>(),
+            families: families.into_iter().collect::<Vec<_>>(),
             target_cnt_by_pid,
+            pairs,
         })
     }
 }
 
+pub struct Table {
+    name: String,
+    pos: Vec<Hit>,
+    decoys: Vec<Hit>,
+}
+
+impl Table {
+    fn from_hit_table(hit_tbl: &HitTable) -> Self {
+        let (mut pos, mut decoys): (Vec<Hit>, Vec<Hit>) = hit_tbl
+            .hits
+            .iter()
+            .filter(|h| {
+                let q = if h.query.contains("-consensus") {
+                    h.query.split('-').next().unwrap()
+                } else {
+                    h.query.split('|').next().unwrap()
+                };
+                let t = h.target.split('|').next().unwrap();
+                q == t || t.starts_with("decoy")
+            })
+            .cloned()
+            .partition(|h| !h.target.starts_with("decoy"));
+
+        pos.sort_by(|a, b| {
+            a.e_value
+                .partial_cmp(&b.e_value)
+                .expect("NaN encountered in E-value sort")
+        });
+
+        decoys.sort_by(|a, b| {
+            a.e_value
+                .partial_cmp(&b.e_value)
+                .expect("NaN encountered in E-value sort")
+        });
+
+        Table {
+            name: hit_tbl.name.to_string(),
+            pos,
+            decoys,
+        }
+    }
+}
+
 pub struct Tables {
-    tables: Vec<HitTable>,
-    tools: HashSet<String>,
+    tables: Vec<Table>,
+    tools: Vec<String>,
 }
 
 impl Tables {
-    fn new<P: AsRef<Path>>(results_dir: P) -> anyhow::Result<Self> {
+    fn new<P: AsRef<Path>>(results_dir: P, benchmark: &Benchmark) -> anyhow::Result<Self> {
         let results_dir = PathBuf::from(results_dir.as_ref());
-        let mut tables: Vec<HitTable> = vec![];
+        let mut tables: Vec<Table> = vec![];
         let mut tools: HashSet<String> = HashSet::new();
 
         for path in glob(
@@ -199,82 +256,87 @@ impl Tables {
 
             tools.insert(tool.to_string());
 
-            let tbl = match tool {
+            let hit_tbl = match tool {
                 "hmmer" => HitTable::parse::<_, HmmerTable>(file, &name),
                 "nail" => HitTable::parse::<_, NailTable>(file, &name),
                 _ => HitTable::parse::<_, BlastTable>(file, &name),
             }?;
 
-            tables.push(tbl);
-        }
+            match hit_tbl
+                .name
+                .split_whitespace()
+                .next_back()
+                .context("no search type in table name")?
+            {
+                "pair" => {
+                    // what: filter the hit list such that for each (fam, target)
+                    //       pair, retain only the best (lowest E-value) match
+                    //
+                    //  why: since we're benchmarking pairwise-family search
+                    //
+                    //  how: build a hash that maps (fam, target) -> hit, where a hit
+                    //       replaces an existing entry if it has a better E-value
+                    let mut hits_by_pair: HashMap<(String, String), Hit> = HashMap::new();
+                    hit_tbl
+                        .hits
+                        .iter()
+                        .cloned()
+                        .map(|h| (h.query.split('|').next().unwrap().to_string(), h))
+                        .for_each(|(q_fam, hit)| {
+                            let key = (q_fam, hit.target.to_string());
 
-        let tables: Vec<HitTable> = tables
-            .into_iter()
-            .map(|tbl| {
-                // what: filter the hit list such that for each (fam, target)
-                //       pair, retain only the best (lowest E-value) match
-                //
-                //       also, filter out family mismatch hits while we're at it
-                //
-                //  why: since we're benchmarking pairwise-family search
-                //
-                //  how: build a hash that maps (fam, target) -> hit, where a hit
-                //       replaces an existing entry if it has a better E-value
-                let mut hits_by_pair: HashMap<(String, String), Hit> = HashMap::new();
-                tbl.hits
-                    .into_iter()
-                    .map(|h| {
-                        if h.query.contains("consensus") {
-                            (
-                                h.query.split('-').next().unwrap().to_string(),
-                                h.target.split('|').next().unwrap().to_string(),
-                                h,
-                            )
-                        } else {
-                            (
-                                h.query.split('|').next().unwrap().to_string(),
-                                h.target.split('|').next().unwrap().to_string(),
-                                h,
-                            )
-                        }
-                    })
-                    // include only same-family hits & decoys
-                    .filter(|(q_fam, t_fam, _)| q_fam == t_fam || t_fam.starts_with("decoy"))
-                    .for_each(|(q_fam, _, hit)| {
-                        let key = (q_fam, hit.target.to_string());
-
-                        match hits_by_pair.get(&key) {
-                            Some(existing) => {
-                                if hit.e_value < existing.e_value {
+                            match hits_by_pair.get(&key) {
+                                Some(existing) => {
+                                    if hit.e_value < existing.e_value {
+                                        hits_by_pair.insert(key, hit);
+                                    }
+                                }
+                                None => {
                                     hits_by_pair.insert(key, hit);
                                 }
                             }
-                            None => {
-                                hits_by_pair.insert(key, hit);
-                            }
-                        }
-                    });
+                        });
 
-                let mut filtered_hits: Vec<Hit> = hits_by_pair.into_values().collect();
-                filtered_hits.sort_by(|a, b| {
-                    a.e_value
-                        .partial_cmp(&b.e_value)
-                        .expect("NaN E-value encountered")
-                });
+                    let pairwise_hits: Vec<Hit> = hits_by_pair.into_values().collect();
 
-                HitTable {
-                    name: tbl.name,
-                    hits: filtered_hits,
+                    tables.push(Table::from_hit_table(&HitTable {
+                        name: format!("{name}wise"),
+                        hits: pairwise_hits,
+                    }));
+
+                    // let pair_hits: Vec<Hit> = hit_tbl
+                    //     .hits
+                    //     .iter()
+                    //     .filter(|h| {
+                    //         println!("{}", h.target);
+                    //         let target = h.target.split('|').nth(1).unwrap();
+                    //         h.query
+                    //             == *benchmark
+                    //                 .pairs
+                    //                 .get(target)
+                    //                 .unwrap_or_else(|| panic!("{}", target))
+                    //     })
+                    //     .cloned()
+                    //     .collect();
+
+                    // tables.push(Table::from_hit_table(&HitTable {
+                    //     name,
+                    //     hits: pair_hits,
+                    // }))
                 }
-            })
-            .collect();
+                _ => tables.push(Table::from_hit_table(&hit_tbl)),
+            }
+        }
 
-        Ok(Self { tables, tools })
+        Ok(Self {
+            tables,
+            tools: tools.into_iter().collect(),
+        })
     }
 }
 
 fn lollipop(benchmark: &Benchmark, tables: &Tables) -> anyhow::Result<()> {
-    let decoy_cnt = (FPR * benchmark.queries.len() as f32).ceil() as usize;
+    let decoy_cnt = (FPR * benchmark.families.len() as f32).ceil() as usize;
 
     let mut target_cnt_by_x = [0usize; X_MAX];
     benchmark
@@ -293,28 +355,15 @@ fn lollipop(benchmark: &Benchmark, tables: &Tables) -> anyhow::Result<()> {
         .iter()
         .map(|tbl| {
             let mut num_hits_by_x = vec![0usize; X_MAX - 1];
+            let e_value_cutoff = tbl.decoys[decoy_cnt].e_value;
+            for hit in tbl.pos.iter().take_while(|h| h.e_value <= e_value_cutoff) {
+                let pid = extract_target_pid(&hit.target).expect("failed to extract target info");
 
-            let mut decoys_found = 0;
-            for hit in tbl.hits.iter() {
-                match hit.target.starts_with("decoy") {
-                    true => {
-                        decoys_found += 1;
-                        if decoys_found >= decoy_cnt {
-                            println!("{} {:.2} {:.2e}", tbl.name, hit.score, hit.e_value);
-                            break;
-                        }
-                    }
-                    false => {
-                        let pid =
-                            extract_target_pid(&hit.target).expect("failed to extract target info");
-
-                        if (BIN_MIN..=BIN_MAX).contains(&pid) {
-                            let x = PID_TO_X
-                                .get(&pid)
-                                .unwrap_or_else(|| panic!("no x for pid: {pid}",));
-                            num_hits_by_x[*x] += 1;
-                        }
-                    }
+                if (BIN_MIN..=BIN_MAX).contains(&pid) {
+                    let x = PID_TO_X
+                        .get(&pid)
+                        .unwrap_or_else(|| panic!("no x for pid: {pid}",));
+                    num_hits_by_x[*x] += 1;
                 }
             }
 
@@ -515,7 +564,7 @@ fn lollipop(benchmark: &Benchmark, tables: &Tables) -> anyhow::Result<()> {
                             + Circle::new((x + 21, y), 2, color.filled())
                     });
             }
-            "pair" => {
+            "pairwise" => {
                 recall_chart
                     .draw_series(
                         points
