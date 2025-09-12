@@ -32,7 +32,7 @@ echo
 
 echo "running blast consensus..."
 /usr/bin/time -p -o $TIME_2 \
-    $BLASTP -query $QUERY_FA \
+    $BLASTP -query $QUERY_CONS_FA \
     -db $TARGET_DB \
     -out $TBL_2 \
     -outfmt 7 \

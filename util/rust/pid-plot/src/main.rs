@@ -14,7 +14,7 @@ use glob::glob;
 use indexmap::IndexMap;
 use once_cell::sync::Lazy;
 
-use plotters::{element::DashedPathElement, prelude::*};
+use plotters::prelude::*;
 
 const FPR: f32 = 0.01;
 
@@ -180,7 +180,7 @@ impl Tables {
 
         for path in glob(
             results_dir
-                .join("*tbl")
+                .join("*.tbl")
                 .to_str()
                 .context("invalid *tbl glob")?,
         )?
@@ -224,11 +224,19 @@ impl Tables {
                 tbl.hits
                     .into_iter()
                     .map(|h| {
-                        (
-                            h.query.split('|').next().unwrap().to_string(),
-                            h.target.split('|').next().unwrap().to_string(),
-                            h,
-                        )
+                        if h.query.contains("consensus") {
+                            (
+                                h.query.split('-').next().unwrap().to_string(),
+                                h.target.split('|').next().unwrap().to_string(),
+                                h,
+                            )
+                        } else {
+                            (
+                                h.query.split('|').next().unwrap().to_string(),
+                                h.target.split('|').next().unwrap().to_string(),
+                                h,
+                            )
+                        }
                     })
                     // include only same-family hits & decoys
                     .filter(|(q_fam, t_fam, _)| q_fam == t_fam || t_fam.starts_with("decoy"))
@@ -487,52 +495,13 @@ fn lollipop(benchmark: &Benchmark, tables: &Tables) -> anyhow::Result<()> {
         let search_type = tokens.next().context("no search type")?;
         let color = color_by_tool.get(tool).context("no color for tool")?;
 
-        // match search_type {
-        //     "seq" => {
-        //         recall_chart
-        //             .draw_series(points.windows(2).map(|p| {
-        //                 DashedPathElement::new(vec![p[0], p[1]], 5, 3, color.stroke_width(2))
-        //             }))?
-        //             .label(name)
-        //             .legend(move |(x, y)| {
-        //                 DashedPathElement::new(
-        //                     vec![(x, y), (x + 21, y)],
-        //                     5,
-        //                     3,
-        //                     color.stroke_width(3),
-        //                 )
-        //             });
-        //     }
-        //     "prf" => {
-        //         recall_chart
-        //             .draw_series(LineSeries::new(points.clone(), color.stroke_width(2)))?
-        //             .label(name)
-        //             .legend(move |(x, y)| {
-        //                 PathElement::new(vec![(x, y), (x + 21, y)], color.stroke_width(3))
-        //             });
-        //     }
-        //     _ => bail!("bad search type"),
-        // }
-
-        // recall_chart.draw_series(
-        //     points
-        //         .iter()
-        //         .map(|(x, y)| Circle::new((*x, *y), 3, color.filled())),
-        // )?;
-
-        // recall_chart.draw_series(
-        //     points
-        //         .iter()
-        //         .map(|(x, y)| Circle::new((*x, *y), 1, WHITE.filled())),
-        // )?;
-
-        let o1 = i as f32 / 10.0;
+        let o1 = i as f32 / 15.0;
         recall_chart.draw_series(points.iter().map(|(x, y)| {
             PathElement::new(vec![(*x + o1, 0.0), (*x + o1, *y)], color.stroke_width(3))
         }))?;
 
         match search_type {
-            "seq" => {
+            "prf" => {
                 recall_chart
                     .draw_series(
                         points
@@ -546,7 +515,28 @@ fn lollipop(benchmark: &Benchmark, tables: &Tables) -> anyhow::Result<()> {
                             + Circle::new((x + 21, y), 2, color.filled())
                     });
             }
-            "prf" => {
+            "pair" => {
+                recall_chart
+                    .draw_series(
+                        points
+                            .iter()
+                            .map(|(x, y)| Circle::new((*x + o1, *y), 2, color.filled())),
+                    )?
+                    .label(name)
+                    .legend(move |(x, y)| {
+                        EmptyElement::at((0, 0))
+                            + PathElement::new(vec![(x, y), (x + 21, y)], color.stroke_width(3))
+                            + Circle::new((x + 21, y), 2, color.filled())
+                            + Circle::new((x + 21, y), 1, BLACK.filled())
+                    });
+
+                recall_chart.draw_series(
+                    points
+                        .iter()
+                        .map(|(x, y)| Circle::new((*x + o1, *y), 1, BLACK.filled())),
+                )?;
+            }
+            "cons" => {
                 recall_chart
                     .draw_series(
                         points

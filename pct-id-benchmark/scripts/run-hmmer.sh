@@ -16,12 +16,15 @@ SPLIT_THREADS=4
 SPLIT_DIR=$DIR/query-splits
 
 TBL_1=$RESULTS/hmmer.pair.tbl
+DOM_1=$RESULTS/hmmer.pair.domtbl
 TIME_1=$RESULTS/hmmer.pair.time
 
 TBL_2=$RESULTS/hmmer.cons.tbl
+DOM_2=$RESULTS/hmmer.cons.domtbl
 TIME_2=$RESULTS/hmmer.cons.time
 
 TBL_3=$RESULTS/hmmer.prf.tbl
+DOM_3=$RESULTS/hmmer.prf.domtbl
 TIME_3=$RESULTS/hmmer.prf.time
 
 S_ARGS="--cpu $SPLIT_THREADS -E $E -o /dev/null"
@@ -34,10 +37,12 @@ parallel \
     "${TIME} -o ${SPLIT_DIR}/{/.}.time \
     $PHMMER $S_ARGS \
     --tblout ${SPLIT_DIR}/{/.}.tbl \
+    --domtblout ${SPLIT_DIR}/{/.}.domtbl \
     {} ${TARGET}" \
     ::: "${SPLIT_DIR}"/*.fa
 
 cat $SPLIT_DIR/*.tbl > $TBL_1
+cat $SPLIT_DIR/*.domtbl > $DOM_1
 cat $SPLIT_DIR/*.time > $TIME_1
 rm -rf $SPLIT_DIR
 echo "split times:"
@@ -52,10 +57,12 @@ parallel \
     "${TIME} -o ${SPLIT_DIR}/{/.}.time \
     $PHMMER $S_ARGS \
     --tblout ${SPLIT_DIR}/{/.}.tbl \
+    --domtblout ${SPLIT_DIR}/{/.}.domtbl \
     {} ${TARGET}" \
     ::: "${SPLIT_DIR}"/*.fa
 
 cat $SPLIT_DIR/*.tbl > $TBL_2
+cat $SPLIT_DIR/*.domtbl > $DOM_2
 cat $SPLIT_DIR/*.time > $TIME_2
 rm -rf $SPLIT_DIR
 echo "split times:"
@@ -70,10 +77,12 @@ parallel \
     "${TIME} -o ${SPLIT_DIR}/{/.}.time \
     $HMMSEARCH $S_ARGS \
     --tblout ${SPLIT_DIR}/{/.}.tbl \
+    --domtblout ${SPLIT_DIR}/{/.}.domtbl \
     {} ${TARGET}" \
     ::: "${SPLIT_DIR}"/*.hmm
 
 cat $SPLIT_DIR/*.tbl > $TBL_3
+cat $SPLIT_DIR/*.domtbl > $DOM_3
 cat $SPLIT_DIR/*.time > $TIME_3
 rm -rf $SPLIT_DIR
 echo "split times:"
