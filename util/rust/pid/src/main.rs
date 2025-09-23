@@ -1,6 +1,6 @@
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::fmt::Display;
-use std::fs::File;
+use std::fs::{self, File};
 use std::io::{BufWriter, Write};
 use std::{env, path::Path};
 
@@ -11,14 +11,18 @@ use bioio::{fasta::Fasta, stockholm::Stockholm};
 use rand::seq::{IndexedRandom, SliceRandom};
 use rand::{rng, Rng};
 
-const N_BINS: usize = 41;
-const BIN_START: usize = 10;
-const BIN_END: usize = N_BINS + BIN_START - 1;
+const DECOY_RATIO: usize = 100;
 
-const MIN_LENGTH: usize = 200;
+const PID_MAX: usize = 25;
+
+const SEQ_LEN_MIN: usize = 150;
+
+const FAM_MIN: usize = 5;
+const FAM_MAX: usize = 10;
 
 #[derive(Clone)]
 struct Pair {
+    pid: usize,
     /// The ID of a query/train MSA
     family: String,
     /// The ID of a sequence in the family MSA
@@ -100,9 +104,9 @@ fn compute_pid(s1: &str, s2: &str) -> f32 {
 fn main() -> anyhow::Result<()> {
     let args: Vec<String> = env::args().collect();
 
-    if args.len() != 8 {
+    if args.len() < 6 {
         println!(
-            "usage: pid <benchmark_dir> <query.sto> <target.sto> <source.sto> <source.fa> <n_sample> <decoy_ratio>"
+            "usage: pid <benchmark_dir> <query.sto> <target.sto> <source.sto> <source.fa> [max_pairs]"
         );
         return Ok(());
     };
@@ -116,8 +120,21 @@ fn main() -> anyhow::Result<()> {
     let mut target_sto = Stockholm::from_path(&args[3]).context("failed to parse query sto")?;
     let src_sto = Stockholm::from_path(&args[4]).context("failed to parse source sto")?;
     let src_fa = Fasta::from_path(&args[5]).context("failed to parse source sto")?;
-    let n_sample: usize = args[6].parse().context("failed to parse n_sample")?;
-    let decoy_ratio: usize = args[7].parse().context("failed to parse decoy ratio")?;
+    let afa_dir = bm_dir.join("afa/");
+
+    let max_pairs: Option<usize> = if args.len() == 7 {
+        Some(args[6].parse().context("failed to parse n_sample")?)
+    } else {
+        None
+    };
+
+    assert_eq!(
+        target_sto.records.len(),
+        query_sto.records.len(),
+        "target/query family count mismatch"
+    );
+
+    println!("{} sequence families found", target_sto.records.len());
 
     // what: filter all target/query seqs
     //       that are less than MIN_LENGTH
@@ -129,7 +146,9 @@ fn main() -> anyhow::Result<()> {
             let keep = rec
                 .sequences
                 .iter()
-                .filter(|(_, seq)| seq.bytes().filter(|b| AMINO[*b as usize]).count() >= MIN_LENGTH)
+                .filter(|(_, seq)| {
+                    seq.bytes().filter(|b| AMINO[*b as usize]).count() >= SEQ_LEN_MIN
+                })
                 .map(|(name, _)| name.clone())
                 .collect::<HashSet<_>>();
 
@@ -148,7 +167,7 @@ fn main() -> anyhow::Result<()> {
     //
     // why:  if there's no available queries for a target,
     //       we'll never find it, and if there's no targets
-    //       for a query, we're just wasting search time
+    //       for a query, we're not looking for anything
     target_sto
         .records
         .retain(|fam, _| query_sto.records.contains_key(fam));
@@ -163,12 +182,22 @@ fn main() -> anyhow::Result<()> {
         "target/query family count mismatch"
     );
 
+    println!(
+        "{} sequence families remain after length filter (>={SEQ_LEN_MIN})",
+        target_sto.records.len()
+    );
+
     // what: for each target seq, find the query seq
     //       with the highest pairwise %ID
     //
     // why:  we are building our query set such that
     //       each target gets its best possible query
-    let mut pairs_by_bin: Vec<Vec<Pair>> = vec![vec![]; BIN_END + 1];
+    let mut pairs_by_fam: HashMap<String, Vec<Pair>> = query_sto
+        .records
+        .keys()
+        .map(|fam| (fam.clone(), vec![]))
+        .collect();
+
     for fam in query_sto.records.keys() {
         let src_seqs = &src_sto
             .get(fam)
@@ -197,6 +226,7 @@ fn main() -> anyhow::Result<()> {
             })
             .collect::<Vec<_>>();
 
+        let mut keep = HashSet::new();
         for (t_name, t_seq) in target_seqs.iter() {
             let mut best_pid = 0.0;
             let mut best_query = "";
@@ -209,15 +239,44 @@ fn main() -> anyhow::Result<()> {
                     best_query = q_name;
                 }
             }
+
             let bin = (best_pid * 100.0).round() as usize;
 
-            pairs_by_bin[bin].push(Pair {
-                family: fam.clone(),
-                query: best_query.to_string(),
-                target: t_name.to_string(),
-            })
+            if bin <= PID_MAX {
+                keep.insert(t_name);
+                pairs_by_fam
+                    .get_mut(fam)
+                    .context("no pair vec for fam")?
+                    .push(Pair {
+                        pid: bin,
+                        family: fam.clone(),
+                        query: best_query.to_string(),
+                        target: t_name.to_string(),
+                    })
+            }
         }
+
+        let sto = target_sto.get_mut(fam).context("")?;
+
+        sto.sequences.retain(|n, _| keep.contains(&n));
+        sto.gs_meta.retain(|n, _| keep.contains(&n));
     }
+
+    pairs_by_fam.retain(|_, pairs| pairs.len() > FAM_MIN);
+
+    pairs_by_fam.iter_mut().for_each(|(_, pairs)| {
+        pairs.sort_by(|a, b| a.pid.cmp(&b.pid));
+        pairs.truncate(FAM_MAX);
+    });
+
+    let mut rng = rng();
+
+    let mut pairs: Vec<Pair> = pairs_by_fam.into_values().flatten().collect();
+    pairs = match max_pairs {
+        Some(max) => pairs.choose_multiple(&mut rng, max).cloned().collect(),
+        None => pairs,
+    };
+    pairs.sort_by(|a, b| a.pid.cmp(&b.pid));
 
     let mut tbl_writer = BufWriter::new(
         File::create(bm_dir.join("benchmark.tbl"))
@@ -229,59 +288,42 @@ fn main() -> anyhow::Result<()> {
     // store queries in a hash to prevent duplicates, since it's
     // possible that two targets share a most similar query
     let mut queries: HashSet<FastaRecord> = HashSet::new();
-    let mut rng = rng();
 
-    println!("sampling {n_sample} from each bin...");
-    let mut n_targets = 0;
-    #[allow(clippy::needless_range_loop)]
-    for bin in BIN_START..=BIN_END {
-        let bin_size = pairs_by_bin[bin].len();
-        let pairs: Vec<&Pair> = if bin_size >= n_sample {
-            pairs_by_bin[bin]
-                .choose_multiple(&mut rng, n_sample)
-                .collect()
-        } else {
-            println!("warning: bin {bin}% has {bin_size:>3}/{n_sample} samples",);
-            pairs_by_bin[bin].iter().collect()
-        };
+    let extract_fn = |sto: &Stockholm, fam: &str, seq: &str| {
+        sto.get(fam)
+            .and_then(|r| r.get(seq))
+            .map(|s| s.replace(['-', '.'], ""))
+            .context("failed to extract seq from stockholm")
+    };
 
-        n_targets += pairs.len();
+    for (pair_idx, pair) in pairs.iter().enumerate() {
+        let query = extract_fn(&query_sto, &pair.family, &pair.query)
+            .map(|seq| FastaRecord {
+                name: format!("{}|{}", pair.family, pair.query),
+                extra: "".to_string(),
+                seq,
+            })
+            .context("failed to build query fasta record")?;
 
-        let extract_fn = |sto: &Stockholm, fam: &str, seq: &str| {
-            sto.get(fam)
-                .and_then(|r| r.get(seq))
-                .map(|s| s.replace(['-', '.'], ""))
-                .context("failed to extract seq from source stockholm")
-        };
+        let target = extract_fn(&target_sto, &pair.family, &pair.target)
+            .map(|seq| FastaRecord {
+                name: format!("{}|{}|{}%:{}", pair.family, pair.target, pair.pid, pair_idx),
+                extra: "".to_string(),
+                seq,
+            })
+            .context("failed to build target fasta record")?;
 
-        for (pair_idx, pair) in pairs.iter().enumerate() {
-            let query = extract_fn(&query_sto, &pair.family, &pair.query)
-                .map(|seq| FastaRecord {
-                    name: format!("{}|{}", pair.family, pair.query),
-                    extra: "".to_string(),
-                    seq,
-                })
-                .context("failed to build query fasta record")?;
+        targets.push(target);
+        queries.insert(query);
 
-            let target = extract_fn(&target_sto, &pair.family, &pair.target)
-                .map(|seq| FastaRecord {
-                    name: format!("{}|{}|{}%:{}", pair.family, pair.target, bin, pair_idx),
-                    extra: "".to_string(),
-                    seq,
-                })
-                .context("failed to build target fasta record")?;
-
-            targets.push(target);
-            queries.insert(query);
-
-            writeln!(
-                tbl_writer,
-                "{}% {} {} {}",
-                bin, pair.family, pair.target, pair.query
-            )
-            .context("failed to write to benchmark.tbl")?;
-        }
+        writeln!(
+            tbl_writer,
+            "{}% {} {} {}",
+            pair.pid, pair.family, pair.target, pair.query
+        )
+        .context("failed to write to benchmark.tbl")?;
     }
+
     println!("done");
 
     let mut target_writer = BufWriter::new(
@@ -307,6 +349,8 @@ fn main() -> anyhow::Result<()> {
         File::create(bm_dir.join("query.sto")).context("failed to open query.sto for output")?,
     );
 
+    fs::create_dir(&afa_dir)?;
+
     let query_names = queries
         .iter()
         .map(|q| q.name.split('|').next().unwrap())
@@ -314,12 +358,19 @@ fn main() -> anyhow::Result<()> {
 
     query_sto
         .records
-        .iter()
-        .filter(|(fam, _)| query_names.contains(&fam.as_str()))
-        .try_for_each(|(_, r)| writeln!(query_sto_writer, "{r}"))?;
+        .retain(|fam, _| query_names.contains(&fam.as_str()));
+
+    query_sto.records.iter().try_for_each(|(fam, rec)| {
+        writeln!(query_sto_writer, "{rec}")?;
+        let mut afa_writer = BufWriter::new(File::create(afa_dir.join(format!("{fam}.afa")))?);
+        rec.sequences.iter().try_for_each(|(name, seq)| {
+            writeln!(afa_writer, ">{name}")?;
+            writeln!(afa_writer, "{seq}")
+        })
+    })?;
 
     let n_src = src_fa.records.len();
-    let n_decoys = n_targets * decoy_ratio;
+    let n_decoys = pairs.len() * DECOY_RATIO;
 
     println!("sampling {n_decoys} decoys from a source of {n_src} seqs...");
 

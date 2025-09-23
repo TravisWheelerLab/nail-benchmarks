@@ -11,8 +11,8 @@ TMP=./tmp/nail/
 mkdir -p $TMP
 
 STATS=$RESULTS/nail.stats
-TBL_1=$RESULTS/nail.pair.tbl
-TIME_1=$RESULTS/nail.pair.time
+TBL_1=$RESULTS/nail.seq.tbl
+TIME_1=$RESULTS/nail.seq.time
 TBL_2=$RESULTS/nail.cons.tbl
 TIME_2=$RESULTS/nail.cons.time
 TBL_3=$RESULTS/nail.prf.tbl
@@ -20,7 +20,7 @@ TIME_3=$RESULTS/nail.prf.time
 
 S_ARGS="-s -t $THREADS -E $E --tmp-dir $TMP --double-seed"
 
-echo "running nail pairwise..."
+echo "running nail seq..."
 /usr/bin/time -p -o $TIME_1 \
     $NAIL search $S_ARGS \
     --tbl-out $TBL_1 \

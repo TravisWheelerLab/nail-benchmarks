@@ -22,6 +22,7 @@ set_vars() {
     export QUERY_MSA=$DIR/query.sto
     export QUERY_FA=$DIR/query.fa
     export QUERY_CONS_FA=$DIR/query.cons.fa
+    export QUERY_AFA=$DIR/afa
     export TARGET=$DIR/target.fa
     export VAR E=10
     export RESULTS=$DIR/results/

@@ -17,8 +17,8 @@ TDB=$TMP/targetDB
 ADB=$TMP/alignDB
 FDB=$TMP/forwardDB
 
-TBL_1=$RESULTS/mmseqs.pair.tbl
-TIME_1=$RESULTS/mmseqs.pair.time
+TBL_1=$RESULTS/mmseqs.seq.tbl
+TIME_1=$RESULTS/mmseqs.seq.time
 TBL_2=$RESULTS/mmseqs.cons.tbl
 TIME_2=$RESULTS/mmseqs.cons.time
 TBL_3=$RESULTS/mmseqs.prf.tbl
@@ -28,7 +28,7 @@ S_ARGS="$QDB $TDB $ADB $TMP --threads $THREADS -s 7.5  --max-seqs 1000"
 C_ARGS="--format-mode 0"
 
 rm -rf $TMP/*
-echo "running mmseqs seq pairwise..."
+echo "running mmseqs seq..."
 (
     $MMSEQS createdb $TARGET $TDB
     $MMSEQS createdb $QUERY_FA $QDB
@@ -39,7 +39,7 @@ cat $TIME_1 | grep real | awk '{print $2 "s"}'
 echo
 
 rm -rf $TMP/*
-echo "running mmseqs seq consensus..."
+echo "running mmseqs consensus..."
 (
     $MMSEQS createdb $TARGET $TDB
     $MMSEQS createdb $QUERY_CONS_FA $QDB

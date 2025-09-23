@@ -3,107 +3,15 @@ use std::{
     env,
     fs::File,
     io::{BufRead, BufReader},
-    iter::once,
     path::{Path, PathBuf},
 };
 
 use bioio::tbl::{BlastTable, Hit, HitTable, HmmerTable, NailTable};
 
-use anyhow::{anyhow, bail, Context};
+use anyhow::Context;
 use glob::glob;
-use indexmap::IndexMap;
-use once_cell::sync::Lazy;
 
-use plotters::prelude::*;
-
-const FPR: f32 = 0.01;
-
-const PID_MAX: usize = 50;
-
-const BIN_STEP: usize = 2;
-const BIN_MIN: usize = 10;
-const BIN_MAX: usize = 25;
-const BIN_CNT: usize = (BIN_MAX - BIN_MIN) / BIN_STEP;
-
-const X_MAX: usize = BIN_CNT + 2;
-
-pub static PID_TO_X: Lazy<IndexMap<usize, usize>> = Lazy::new(|| {
-    let mut m = IndexMap::new();
-    (BIN_MIN..=BIN_MAX)
-        .rev()
-        .collect::<Vec<_>>()
-        .chunks(BIN_STEP)
-        .enumerate()
-        .for_each(|(x, pids)| {
-            for &pid in pids {
-                m.insert(pid, x);
-            }
-        });
-    m
-});
-
-pub static PID_RANGE_BY_X: Lazy<Vec<String>> = Lazy::new(|| {
-    let mut v = vec![String::new(); X_MAX];
-    (BIN_MIN..=BIN_MAX)
-        .rev()
-        .collect::<Vec<_>>()
-        .chunks(BIN_STEP)
-        .enumerate()
-        .for_each(|(x, pids)| {
-            v[x] = if pids.len() == 1 {
-                format!("{}%", pids[0])
-            } else {
-                format!(
-                    "{}-{}%",
-                    pids.first().expect("empty pids in PID_RANGE_BY_X init"),
-                    *pids.last().expect("empty pids in PID_RANGE_BY_X init")
-                )
-            };
-        });
-    v
-});
-
-const TOL_PURPLE: &str = "#332288";
-const TOL_GREEN: &str = "#117733";
-const TOL_TEAL: &str = "#44AA99";
-const TOL_BLUE: &str = "#88CCEE";
-const TOL_YELLOW: &str = "#DDCC77";
-const TOL_PINK: &str = "#CC6677";
-const TOL_MAGENTA: &str = "#AA4499";
-const TOL_OLIVE: &str = "#999933";
-
-const COLORS: [&str; 8] = [
-    TOL_PURPLE,
-    TOL_GREEN,
-    TOL_BLUE,
-    TOL_YELLOW,
-    TOL_PINK,
-    TOL_TEAL,
-    TOL_MAGENTA,
-    TOL_OLIVE,
-];
-
-fn hex_to_rgb(hex: &str) -> RGBColor {
-    let hex = hex.trim_start_matches('#');
-    let r = u8::from_str_radix(&hex[0..2], 16).unwrap();
-    let g = u8::from_str_radix(&hex[2..4], 16).unwrap();
-    let b = u8::from_str_radix(&hex[4..6], 16).unwrap();
-    RGBColor(r, g, b)
-}
-
-fn extract_target_pid(name: &str) -> anyhow::Result<usize> {
-    //>Exo_endo_phos|83-289|10%:0 domain: O13348_MAGGR/17-223
-    Ok(name
-        .split('|')
-        .next_back()
-        .ok_or(anyhow!("no bin"))?
-        .split(':')
-        .next()
-        .ok_or(anyhow!("no bin"))?
-        .strip_suffix('%')
-        .ok_or(anyhow!("no %"))?
-        .parse()?)
-}
+const PID_FPR: f32 = 0.01;
 
 fn main() -> anyhow::Result<()> {
     let args: Vec<String> = env::args().collect();
@@ -115,81 +23,138 @@ fn main() -> anyhow::Result<()> {
     let bm_dir = Path::new(&args[1]);
 
     let benchmark = Benchmark::new(bm_dir.join("benchmark.tbl"))?;
-    let tables = Tables::new(bm_dir.join("results"), &benchmark)?;
-
-    lollipop(&benchmark, &tables)?;
+    let data = PlotData::new(bm_dir.join("results"), &benchmark)?;
 
     Ok(())
 }
 
 struct Benchmark {
+    target_cnt: usize,
     families: Vec<String>,
-    target_cnt_by_pid: [usize; PID_MAX + 1],
-    pairs: HashMap<String, String>,
+    targets_by_pid: HashMap<usize, Vec<String>>,
+    intended_seq_queries_by_target: HashMap<String, String>,
 }
 
 impl Benchmark {
     fn new<P: AsRef<Path>>(tbl_path: P) -> anyhow::Result<Self> {
         let tbl_reader = BufReader::new(File::open(tbl_path)?);
 
-        let mut target_cnt_by_pid = [0usize; PID_MAX + 1];
+        let mut target_cnt = 0;
         let mut families = HashSet::new();
-        let mut pairs = HashMap::new();
+        let mut targets_by_pid: HashMap<usize, Vec<String>> = HashMap::new();
+        let mut queries_by_target = HashMap::new();
 
         for line in tbl_reader
             .lines()
             .map_while(Result::ok)
             .filter(|l| !l.starts_with('#'))
         {
-            let mut tokens = line.split_whitespace();
+            target_cnt += 1;
+            let tokens: Vec<&str> = line.split_whitespace().collect();
 
-            let pid = tokens
-                .next()
-                .context("no bin in benchmark table entry")?
-                .split('%')
-                .next()
-                .context("failed to split bin from id")?
+            let pid = tokens[0]
+                .strip_suffix('%')
+                .context("pid entry missing % symbol")?
                 .parse::<usize>()
-                .context("failed to parse pid")?;
+                .context("")?;
 
-            target_cnt_by_pid[pid] += 1;
+            let family = tokens[1].to_string();
+            let target = tokens[2].to_string();
+            let query = tokens[3].to_string();
 
-            families.insert(
-                tokens
-                    .next()
-                    .context("no family in benchmark table entry")?
-                    .to_string(),
-            );
+            families.insert(family);
 
-            pairs.insert(
-                tokens
-                    .next()
-                    .context("no target in benchmark table entry")?
-                    .to_string(),
-                tokens
-                    .next()
-                    .context("no query in benchmark table entry")?
-                    .to_string(),
-            );
+            let targets = targets_by_pid.entry(pid).or_default();
+            targets.push(target.clone());
+
+            queries_by_target.insert(target, query);
         }
 
         Ok(Self {
+            target_cnt,
             families: families.into_iter().collect::<Vec<_>>(),
-            target_cnt_by_pid,
-            pairs,
+            targets_by_pid,
+            intended_seq_queries_by_target: queries_by_target,
         })
     }
 }
 
-pub struct Table {
+pub struct PidData {
+    name: String,
+    points: Vec<(usize, f32)>,
+}
+
+impl PidData {
+    fn new(tbl: &HitTable, bm: &Benchmark) -> Self {
+        let decoy_cnt = (bm.target_cnt as f32 * PID_FPR).ceil() as usize;
+        let mut positives_by_target: HashMap<String, Hit> = HashMap::new();
+        let mut decoys_by_query: HashMap<String, Vec<Hit>> = HashMap::new();
+
+        tbl.hits.iter().for_each(|h| {
+            if h.target.starts_with("decoy") {
+                let decoys = decoys_by_query.entry(h.query.clone()).or_default();
+                decoys.push(h.clone());
+            } else {
+                let target_name = h.target.split('|').nth(1).unwrap().to_string();
+                positives_by_target.insert(target_name, h.clone());
+            }
+        });
+
+        let empty = vec![];
+        let mut points = bm
+            .targets_by_pid
+            .iter()
+            .map(|(&pid, targets)| {
+                let total = targets.len() as f32;
+                let found = targets
+                    .iter()
+                    .map(|target| match positives_by_target.get(target) {
+                        Some(hit) => {
+                            let decoys = decoys_by_query.get(&hit.query).unwrap_or(&empty);
+                            // println!("{}", decoys.len());
+                            // let e_value_thresh = decoys
+                            //     .get(decoy_cnt + 1)
+                            //     .expect("fewer decoys than FPR decoy count")
+                            //     .e_value;
+
+                            // if hit.e_value < e_value_thresh {
+                            //     1.0
+                            // } else {
+                            //     0.0
+                            // }
+                            1.0
+                        }
+                        None => 0.0,
+                    })
+                    .sum::<f32>();
+
+                (pid, found / total)
+            })
+            .collect::<Vec<_>>();
+
+        points.sort_by(|a, b| a.0.cmp(&b.0));
+
+        println!("target cnt: {}", bm.target_cnt);
+        println!("decoy cnt: {}", decoy_cnt);
+        println!("{}", tbl.name);
+        points.iter().for_each(|p| println!("{p:?}"));
+
+        Self {
+            name: tbl.name.clone(),
+            points,
+        }
+    }
+}
+
+pub struct RocData {
     name: String,
     pos: Vec<Hit>,
     decoys: Vec<Hit>,
 }
 
-impl Table {
-    fn from_hit_table(hit_tbl: &HitTable) -> Self {
-        let (mut pos, mut decoys): (Vec<Hit>, Vec<Hit>) = hit_tbl
+impl RocData {
+    fn new(tbl: &HitTable) -> Self {
+        let (mut pos, mut decoys): (Vec<Hit>, Vec<Hit>) = tbl
             .hits
             .iter()
             .filter(|h| {
@@ -216,30 +181,32 @@ impl Table {
                 .expect("NaN encountered in E-value sort")
         });
 
-        Table {
-            name: hit_tbl.name.to_string(),
+        RocData {
+            name: tbl.name.to_string(),
             pos,
             decoys,
         }
     }
 }
 
-pub struct Tables {
-    tables: Vec<Table>,
+pub struct PlotData {
+    roc_data: Vec<RocData>,
+    pid_data: Vec<PidData>,
     tools: Vec<String>,
 }
 
-impl Tables {
-    fn new<P: AsRef<Path>>(results_dir: P, benchmark: &Benchmark) -> anyhow::Result<Self> {
+impl PlotData {
+    fn new<P: AsRef<Path>>(results_dir: P, bm: &Benchmark) -> anyhow::Result<Self> {
         let results_dir = PathBuf::from(results_dir.as_ref());
-        let mut tables: Vec<Table> = vec![];
+        let mut roc_data = vec![];
+        let mut pid_data = vec![];
         let mut tools: HashSet<String> = HashSet::new();
 
         for path in glob(
             results_dir
                 .join("*.tbl")
                 .to_str()
-                .context("invalid *tbl glob")?,
+                .context("invalid *.tbl glob")?,
         )?
         .filter_map(Result::ok)
         {
@@ -251,372 +218,102 @@ impl Tables {
                 .splitn(2, '.');
 
             let tool = name.next().context("no tbl prefix")?;
-            let suffix = name.next().context("no tbl suffix")?;
-            let name = format!("{tool} {suffix}");
+            let search_type = name.next().context("no tbl search type")?;
+            let name = format!("{tool} {search_type}");
 
             tools.insert(tool.to_string());
 
-            let hit_tbl = match tool {
+            let tbl = match tool {
                 "hmmer" => HitTable::parse::<_, HmmerTable>(file, &name),
                 "nail" => HitTable::parse::<_, NailTable>(file, &name),
                 _ => HitTable::parse::<_, BlastTable>(file, &name),
             }?;
 
-            match hit_tbl
-                .name
-                .split_whitespace()
-                .next_back()
-                .context("no search type in table name")?
-            {
-                "pair" => {
+            match search_type {
+                "cons" | "prf" => {
+                    roc_data.push(RocData::new(&tbl));
+                    pid_data.push(PidData::new(&tbl, bm));
+                }
+                "fam" => {
                     // what: filter the hit list such that for each (fam, target)
                     //       pair, retain only the best (lowest E-value) match
                     //
-                    //  why: since we're benchmarking pairwise-family search
+                    //  why: we want to smash family pairwise search results into
+                    //       one set of hits per family so that we don't overcount
+                    //       positives or decoys
                     //
                     //  how: build a hash that maps (fam, target) -> hit, where a hit
                     //       replaces an existing entry if it has a better E-value
-                    let mut hits_by_pair: HashMap<(String, String), Hit> = HashMap::new();
-                    hit_tbl
-                        .hits
-                        .iter()
-                        .cloned()
+                    let mut best_hit_by_fam_and_target: HashMap<(String, String), Hit> =
+                        HashMap::new();
+
+                    tbl.hits
+                        .into_iter()
                         .map(|h| (h.query.split('|').next().unwrap().to_string(), h))
                         .for_each(|(q_fam, hit)| {
                             let key = (q_fam, hit.target.to_string());
 
-                            match hits_by_pair.get(&key) {
+                            match best_hit_by_fam_and_target.get(&key) {
                                 Some(existing) => {
                                     if hit.e_value < existing.e_value {
-                                        hits_by_pair.insert(key, hit);
+                                        best_hit_by_fam_and_target.insert(key, hit);
                                     }
                                 }
                                 None => {
-                                    hits_by_pair.insert(key, hit);
+                                    best_hit_by_fam_and_target.insert(key, hit);
                                 }
                             }
                         });
 
-                    let pairwise_hits: Vec<Hit> = hits_by_pair.into_values().collect();
+                    let tbl = HitTable {
+                        name,
+                        hits: best_hit_by_fam_and_target.into_values().collect(),
+                    };
 
-                    tables.push(Table::from_hit_table(&HitTable {
-                        name: format!("{name}wise"),
-                        hits: pairwise_hits,
-                    }));
-
-                    // let pair_hits: Vec<Hit> = hit_tbl
-                    //     .hits
-                    //     .iter()
-                    //     .filter(|h| {
-                    //         println!("{}", h.target);
-                    //         let target = h.target.split('|').nth(1).unwrap();
-                    //         h.query
-                    //             == *benchmark
-                    //                 .pairs
-                    //                 .get(target)
-                    //                 .unwrap_or_else(|| panic!("{}", target))
-                    //     })
-                    //     .cloned()
-                    //     .collect();
-
-                    // tables.push(Table::from_hit_table(&HitTable {
-                    //     name,
-                    //     hits: pair_hits,
-                    // }))
+                    roc_data.push(RocData::new(&tbl));
+                    pid_data.push(PidData::new(&tbl, bm));
                 }
-                _ => tables.push(Table::from_hit_table(&hit_tbl)),
-            }
+                "seq" => {
+                    // what: filter out inter-family hits for non-intended
+                    //       pairs of target/query sequences
+                    //
+                    //  why:
+                    let intended_pair_hits: Vec<Hit> = tbl
+                        .hits
+                        .into_iter()
+                        .filter(|h| {
+                            if h.target.starts_with("decoy") {
+                                return true;
+                            }
+
+                            let hit_target = h.target.split('|').nth(1).unwrap();
+                            let hit_query = h.query.split('|').nth(1).unwrap();
+
+                            let paired_query = bm
+                                .intended_seq_queries_by_target
+                                .get(hit_target)
+                                .unwrap_or_else(|| panic!("{}", hit_target));
+
+                            hit_query == *paired_query
+                        })
+                        .collect();
+
+                    let tbl = HitTable {
+                        name,
+                        hits: intended_pair_hits,
+                    };
+
+                    // roc_data.push(RocData::new(&tbl));
+                    pid_data.push(PidData::new(&tbl, bm));
+                }
+                _ => println!("unexpected search type flag: {search_type}"),
+            };
         }
 
         Ok(Self {
-            tables,
+            roc_data,
+            pid_data,
             tools: tools.into_iter().collect(),
         })
     }
-}
-
-fn lollipop(benchmark: &Benchmark, tables: &Tables) -> anyhow::Result<()> {
-    let decoy_cnt = (FPR * benchmark.families.len() as f32).ceil() as usize;
-
-    let mut target_cnt_by_x = [0usize; X_MAX];
-    benchmark
-        .target_cnt_by_pid
-        .iter()
-        .enumerate()
-        .for_each(|(pid, cnt)| {
-            if (BIN_MIN..=BIN_MAX).contains(&pid) {
-                let x = PID_TO_X.get(&pid).unwrap();
-                target_cnt_by_x[*x] += cnt;
-            }
-        });
-
-    let mut point_data = tables
-        .tables
-        .iter()
-        .map(|tbl| {
-            let mut num_hits_by_x = vec![0usize; X_MAX - 1];
-            let e_value_cutoff = tbl.decoys[decoy_cnt].e_value;
-            for hit in tbl.pos.iter().take_while(|h| h.e_value <= e_value_cutoff) {
-                let pid = extract_target_pid(&hit.target).expect("failed to extract target info");
-
-                if (BIN_MIN..=BIN_MAX).contains(&pid) {
-                    let x = PID_TO_X
-                        .get(&pid)
-                        .unwrap_or_else(|| panic!("no x for pid: {pid}",));
-                    num_hits_by_x[*x] += 1;
-                }
-            }
-
-            let recall_by_x: Vec<f32> = num_hits_by_x
-                .into_iter()
-                .enumerate()
-                .map(|(x, n)| {
-                    let tot = target_cnt_by_x[x];
-                    if tot != 0 {
-                        n as f32 / tot as f32
-                    } else {
-                        0.0
-                    }
-                })
-                .collect();
-
-            let points = recall_by_x
-                .into_iter()
-                .enumerate()
-                .map(|(x, recall)| (x as f32, recall))
-                .collect::<Vec<_>>();
-
-            (tbl.name.clone(), points)
-        })
-        .collect::<Vec<_>>();
-
-    point_data.sort_by(|a, b| {
-        let s1: f32 = a.1.iter().map(|(_, y)| y).sum();
-        let s2: f32 = b.1.iter().map(|(_, y)| y).sum();
-
-        s1.partial_cmp(&s2).expect("NaN encountered")
-    });
-
-    point_data.reverse();
-    if tables.tools.len() > COLORS.len() {
-        bail!("not enough colors");
-    }
-
-    let mut tools: Vec<String> = tables.tools.iter().cloned().collect();
-    tools.sort();
-
-    let color_by_tool: HashMap<String, RGBColor> = tools
-        .into_iter()
-        .zip(COLORS)
-        .map(|(t, c)| (t, hex_to_rgb(c)))
-        .collect();
-
-    let width = 600;
-    let height = 500;
-    let root = SVGBackend::new("pid.svg", (width, height)).into_drawing_area();
-    root.fill(&WHITE)?;
-    let (top, bottom) = root.split_vertically((height / 4) * 3);
-
-    let x_label_fmt = |x: &f32| -> String { PID_RANGE_BY_X.get(*x as usize).unwrap().clone() };
-
-    let black = RGBColor(12, 4, 4);
-    let grey = &full_palette::GREY_800;
-    let x_range = 0f32..(X_MAX - 1) as f32;
-    let axis_style = grey.stroke_width(2);
-    let axis_desc_style = ("sans-serif", 12, &black);
-    let label_style = ("Arial", 8, grey);
-
-    let mut recall_chart = ChartBuilder::on(&top)
-        .caption(
-            "Recall by decreasing % pairwise identity",
-            ("sans-serif", 20),
-        )
-        .margin(20)
-        .margin_bottom(0)
-        .x_label_area_size(18)
-        .top_x_label_area_size(40)
-        .y_label_area_size(40)
-        .right_y_label_area_size(40)
-        .build_cartesian_2d(x_range.clone(), 0.0f32..1.0)?
-        .set_secondary_coord(x_range.clone(), 0.0f32..1.0);
-
-    recall_chart
-        .configure_mesh()
-        .disable_mesh()
-        .x_labels(X_MAX)
-        .x_label_formatter(&x_label_fmt)
-        .y_desc(format!("fraction of TP found at {FPR} FP per query"))
-        .axis_style(axis_style)
-        .axis_desc_style(axis_desc_style)
-        .label_style(label_style)
-        .draw()?;
-
-    recall_chart
-        .configure_secondary_axes()
-        .x_labels(X_MAX)
-        .x_label_formatter(&x_label_fmt)
-        .y_desc("")
-        .axis_style(axis_style)
-        .axis_desc_style(axis_desc_style)
-        .label_style(label_style)
-        .draw()?;
-
-    recall_chart.draw_series(DashedLineSeries::new(
-        [(0.0, 0.5), (X_MAX as f32, 0.5)],
-        10,
-        7,
-        BLACK.mix(0.50).stroke_width(1),
-    ))?;
-
-    let max_cnt = (*target_cnt_by_x.iter().max().unwrap() as f32 / 100.0).round() * 100.0;
-
-    let mut bin_chart = ChartBuilder::on(&bottom)
-        .margin(20)
-        .margin_top(0)
-        .x_label_area_size(10)
-        .top_x_label_area_size(10)
-        .y_label_area_size(40)
-        .right_y_label_area_size(40)
-        .build_cartesian_2d(x_range.clone(), 0.0f32..max_cnt)?
-        .set_secondary_coord(x_range.clone(), 0.0f32..max_cnt);
-
-    bin_chart
-        .configure_mesh()
-        .disable_mesh()
-        .x_labels(X_MAX)
-        .x_label_formatter(&x_label_fmt)
-        .y_labels(6)
-        .y_label_formatter(&|y| format!("{}", max_cnt - y))
-        .y_desc("# of sequence pairs")
-        .axis_style(axis_style)
-        .axis_desc_style(axis_desc_style)
-        .label_style(label_style)
-        .draw()?;
-
-    bin_chart
-        .configure_secondary_axes()
-        .x_labels(X_MAX)
-        .x_label_formatter(&|_| "".to_string())
-        .y_labels(6)
-        .y_label_formatter(&|y| format!("{}", max_cnt - y))
-        .y_desc("")
-        .axis_style(axis_style)
-        .axis_desc_style(axis_desc_style)
-        .label_style(label_style)
-        .draw()?;
-
-    let bin_cnt_points = target_cnt_by_x
-        .iter()
-        .enumerate()
-        .map(|(x, cnt)| (x as f32, max_cnt - *cnt as f32))
-        .collect::<Vec<_>>();
-
-    let bin_chart_color = hex_to_rgb(TOL_MAGENTA);
-
-    bin_chart.draw_series([Polygon::new(
-        once((0.0f32, max_cnt))
-            .chain(bin_cnt_points.iter().cloned())
-            .chain(once((PID_MAX as f32, max_cnt)))
-            .collect::<Vec<_>>(),
-        bin_chart_color.mix(0.60),
-    )])?;
-
-    bin_chart.draw_series(LineSeries::new(
-        bin_cnt_points.clone(),
-        bin_chart_color.stroke_width(2),
-    ))?;
-
-    bin_chart.draw_series(
-        bin_cnt_points
-            .iter()
-            .map(|(x, y)| Circle::new((*x, *y), 3, bin_chart_color.filled())),
-    )?;
-
-    bin_chart.draw_series(
-        bin_cnt_points
-            .iter()
-            .map(|(x, y)| Circle::new((*x, *y), 1, WHITE.filled())),
-    )?;
-
-    for (i, (name, points)) in point_data.iter().enumerate() {
-        let mut tokens = name.split_whitespace();
-        let tool = tokens.next().context("no name")?;
-        let search_type = tokens.next().context("no search type")?;
-        let color = color_by_tool.get(tool).context("no color for tool")?;
-
-        let o1 = i as f32 / 15.0;
-        recall_chart.draw_series(points.iter().map(|(x, y)| {
-            PathElement::new(vec![(*x + o1, 0.0), (*x + o1, *y)], color.stroke_width(3))
-        }))?;
-
-        match search_type {
-            "prf" => {
-                recall_chart
-                    .draw_series(
-                        points
-                            .iter()
-                            .map(|(x, y)| Circle::new((*x + o1, *y), 2, color.filled())),
-                    )?
-                    .label(name)
-                    .legend(move |(x, y)| {
-                        EmptyElement::at((0, 0))
-                            + PathElement::new(vec![(x, y), (x + 21, y)], color.stroke_width(3))
-                            + Circle::new((x + 21, y), 2, color.filled())
-                    });
-            }
-            "pairwise" => {
-                recall_chart
-                    .draw_series(
-                        points
-                            .iter()
-                            .map(|(x, y)| Circle::new((*x + o1, *y), 2, color.filled())),
-                    )?
-                    .label(name)
-                    .legend(move |(x, y)| {
-                        EmptyElement::at((0, 0))
-                            + PathElement::new(vec![(x, y), (x + 21, y)], color.stroke_width(3))
-                            + Circle::new((x + 21, y), 2, color.filled())
-                            + Circle::new((x + 21, y), 1, BLACK.filled())
-                    });
-
-                recall_chart.draw_series(
-                    points
-                        .iter()
-                        .map(|(x, y)| Circle::new((*x + o1, *y), 1, BLACK.filled())),
-                )?;
-            }
-            "cons" => {
-                recall_chart
-                    .draw_series(
-                        points
-                            .iter()
-                            .map(|(x, y)| Circle::new((*x + o1, *y), 2, color.filled())),
-                    )?
-                    .label(name)
-                    .legend(move |(x, y)| {
-                        EmptyElement::at((0, 0))
-                            + PathElement::new(vec![(x, y), (x + 21, y)], color.stroke_width(3))
-                            + Circle::new((x + 21, y), 2, color.filled())
-                            + Circle::new((x + 21, y), 1, WHITE.filled())
-                    });
-
-                recall_chart.draw_series(
-                    points
-                        .iter()
-                        .map(|(x, y)| Circle::new((*x + o1, *y), 1, WHITE.filled())),
-                )?;
-            }
-            _ => bail!("bad search type"),
-        }
-    }
-
-    recall_chart
-        .configure_series_labels()
-        .border_style(BLACK)
-        .margin(5)
-        .background_style(WHITE.filled())
-        .position(SeriesLabelPosition::UpperRight)
-        .draw()?;
-
-    Ok(())
 }

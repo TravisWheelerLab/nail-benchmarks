@@ -132,11 +132,19 @@ impl Stockholm {
         self.records.get(name)
     }
 
+    pub fn get_mut(&mut self, name: &str) -> Option<&mut StockholmRecord> {
+        self.records.get_mut(name)
+    }
+
     pub fn write<W: Write>(&self, buf: W) -> anyhow::Result<()> {
         let mut out = BufWriter::new(buf);
         self.records
             .values()
             .try_for_each(|r| writeln!(out, "{r}"))
             .context("Stockholm::write() failed")
+    }
+
+    pub fn seq_cnt(&self) -> usize {
+        self.records.values().map(|r| r.sequences.len()).sum()
     }
 }

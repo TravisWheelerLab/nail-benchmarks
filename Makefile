@@ -115,6 +115,7 @@ HMMBUILD    := $(TOOL_BIN)/hmmbuild
 HMMEMIT     := $(TOOL_BIN)/hmmemit
 MMSEQS      := $(TOOL_BIN)/mmseqs
 BLASTP      := $(TOOL_BIN)/blastp
+PSIBLAST    := $(TOOL_BIN)/psiblast
 MAKEBLASTDB := $(TOOL_BIN)/makeblastdb
 LASTAL      := $(TOOL_BIN)/lastal
 LASTDB      := $(TOOL_BIN)/lastdb
@@ -168,6 +169,7 @@ blast: $(TOOL_BIN)
 	@tar --strip-components=1 -xzf $(BLAST_BIN_TGZ) -C $(BLAST_DIR)
 	@rm $(BLAST_BIN_TGZ)
 	@ln -sf $(BLAST_BIN_DIR)/blastp $(BLASTP)
+	@ln -sf $(BLAST_BIN_DIR)/psiblast $(PSIBLAST)
 	@ln -sf $(BLAST_BIN_DIR)/makeblastdb $(MAKEBLASTDB)
 
 LAST_SRC_URL := https://gitlab.com/mcfrith/last/-/archive/1642/last-1642.tar.gz

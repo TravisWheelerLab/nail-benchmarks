@@ -11,14 +11,14 @@ TMP=./tmp/diamond
 mkdir -p $TMP
 TARGET_DB=$TMP/target_db
 
-TBL_1=$RESULTS/diamond.pair.tbl
-TIME_1=$RESULTS/diamond.pair.time
+TBL_1=$RESULTS/diamond.seq.tbl
+TIME_1=$RESULTS/diamond.seq.time
 TBL_2=$RESULTS/diamond.cons.tbl
 TIME_2=$RESULTS/diamond.cons.time
 
 $DIAMOND makedb --in $TARGET --db $TARGET_DB > /dev/null 2>&1
 
-echo "running diamond pairwise..."
+echo "running diamond seq..."
 /usr/bin/time -p -o $TIME_1 \
     $DIAMOND blastp --query $QUERY_FA \
     --db $TARGET_DB \

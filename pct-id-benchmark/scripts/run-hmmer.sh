@@ -15,9 +15,9 @@ N_SPLITS=$(( THREADS / 4 ))
 SPLIT_THREADS=4
 SPLIT_DIR=$DIR/query-splits
 
-TBL_1=$RESULTS/hmmer.pair.tbl
-DOM_1=$RESULTS/hmmer.pair.domtbl
-TIME_1=$RESULTS/hmmer.pair.time
+TBL_1=$RESULTS/hmmer.seq.tbl
+DOM_1=$RESULTS/hmmer.seq.domtbl
+TIME_1=$RESULTS/hmmer.seq.time
 
 TBL_2=$RESULTS/hmmer.cons.tbl
 DOM_2=$RESULTS/hmmer.cons.domtbl
@@ -29,7 +29,7 @@ TIME_3=$RESULTS/hmmer.prf.time
 
 S_ARGS="--cpu $SPLIT_THREADS -E $E -o /dev/null"
 
-echo "running phmmer pairwise.."
+echo "running phmmer seq..."
 SPLIT_TIME=$($TIME $FASTABALANCE $QUERY_FA $N_SPLITS $SPLIT_DIR 2>&1)
 echo "balance time: $(echo $SPLIT_TIME | awk '{print $2 "s"}')"
 

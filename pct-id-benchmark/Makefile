@@ -1,11 +1,10 @@
 THREADS     ?= 8
-DECOY_RATIO ?= 100
 
 # profmark args
 SEED          ?= 67779
-TRAIN_TEST_ID ?= 0.26
-MIN_TEST      ?= 1
-MAX_TEST      ?= 100
+TRAIN_TEST_ID ?= 0.30
+MIN_TEST       ?= 10
+MAX_TEST       ?= 30
 
 MAKEFILE_DIR := $(dir $(abspath $(lastword $(MAKEFILE_LIST))))
 TOOLS    := $(realpath $(MAKEFILE_DIR)../tools)
@@ -87,7 +86,7 @@ profmark: $(PM_OUT)
 pmark:
 	@echo running profmark...
 	@mkdir -p $(PM_DIR)
-	@$(PROFMARK) \
+	$(PROFMARK) \
 		-S $(SEED) \
 		-N $(N_DECOYS) \
 		-1 $(TRAIN_TEST_ID) \
@@ -100,13 +99,22 @@ pmark:
 $(PID): $(PID_SRC)/main.rs
 	@cd $(PID_SRC) && cargo build --release
 
-b%: profmark $(PID)
+small: profmark $(PID)
 	@echo building benchmark...
-	@mkdir -p b-$*
-	@$(PID) b-$* $(QUERY_STO) $(TARGET_STO) $(SRC_STO) $(SRC_FA) $* $(DECOY_RATIO)
+	@mkdir -p benchmark-sm/
+	@$(PID) benchmark-sm/ $(QUERY_STO) $(TARGET_STO) $(SRC_STO) $(SRC_FA) 100
 	@echo building query.hmm...
-	@$(HMMBUILD) --cpu $(THREADS) b-$*/query.hmm b-$*/query.sto > /dev/null
-	@$(HMMEMIT) -c b-$*/query.hmm > b-$*/query.cons.fa
+	@$(HMMBUILD) --cpu $(THREADS) benchmark-sm/query.hmm benchmark-sm/query.sto > /dev/null
+	@$(HMMEMIT) -c benchmark-sm/query.hmm > benchmark-sm/query.cons.fa
+	@echo done
+
+benchmark: profmark $(PID)
+	@echo building benchmark...
+	@mkdir -p benchmark/
+	@$(PID) benchmark/ $(QUERY_STO) $(TARGET_STO) $(SRC_STO) $(SRC_FA)
+	@echo building query.hmm...
+	@$(HMMBUILD) --cpu $(THREADS) benchmark/query.hmm benchmark/query.sto > /dev/null
+	@$(HMMEMIT) -c benchmark/query.hmm > benchmark/query.cons.fa
 	@echo done
 
 run-%:
