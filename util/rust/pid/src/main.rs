@@ -162,6 +162,9 @@ fn main() -> anyhow::Result<()> {
     len_filter(&mut query_sto);
     len_filter(&mut target_sto);
 
+    // only keep query fams that still have at least 10 sequences
+    query_sto.records.retain(|_, rec| rec.sequences.len() >= 10);
+
     // what: remove families from the target set that don't
     //       appear in the query set (and vice versa)
     //
