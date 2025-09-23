@@ -33,7 +33,6 @@ NAIL    := $(SCRIPTS)/run-nail.sh
 HMMER   := $(SCRIPTS)/run-hmmer.sh
 MMSEQS  := $(SCRIPTS)/run-mmseqs.sh
 BLAST   := $(SCRIPTS)/run-blast.sh
-LAST    := $(SCRIPTS)/run-last.sh
 DIAMOND := $(SCRIPTS)/run-diamond.sh
 
 # profmark input 

@@ -117,8 +117,6 @@ MMSEQS      := $(TOOL_BIN)/mmseqs
 BLASTP      := $(TOOL_BIN)/blastp
 PSIBLAST    := $(TOOL_BIN)/psiblast
 MAKEBLASTDB := $(TOOL_BIN)/makeblastdb
-LASTAL      := $(TOOL_BIN)/lastal
-LASTDB      := $(TOOL_BIN)/lastdb
 DIAMOND     := $(TOOL_BIN)/diamond
 
 .PHONY: nail hmmer mmseqs blast last diamond
@@ -171,19 +169,6 @@ blast: $(TOOL_BIN)
 	@ln -sf $(BLAST_BIN_DIR)/blastp $(BLASTP)
 	@ln -sf $(BLAST_BIN_DIR)/psiblast $(PSIBLAST)
 	@ln -sf $(BLAST_BIN_DIR)/makeblastdb $(MAKEBLASTDB)
-
-LAST_SRC_URL := https://gitlab.com/mcfrith/last/-/archive/1642/last-1642.tar.gz
-LAST_SRC_TGZ := $(TOOL_DIR)/last.tgz
-LAST_SRC_DIR := $(TOOL_DIR)/last
-LAST_BIN_DIR := $(LAST_SRC_DIR)/bin
-last: $(TOOL_BIN)
-	@wget -O $(LAST_SRC_TGZ) $(LAST_SRC_URL)
-	@mkdir -p $(LAST_SRC_DIR)
-	@tar --strip-components=1 -xzf $(LAST_SRC_TGZ) -C $(LAST_SRC_DIR)
-	@cd $(LAST_SRC_DIR) && make
-	@rm $(LAST_SRC_TGZ)
-	@ln -sf $(LAST_BIN_DIR)/lastal $(LASTAL)
-	@ln -sf $(LAST_BIN_DIR)/lastdb $(LASTDB)
 
 DIAMOND_BIN_TGZ := $(TOOL_DIR)/diamond.tgz
 DIAMOND_BIN     := $(TOOL_DIR)/diamond
