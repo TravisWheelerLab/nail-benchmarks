@@ -17,38 +17,24 @@ TDB=$TMP/targetDB
 ADB=$TMP/alignDB
 FDB=$TMP/forwardDB
 
-TBL_1=$RESULTS/mmseqs.seq.tbl
-TIME_1=$RESULTS/mmseqs.seq.time
-TBL_2=$RESULTS/mmseqs.cons.tbl
-TIME_2=$RESULTS/mmseqs.cons.time
-TBL_3=$RESULTS/mmseqs.prf.tbl
-TIME_3=$RESULTS/mmseqs.prf.time
-
 S_ARGS="$QDB $TDB $ADB $TMP --threads $THREADS -s 7.5  --max-seqs 1000"
 C_ARGS="--format-mode 0"
 
+TBL_SEQ=$RESULTS/mmseqs.seq.tbl
+TIME_SEQ=$RESULTS/mmseqs.seq.time
 rm -rf $TMP/*
 echo "running mmseqs seq..."
 (
     $MMSEQS createdb $TARGET $TDB
     $MMSEQS createdb $QUERY_FA $QDB
     $MMSEQS search $S_ARGS -e $E
-    $MMSEQS convertalis $QDB $TDB $ADB $TBL_1 $C_ARGS
-) | /usr/bin/time -p -o "$TIME_1" cat >/dev/null
-cat $TIME_1 | grep real | awk '{print $2 "s"}'
+    $MMSEQS convertalis $QDB $TDB $ADB $TBL_SEQ $C_ARGS
+) | /usr/bin/time -p -o "$TIME_SEQ" cat >/dev/null
+cat $TIME_SEQ | grep real | awk '{print $2 "s"}'
 echo
 
-rm -rf $TMP/*
-echo "running mmseqs consensus..."
-(
-    $MMSEQS createdb $TARGET $TDB
-    $MMSEQS createdb $QUERY_CONS_FA $QDB
-    $MMSEQS search $S_ARGS -e $E
-    $MMSEQS convertalis $QDB $TDB $ADB $TBL_2 $C_ARGS
-) | /usr/bin/time -p -o "$TIME_2" cat >/dev/null
-cat $TIME_2 | grep real | awk '{print $2 "s"}'
-echo
-
+TBL_PRF=$RESULTS/mmseqs.prf.tbl
+TIME_PRF=$RESULTS/mmseqs.prf.time
 rm -rf $TMP/*
 echo "running mmseqs profile..."
 (
@@ -56,7 +42,20 @@ echo "running mmseqs profile..."
     $MMSEQS msa2profile $MDB $QDB --match-mode 1
     $MMSEQS createdb $TARGET $TDB
     $MMSEQS search $S_ARGS -e $E
-    $MMSEQS convertalis $QDB $TDB $ADB $TBL_3 $C_ARGS
-) | /usr/bin/time -p -o "$TIME_3" cat >/dev/null
-cat $TIME_3 | grep real | awk '{print $2 "s"}'
+    $MMSEQS convertalis $QDB $TDB $ADB $TBL_PRF $C_ARGS
+) | /usr/bin/time -p -o "$TIME_PRF" cat >/dev/null
+cat $TIME_PRF | grep real | awk '{print $2 "s"}'
 echo
+
+# TBL_CONS=$RESULTS/mmseqs.cons.tbl
+# TIME_CONS=$RESULTS/mmseqs.cons.time
+# rm -rf $TMP/*
+# echo "running mmseqs consensus..."
+# (
+#     $MMSEQS createdb $TARGET $TDB
+#     $MMSEQS createdb $QUERY_CONS_FA $QDB
+#     $MMSEQS search $S_ARGS -e $E
+#     $MMSEQS convertalis $QDB $TDB $ADB $TBL_CONS $C_ARGS
+# ) | /usr/bin/time -p -o "$TIME_CONS" cat >/dev/null
+# cat $TIME_CONS | grep real | awk '{print $2 "s"}'
+# echo

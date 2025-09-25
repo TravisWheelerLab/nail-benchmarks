@@ -367,7 +367,7 @@ fn main() -> anyhow::Result<()> {
         writeln!(query_sto_writer, "{rec}")?;
         let mut afa_writer = BufWriter::new(File::create(afa_dir.join(format!("{fam}.afa")))?);
         rec.sequences.iter().try_for_each(|(name, seq)| {
-            writeln!(afa_writer, ">{name}")?;
+            writeln!(afa_writer, ">{fam}:{name}")?;
             writeln!(afa_writer, "{seq}")
         })
     })?;

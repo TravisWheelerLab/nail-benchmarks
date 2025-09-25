@@ -11,35 +11,36 @@ TMP=./tmp/nail/
 mkdir -p $TMP
 
 STATS=$RESULTS/nail.stats
-TBL_1=$RESULTS/nail.seq.tbl
-TIME_1=$RESULTS/nail.seq.time
-TBL_2=$RESULTS/nail.cons.tbl
-TIME_2=$RESULTS/nail.cons.time
-TBL_3=$RESULTS/nail.prf.tbl
-TIME_3=$RESULTS/nail.prf.time
 
 S_ARGS="-s -t $THREADS -E $E --tmp-dir $TMP --double-seed"
 
+TBL_SEQ=$RESULTS/nail.seq.tbl
+TIME_SEQ=$RESULTS/nail.seq.time
 echo "running nail seq..."
-/usr/bin/time -p -o $TIME_1 \
+/usr/bin/time -p -o $TIME_SEQ \
     $NAIL search $S_ARGS \
-    --tbl-out $TBL_1 \
+    --tbl-out $TBL_SEQ \
     $QUERY_FA $TARGET >> $STATS
-cat $TIME_1 | grep real | awk '{print $2 "s"}'
+cat $TIME_SEQ | grep real | awk '{print $2 "s"}'
 echo
 
-echo "running nail consensus..."
-/usr/bin/time -p -o $TIME_2 \
-    $NAIL search $S_ARGS \
-    --tbl-out $TBL_2 \
-    $QUERY_CONS_FA $TARGET >> $STATS
-cat $TIME_2 | grep real | awk '{print $2 "s"}'
-echo
-
+TBL_PRF=$RESULTS/nail.prf.tbl
+TIME_PRF=$RESULTS/nail.prf.time
 echo "running nail hmm..."
-/usr/bin/time -p -o $TIME_3 \
+/usr/bin/time -p -o $TIME_PRF \
     $NAIL search $S_ARGS \
-    --tbl-out $TBL_3 \
+    --tbl-out $TBL_PRF \
     $QUERY_HMM $TARGET >> $STATS
-cat $TIME_3 | grep real | awk '{print $2 "s"}'
+cat $TIME_PRF | grep real | awk '{print $2 "s"}'
 echo
+
+# TBL_CONS=$RESULTS/nail.cons.tbl
+# TIME_CONS=$RESULTS/nail.cons.time
+# echo "running nail consensus..."
+# /usr/bin/time -p -o $TIME_CONS \
+#     $NAIL search $S_ARGS \
+#     --tbl-out $TBL_CONS \
+#     $QUERY_CONS_FA $TARGET >> $STATS
+# cat $TIME_CONS | grep real | awk '{print $2 "s"}'
+# echo
+

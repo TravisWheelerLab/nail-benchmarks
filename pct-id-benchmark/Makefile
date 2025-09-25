@@ -131,4 +131,4 @@ plot-%: $(PLOT)
 	$(PLOT) $*
 
 clean:
-	@rm -rf tmp/ b-*/results/ benchmark/results/
+	@rm -rf tmp/ benchmark*/results/
