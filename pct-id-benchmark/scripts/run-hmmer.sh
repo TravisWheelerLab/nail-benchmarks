@@ -15,11 +15,12 @@ N_SPLITS=$(( THREADS / 4 ))
 SPLIT_THREADS=4
 SPLIT_DIR=$DIR/query-splits
 
-S_ARGS="--cpu $SPLIT_THREADS -E $E -o /dev/null"
+S_ARGS="--cpu $SPLIT_THREADS -E $E"
 
 TBL=$RESULTS/hmmer.seq.tbl
 DOM=$RESULTS/hmmer.seq.domtbl
 TIME=$RESULTS/hmmer.seq.time
+OUT=$RESULTS/hmmer.seq.out
 
 echo "running phmmer seq..."
 SPLIT_TIME=$($TIME_CMD $FASTABALANCE $QUERY_FA $N_SPLITS $SPLIT_DIR 2>&1)
@@ -28,6 +29,7 @@ echo "balance time: $(echo $SPLIT_TIME | awk '{print $2 "s"}')"
 parallel \
     "${TIME_CMD} -o ${SPLIT_DIR}/{/.}.time \
     $PHMMER $S_ARGS \
+    -o ${SPLIT_DIR}/{/.}.out \
     --tblout ${SPLIT_DIR}/{/.}.tbl \
     --domtblout ${SPLIT_DIR}/{/.}.domtbl \
     {} ${TARGET}" \
@@ -35,7 +37,9 @@ parallel \
 
 cat $SPLIT_DIR/*.tbl > $TBL
 cat $SPLIT_DIR/*.domtbl > $DOM
+cat $SPLIT_DIR/*.out > $OUT
 cat $SPLIT_DIR/*.time > $TIME
+
 rm -rf $SPLIT_DIR
 echo "split times:"
 cat $TIME | grep real | awk '{print $2 "s"}'
@@ -43,6 +47,7 @@ echo
 
 TBL=$RESULTS/hmmer.prf.tbl
 DOM=$RESULTS/hmmer.prf.domtbl
+OUT=$RESULTS/hmmer.prf.out
 TIME=$RESULTS/hmmer.prf.time
 
 echo "running hmmsearch..."
@@ -52,6 +57,7 @@ echo "balance time: $(echo $SPLIT_TIME | awk '{print $2 "s"}')"
 parallel \
     "${TIME_CMD} -o ${SPLIT_DIR}/{/.}.time \
     $HMMSEARCH $S_ARGS \
+    -o ${SPLIT_DIR}/{/.}.out \
     --tblout ${SPLIT_DIR}/{/.}.tbl \
     --domtblout ${SPLIT_DIR}/{/.}.domtbl \
     {} ${TARGET}" \
@@ -59,6 +65,7 @@ parallel \
 
 cat $SPLIT_DIR/*.tbl > $TBL
 cat $SPLIT_DIR/*.domtbl > $DOM
+cat $SPLIT_DIR/*.out > $OUT
 cat $SPLIT_DIR/*.time > $TIME
 rm -rf $SPLIT_DIR
 echo "split times:"
