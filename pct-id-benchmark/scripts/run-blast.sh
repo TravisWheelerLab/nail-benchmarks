@@ -15,36 +15,36 @@ TARGET_DB=$TMP/target_db
 
 $MAKEBLASTDB -in $TARGET -dbtype prot -out $TARGET_DB > /dev/null
 
-TBL_SEQ=$RESULTS/blast.seq.tbl
-TIME_SEQ=$RESULTS/blast.seq.time
+TBL=$RESULTS/blast.seq.tbl
+TIME=$RESULTS/blast.seq.time
 echo "running blast seq..."
-/usr/bin/time -p -o $TIME_SEQ \
+/usr/bin/time -p -o $TIME \
     $BLASTP -query $QUERY_FA \
     -db $TARGET_DB \
-    -out $TBL_SEQ \
+    -out $TBL \
     -outfmt 6 \
     -evalue $E \
     -num_threads $THREADS
-cat $TIME_SEQ | grep real | awk '{print $2 "s"}'
+cat $TIME | grep real | awk '{print $2 "s"}'
 echo
 
-TBL_PRF=$RESULTS/blast.prf.tbl
-TIME_PRF=$RESULTS/blast.prf.time
+TBL=$RESULTS/blast.prf.tbl
+TIME=$RESULTS/blast.prf.time
 echo "running blast profile..."
-start=$(date +%s)
-for q in $QUERY_AFA/*.afa; do
-  $PSIBLAST -in_msa $q \
-  -db $TARGET_DB \
-  -outfmt 6 \
-  -evalue $E \
-  -num_threads $THREADS \
-  -comp_based_stats 1 \
-  -num_iterations 1 \
-  >> $TBL_PRF
-done
-end=$(date +%s)
-echo "$((end - start))s"
-echo "$((end - start))s" >> $TIME_PRF
+(
+  for q in $QUERY_AFA/*.afa; do
+    $PSIBLAST -in_msa $q \
+    -db $TARGET_DB \
+    -outfmt 6 \
+    -evalue $E \
+    -num_threads $THREADS \
+    -comp_based_stats 1 \
+    -num_iterations 1 \
+    >> $TBL
+  done
+) | /usr/bin/time -p -o "$TIME" cat >/dev/null
+cat $TIME | grep real | awk '{print $2 "s"}'
+echo
 
 # TBL_CONS=$RESULTS/blast.cons.tbl
 # TIME_CONS=$RESULTS/blast.cons.time

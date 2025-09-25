@@ -158,6 +158,7 @@ struct PidData {
 
 impl PidData {
     fn new(tbl: &HitTable, bm: &Benchmark, search_type: SearchType) -> Self {
+        println!("{}", tbl.name);
         let mut positives_by_target: HashMap<String, Hit> = HashMap::new();
         let mut decoys_by_query: HashMap<String, Vec<Hit>> = HashMap::new();
 
@@ -336,10 +337,6 @@ impl PlotData {
                     pid_data.push(PidData::new(&tbl, bm, search_type));
                 }
                 SearchType::Sequence => {
-                    // what: filter out inter-family hits for non-intended
-                    //       pairs of target/query sequences
-                    //
-                    //  why:
                     let intended_pair_hits: Vec<Hit> = tbl
                         .hits
                         .into_iter()

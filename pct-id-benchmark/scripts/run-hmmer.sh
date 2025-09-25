@@ -3,7 +3,7 @@ HMMSEARCH=../tools/bin/hmmsearch
 PHMMER=../tools/bin/phmmer
 HMMBALANCE=../util/scripts/hmmbalance
 FASTABALANCE=../util/scripts/fastabalance
-TIME="/usr/bin/time -p"
+TIME_CMD="/usr/bin/time -p"
 
 set -e
 DIR="$(cd -- "$(dirname -- "$0")" && pwd)"
@@ -17,75 +17,75 @@ SPLIT_DIR=$DIR/query-splits
 
 S_ARGS="--cpu $SPLIT_THREADS -E $E -o /dev/null"
 
-TBL_SEQ=$RESULTS/hmmer.seq.tbl
-DOM_SEQ=$RESULTS/hmmer.seq.domtbl
-TIME_SEQ=$RESULTS/hmmer.seq.time
+TBL=$RESULTS/hmmer.seq.tbl
+DOM=$RESULTS/hmmer.seq.domtbl
+TIME=$RESULTS/hmmer.seq.time
 
 echo "running phmmer seq..."
-SPLIT_TIME=$($TIME $FASTABALANCE $QUERY_FA $N_SPLITS $SPLIT_DIR 2>&1)
+SPLIT_TIME=$($TIME_CMD $FASTABALANCE $QUERY_FA $N_SPLITS $SPLIT_DIR 2>&1)
 echo "balance time: $(echo $SPLIT_TIME | awk '{print $2 "s"}')"
 
 parallel \
-    "${TIME} -o ${SPLIT_DIR}/{/.}.time \
+    "${TIME_CMD} -o ${SPLIT_DIR}/{/.}.time \
     $PHMMER $S_ARGS \
     --tblout ${SPLIT_DIR}/{/.}.tbl \
     --domtblout ${SPLIT_DIR}/{/.}.domtbl \
     {} ${TARGET}" \
     ::: "${SPLIT_DIR}"/*.fa
 
-cat $SPLIT_DIR/*.tbl > $TBL_SEQ
-cat $SPLIT_DIR/*.domtbl > $DOM_SEQ
-cat $SPLIT_DIR/*.time > $TIME_SEQ
+cat $SPLIT_DIR/*.tbl > $TBL
+cat $SPLIT_DIR/*.domtbl > $DOM
+cat $SPLIT_DIR/*.time > $TIME
 rm -rf $SPLIT_DIR
 echo "split times:"
-cat $TIME_SEQ | grep real | awk '{print $2 "s"}'
+cat $TIME | grep real | awk '{print $2 "s"}'
 echo
 
-TBL_PRF=$RESULTS/hmmer.prf.tbl
-DOM_PRF=$RESULTS/hmmer.prf.domtbl
-TIME_PRF=$RESULTS/hmmer.prf.time
+TBL=$RESULTS/hmmer.prf.tbl
+DOM=$RESULTS/hmmer.prf.domtbl
+TIME=$RESULTS/hmmer.prf.time
 
 echo "running hmmsearch..."
-SPLIT_TIME=$($TIME $HMMBALANCE $QUERY_HMM $N_SPLITS $SPLIT_DIR 2>&1)
+SPLIT_TIME=$($TIME_CMD $HMMBALANCE $QUERY_HMM $N_SPLITS $SPLIT_DIR 2>&1)
 echo "balance time: $(echo $SPLIT_TIME | awk '{print $2 "s"}')"
 
 parallel \
-    "${TIME} -o ${SPLIT_DIR}/{/.}.time \
+    "${TIME_CMD} -o ${SPLIT_DIR}/{/.}.time \
     $HMMSEARCH $S_ARGS \
     --tblout ${SPLIT_DIR}/{/.}.tbl \
     --domtblout ${SPLIT_DIR}/{/.}.domtbl \
     {} ${TARGET}" \
     ::: "${SPLIT_DIR}"/*.hmm
 
-cat $SPLIT_DIR/*.tbl > $TBL_PRF
-cat $SPLIT_DIR/*.domtbl > $DOM_PRF
-cat $SPLIT_DIR/*.time > $TIME_PRF
+cat $SPLIT_DIR/*.tbl > $TBL
+cat $SPLIT_DIR/*.domtbl > $DOM
+cat $SPLIT_DIR/*.time > $TIME
 rm -rf $SPLIT_DIR
 echo "split times:"
-cat $TIME_PRF | grep real | awk '{print $2 "s"}'
+cat $TIME | grep real | awk '{print $2 "s"}'
 echo
 
-# TBL_CONS=$RESULTS/hmmer.cons.tbl
-# DOM_CONS=$RESULTS/hmmer.cons.domtbl
-# TIME_CONS=$RESULTS/hmmer.cons.time
+# TBL=$RESULTS/hmmer.cons.tbl
+# DOM=$RESULTS/hmmer.cons.domtbl
+# TIME=$RESULTS/hmmer.cons.time
 
 # echo "running phmmer consensus.."
-# SPLIT_TIME=$($TIME $FASTABALANCE $QUERY_CONS_FA $N_SPLITS $SPLIT_DIR 2>&1)
+# SPLIT_TIME=$($TIME_CMD $FASTABALANCE $QUERY_CONS_FA $N_SPLITS $SPLIT_DIR 2>&1)
 # echo "balance time: $(echo $SPLIT_TIME | awk '{print $2 "s"}')"
 
 # parallel \
-#     "${TIME} -o ${SPLIT_DIR}/{/.}.time \
+#     "${TIME_CMD} -o ${SPLIT_DIR}/{/.}.time \
 #     $PHMMER $S_ARGS \
 #     --tblout ${SPLIT_DIR}/{/.}.tbl \
 #     --domtblout ${SPLIT_DIR}/{/.}.domtbl \
 #     {} ${TARGET}" \
 #     ::: "${SPLIT_DIR}"/*.fa
 
-# cat $SPLIT_DIR/*.tbl > $TBL_CONS
-# cat $SPLIT_DIR/*.domtbl > $DOM_CONS
-# cat $SPLIT_DIR/*.time > $TIME_CONS
+# cat $SPLIT_DIR/*.tbl > $TBL
+# cat $SPLIT_DIR/*.domtbl > $DOM
+# cat $SPLIT_DIR/*.time > $TIME
 # rm -rf $SPLIT_DIR
 # echo "split times:"
-# cat $TIME_CONS | grep real | awk '{print $2 "s"}'
+# cat $TIME | grep real | awk '{print $2 "s"}'
 # echo
 

@@ -366,8 +366,17 @@ fn main() -> anyhow::Result<()> {
     query_sto.records.iter().try_for_each(|(fam, rec)| {
         writeln!(query_sto_writer, "{rec}")?;
         let mut afa_writer = BufWriter::new(File::create(afa_dir.join(format!("{fam}.afa")))?);
-        rec.sequences.iter().try_for_each(|(name, seq)| {
-            writeln!(afa_writer, ">{fam}:{name}")?;
+
+        let mut seqs = rec.sequences.iter();
+
+        // write the first sequence with the family name so we
+        // can convince blast to label the profile appropriately
+        let (_, seq) = seqs.next().expect("no seqs in query sto record");
+        writeln!(afa_writer, ">{fam}")?;
+        writeln!(afa_writer, "{seq}")?;
+
+        seqs.try_for_each(|(name, seq)| {
+            writeln!(afa_writer, ">{name}")?;
             writeln!(afa_writer, "{seq}")
         })
     })?;

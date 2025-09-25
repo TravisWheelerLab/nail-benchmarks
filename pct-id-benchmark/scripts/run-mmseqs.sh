@@ -16,46 +16,61 @@ QDB=$TMP/queryDB
 TDB=$TMP/targetDB
 ADB=$TMP/alignDB
 FDB=$TMP/forwardDB
+P7_QDB=$DIR/p7-queryDB/queryDB 
 
 S_ARGS="$QDB $TDB $ADB $TMP --threads $THREADS -s 7.5  --max-seqs 1000"
 C_ARGS="--format-mode 0"
 
-TBL_SEQ=$RESULTS/mmseqs.seq.tbl
-TIME_SEQ=$RESULTS/mmseqs.seq.time
+TBL=$RESULTS/mmseqs.seq.tbl
+TIME=$RESULTS/mmseqs.seq.time
+
 rm -rf $TMP/*
 echo "running mmseqs seq..."
+$MMSEQS createdb $TARGET $TDB > /dev/null
+$MMSEQS createdb $QUERY_FA $QDB > /dev/null
 (
-    $MMSEQS createdb $TARGET $TDB
-    $MMSEQS createdb $QUERY_FA $QDB
     $MMSEQS search $S_ARGS -e $E
-    $MMSEQS convertalis $QDB $TDB $ADB $TBL_SEQ $C_ARGS
-) | /usr/bin/time -p -o "$TIME_SEQ" cat >/dev/null
-cat $TIME_SEQ | grep real | awk '{print $2 "s"}'
+    $MMSEQS convertalis $QDB $TDB $ADB $TBL $C_ARGS
+) | /usr/bin/time -p -o "$TIME" cat >/dev/null
+cat $TIME | grep real | awk '{print $2 "s"}'
 echo
 
-TBL_PRF=$RESULTS/mmseqs.prf.tbl
-TIME_PRF=$RESULTS/mmseqs.prf.time
+TBL=$RESULTS/mmseqs.prf.tbl
+TIME=$RESULTS/mmseqs.prf.time
 rm -rf $TMP/*
 echo "running mmseqs profile..."
+$MMSEQS createdb $TARGET $TDB > /dev/null
+$MMSEQS convertmsa $QUERY_MSA $MDB --identifier-field 0 > /dev/null
+$MMSEQS msa2profile $MDB $QDB --match-mode 1 > /dev/null
 (
-    $MMSEQS convertmsa $QUERY_MSA $MDB --identifier-field 0
-    $MMSEQS msa2profile $MDB $QDB --match-mode 1
-    $MMSEQS createdb $TARGET $TDB
     $MMSEQS search $S_ARGS -e $E
-    $MMSEQS convertalis $QDB $TDB $ADB $TBL_PRF $C_ARGS
-) | /usr/bin/time -p -o "$TIME_PRF" cat >/dev/null
-cat $TIME_PRF | grep real | awk '{print $2 "s"}'
+    $MMSEQS convertalis $QDB $TDB $ADB $TBL $C_ARGS
+) | /usr/bin/time -p -o "$TIME" cat >/dev/null
+cat $TIME | grep real | awk '{print $2 "s"}'
 echo
 
-# TBL_CONS=$RESULTS/mmseqs.cons.tbl
-# TIME_CONS=$RESULTS/mmseqs.cons.time
+if [ -e $P7_QDB ]; then
+    TBL=$RESULTS/mmseqs-p7.prf.tbl
+    TIME=$RESULTS/mmseqs-p7.prf.time
+    rm -rf $TMP/*
+    echo "running mmseqs p7 profile..."
+    $MMSEQS createdb $TARGET $TDB > /dev/null
+    (
+        $MMSEQS search $P7_QDB $TDB $ADB $TMP --threads $THREADS -s 7.5  --max-seqs 1000
+        $MMSEQS convertalis $P7_QDB $TDB $ADB $TBL $C_ARGS
+    ) | /usr/bin/time -p -o "$TIME" cat >/dev/null
+    cat $TIME | grep real | awk '{print $2 "s"}'
+    echo
+fi
+
+# TBL=$RESULTS/mmseqs.cons.tbl
+# TIME=$RESULTS/mmseqs.cons.time
 # rm -rf $TMP/*
 # echo "running mmseqs consensus..."
+# $MMSEQS createdb $QUERY_CONS_FA $QDB
 # (
-#     $MMSEQS createdb $TARGET $TDB
-#     $MMSEQS createdb $QUERY_CONS_FA $QDB
 #     $MMSEQS search $S_ARGS -e $E
-#     $MMSEQS convertalis $QDB $TDB $ADB $TBL_CONS $C_ARGS
-# ) | /usr/bin/time -p -o "$TIME_CONS" cat >/dev/null
-# cat $TIME_CONS | grep real | awk '{print $2 "s"}'
+#     $MMSEQS convertalis $QDB $TDB $ADB $TBL $C_ARGS
+# ) | /usr/bin/time -p -o "$TIME" cat >/dev/null
+# cat $TIME | grep real | awk '{print $2 "s"}'
 # echo

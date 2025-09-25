@@ -11,33 +11,33 @@ TMP=./tmp/diamond
 mkdir -p $TMP
 TARGET_DB=$TMP/target_db
 
-TBL_SEQ=$RESULTS/diamond.seq.tbl
-TIME_SEQ=$RESULTS/diamond.seq.time
+TBL=$RESULTS/diamond.seq.tbl
+TIME=$RESULTS/diamond.seq.time
 
 $DIAMOND makedb --in $TARGET --db $TARGET_DB > /dev/null 2>&1
 
 echo "running diamond seq..."
-/usr/bin/time -p -o $TIME_SEQ \
+/usr/bin/time -p -o $TIME \
     $DIAMOND blastp --query $QUERY_FA \
     --db $TARGET_DB \
-    --out $TBL_SEQ \
+    --out $TBL \
     --outfmt 6 \
     --evalue $E \
     --threads $THREADS \
     > /dev/null 2>&1
-cat $TIME_SEQ | grep real | awk '{print $2 "s"}'
+cat $TIME | grep real | awk '{print $2 "s"}'
 echo
 
-# TBL_CONS=$RESULTS/diamond.cons.tbl
-# TIME_CONS=$RESULTS/diamond.cons.time
+# TBL=$RESULTS/diamond.cons.tbl
+# TIME=$RESULTS/diamond.cons.time
 # echo "running diamond consensus..."
-# /usr/bin/time -p -o $TIME_CONS \
+# /usr/bin/time -p -o $TIME \
 #     $DIAMOND blastp --query $QUERY_CONS_FA \
 #     --db $TARGET_DB \
-#     --out $TBL_CONS \
+#     --out $TBL \
 #     --outfmt 6 \
 #     --evalue $E \
 #     --threads $THREADS \
 #     > /dev/null 2>&1
-# cat $TIME_CONS | grep real | awk '{print $2 "s"}'
+# cat $TIME | grep real | awk '{print $2 "s"}'
 # echo

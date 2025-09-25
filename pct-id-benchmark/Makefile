@@ -131,4 +131,4 @@ plot-%: $(PLOT)
 	$(PLOT) $*
 
 clean:
-	@rm -rf tmp/ benchmark*/results/
+	@rm -rf tmp/ benchmark*/results/ benchmark*/p7-queryDB
