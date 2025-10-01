@@ -3,8 +3,8 @@ THREADS     ?= 8
 # profmark args
 SEED          ?= 67779
 TRAIN_TEST_ID ?= 0.30
-MIN_TEST       ?= 10
-MAX_TEST       ?= 30
+MIN_TEST      ?= 10
+MAX_TEST      ?= 30
 
 MAKEFILE_DIR := $(dir $(abspath $(lastword $(MAKEFILE_LIST))))
 TOOLS    := $(realpath $(MAKEFILE_DIR)../tools)
@@ -22,11 +22,23 @@ HMMBALANCE := $(UTIL)/scripts/hmmbalance
 RUST     := $(UTIL)/rust
 RUST_BIN := $(RUST)/target/release
 
+# benchmark creation
 PID       := $(RUST_BIN)/pid
 PID_SRC   := $(RUST)/pid/src
 
-PLOT     := $(RUST_BIN)/pid-plot
-PLOT_SRC := $(RUST)/pid-plot/src
+# plotting
+FIGURES   := $(MAKEFILE_DIR)/figures
+
+PARSE     := $(RUST_BIN)/pid-plot
+PARSE_SRC := $(RUST)/pid-plot/src
+
+PLOT_PID  := $(SCRIPTS)/plot-pid.py
+PLOT_ROC  := $(SCRIPTS)/plot-roc.py
+PLOT_TIME := $(SCRIPTS)/plot-time.py
+
+DATA_PID  := $(FIGURES)/pid.txt
+DATA_ROC  := $(FIGURES)/roc.txt
+DATA_TIME := $(FIGURES)/time.txt
 
 # align scripts
 NAIL    := $(SCRIPTS)/run-nail.sh
@@ -53,7 +65,7 @@ PM_OUT     := $(QUERY_STO) $(TARGET_STO)
 ##########################################
 ##########################################
  
-CHECK_PATHS := $(MAKEFILE_DIR) $(TOOLS) $(DATA) $(SRC_FA) $(SRC_STO) $(SPLIT_SRC) $(PID_SRC) $(PLOT_SRC)
+CHECK_PATHS := $(MAKEFILE_DIR) $(TOOLS) $(DATA) $(SRC_FA) $(SRC_STO) $(SPLIT_SRC) $(PID_SRC) $(PARSE_SRC)
 .PHONY: $(CHECK_PATHS)
 $(CHECK_PATHS):
 	@if [ -e "$@" ]; then \
@@ -124,11 +136,14 @@ run-%:
 	@$(BLAST)   $* $(THREADS)
 	@$(DIAMOND) $* $(THREADS)
 
-$(PLOT): $(PLOT_SRC)/main.rs
-	@cd $(PLOT_SRC) && cargo build --release
+$(PARSE): $(PARSE_SRC)/main.rs
+	@cd $(PARSE_SRC) && cargo build --release
 
-plot-%: $(PLOT)
-	$(PLOT) $*
+plot-%: $(PARSE)
+	@$(PARSE) $*
+	@$(PLOT_PID) $(DATA_PID)
+	@$(PLOT_ROC) $(DATA_ROC)
+	@$(PLOT_TIME) $(DATA_TIME)
 
 clean:
 	@rm -rf tmp/ benchmark*/results/ benchmark*/p7-queryDB
