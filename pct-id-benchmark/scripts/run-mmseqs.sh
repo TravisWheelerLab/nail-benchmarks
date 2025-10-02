@@ -1,12 +1,12 @@
 #!/usr/bin/env bash
-MMSEQS=../tools/bin/mmseqs
-ESL=../tools/bin/esl-seqstat
 
 set -e
 DIR="$(cd -- "$(dirname -- "$0")" && pwd)"
 
 . $DIR/vars.sh
 set_vars "$@"
+
+MMSEQS="$NUMA_PREFIX../tools/bin/mmseqs"
 
 TMP=./tmp/mmseqs/
 mkdir -p $TMP
@@ -18,18 +18,17 @@ ADB=$TMP/alignDB
 FDB=$TMP/forwardDB
 P7_QDB=$DIR/p7-queryDB/queryDB 
 
-S_ARGS="$QDB $TDB $ADB $TMP --threads $THREADS -s 7.5  --max-seqs 1000"
+S_ARGS="$TDB $ADB $TMP --threads $THREADS -s 7.5 --max-seqs 1000 -e $E"
 C_ARGS="--format-mode 0"
 
 TBL=$RESULTS/mmseqs.seq.tbl
 TIME=$RESULTS/mmseqs.seq.time
-
 rm -rf $TMP/*
 echo "running mmseqs seq..."
 $MMSEQS createdb $TARGET $TDB > /dev/null
 $MMSEQS createdb $QUERY_FA $QDB > /dev/null
 (
-    $MMSEQS search $S_ARGS -e $E
+    $MMSEQS search $QDB $S_ARGS
     $MMSEQS convertalis $QDB $TDB $ADB $TBL $C_ARGS
 ) | /usr/bin/time -p -o "$TIME" cat >/dev/null
 cat $TIME | grep real | awk '{print $2 "s"}'
@@ -43,7 +42,7 @@ $MMSEQS createdb $TARGET $TDB > /dev/null
 $MMSEQS convertmsa $QUERY_MSA $MDB --identifier-field 0 > /dev/null
 $MMSEQS msa2profile $MDB $QDB --match-mode 1 > /dev/null
 (
-    $MMSEQS search $S_ARGS -e $E
+    $MMSEQS search $QDB $S_ARGS
     $MMSEQS convertalis $QDB $TDB $ADB $TBL $C_ARGS
 ) | /usr/bin/time -p -o "$TIME" cat >/dev/null
 cat $TIME | grep real | awk '{print $2 "s"}'
@@ -56,21 +55,9 @@ if [ -e $P7_QDB ]; then
     echo "running mmseqs p7 profile..."
     $MMSEQS createdb $TARGET $TDB > /dev/null
     (
-        $MMSEQS search $P7_QDB $TDB $ADB $TMP --threads $THREADS -s 7.5  --max-seqs 1000
+        $MMSEQS search $P7_QDB $S_ARGS
         $MMSEQS convertalis $P7_QDB $TDB $ADB $TBL $C_ARGS
     ) | /usr/bin/time -p -o "$TIME" cat >/dev/null
     cat $TIME | grep real | awk '{print $2 "s"}'
     echo
 fi
-
-# TBL=$RESULTS/mmseqs.cons.tbl
-# TIME=$RESULTS/mmseqs.cons.time
-# rm -rf $TMP/*
-# echo "running mmseqs consensus..."
-# $MMSEQS createdb $QUERY_CONS_FA $QDB
-# (
-#     $MMSEQS search $S_ARGS -e $E
-#     $MMSEQS convertalis $QDB $TDB $ADB $TBL $C_ARGS
-# ) | /usr/bin/time -p -o "$TIME" cat >/dev/null
-# cat $TIME | grep real | awk '{print $2 "s"}'
-# echo

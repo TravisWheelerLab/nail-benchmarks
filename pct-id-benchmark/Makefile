@@ -1,5 +1,5 @@
-THREADS     ?= 8
-
+THREADS   ?= 8
+NUMA_NODE ?=
 # profmark args
 SEED          ?= 67779
 TRAIN_TEST_ID ?= 0.30
@@ -130,11 +130,11 @@ benchmark: profmark $(PID)
 
 run-%:
 	@echo "benchmarking $*/ with $(THREADS) threads..."
-	@$(HMMER)   $* $(THREADS)
-	@$(NAIL)    $* $(THREADS)
-	@$(MMSEQS)  $* $(THREADS)
-	@$(BLAST)   $* $(THREADS)
-	@$(DIAMOND) $* $(THREADS)
+	@$(HMMER)   $* $(THREADS) $(NUMA_NODE) 
+	@$(NAIL)    $* $(THREADS) $(NUMA_NODE)
+	@$(MMSEQS)  $* $(THREADS) $(NUMA_NODE)
+	@$(BLAST)   $* $(THREADS) $(NUMA_NODE)
+	@$(DIAMOND) $* $(THREADS) $(NUMA_NODE)
 
 $(PARSE): $(PARSE_SRC)/main.rs
 	@cd $(PARSE_SRC) && cargo build --release

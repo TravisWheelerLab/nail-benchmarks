@@ -1,11 +1,12 @@
 #!/usr/bin/env bash
-DIAMOND=../tools/bin/diamond
 
 set -e
 DIR="$(cd -- "$(dirname -- "$0")" && pwd)"
 
 . $DIR/vars.sh
 set_vars "$@"
+
+DIAMOND="$NUMA_PREFIX../tools/bin/diamond"
 
 TMP=./tmp/diamond
 mkdir -p $TMP
@@ -27,17 +28,3 @@ echo "running diamond seq..."
     > /dev/null 2>&1
 cat $TIME | grep real | awk '{print $2 "s"}'
 echo
-
-# TBL=$RESULTS/diamond.cons.tbl
-# TIME=$RESULTS/diamond.cons.time
-# echo "running diamond consensus..."
-# /usr/bin/time -p -o $TIME \
-#     $DIAMOND blastp --query $QUERY_CONS_FA \
-#     --db $TARGET_DB \
-#     --out $TBL \
-#     --outfmt 6 \
-#     --evalue $E \
-#     --threads $THREADS \
-#     > /dev/null 2>&1
-# cat $TIME | grep real | awk '{print $2 "s"}'
-# echo

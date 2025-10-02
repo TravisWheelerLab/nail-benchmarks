@@ -1,13 +1,14 @@
 #!/usr/bin/env bash
-BLASTP=../tools/bin/blastp
-PSIBLAST=../tools/bin/psiblast
-MAKEBLASTDB=../tools/bin/makeblastdb
 
 set -e
 DIR="$(cd -- "$(dirname -- "$0")" && pwd)"
 
 . $DIR/vars.sh
 set_vars "$@"
+
+BLASTP="$NUMA_PREFIX../tools/bin/blastp"
+PSIBLAST="$NUMA_PREFIX../tools/bin/psiblast"
+MAKEBLASTDB="$NUMA_PREFIX../tools/bin/makeblastdb"
 
 TMP=./tmp/blast/
 mkdir -p $TMP
@@ -45,17 +46,3 @@ echo "running blast profile..."
 ) | /usr/bin/time -p -o "$TIME" cat >/dev/null
 cat $TIME | grep real | awk '{print $2 "s"}'
 echo
-
-# TBL_CONS=$RESULTS/blast.cons.tbl
-# TIME_CONS=$RESULTS/blast.cons.time
-# echo "running blast consensus..."
-# /usr/bin/time -p -o $TIME_CONS \
-#     $BLASTP -query $QUERY_CONS_FA \
-#     -db $TARGET_DB \
-#     -out $TBL_CONS \
-#     -outfmt 6 \
-#     -evalue $E \
-#     -num_threads $THREADS
-# cat $TIME_CONS | grep real | awk '{print $2 "s"}'
-# echo
-
