@@ -45,7 +45,7 @@ run() {
 
 
 QUERY=$QUERY_HMM
-run "nail.prf" "--mmseqs-k-score 60"
+run "nail.prf" "--mmseqs-k-score 60 --mmseqs-max-seqs 2000 -C 0.01"
 
 # copy the p7hmm-derived mmseqs2 
 # profile DB to the benchmark dir
@@ -53,4 +53,4 @@ mkdir -p $DIR/p7-queryDB
 cp $TMP/queryDB* $DIR/p7-queryDB
 
 QUERY=$QUERY_FA
-run "nail.seq" "--mmseqs-k-score 60"
+run "nail.seq" "--mmseqs-k-score 60 --mmseqs-max-seqs 2000 -C 0.01"
