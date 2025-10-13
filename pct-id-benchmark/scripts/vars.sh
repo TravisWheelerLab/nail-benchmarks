@@ -22,12 +22,6 @@ set_vars() {
         export NUMA_PREFIX=""
     fi
 
-    if (( THREADS % 4 != 0 )); then
-        echo "threads: $THREADS"
-        echo "threads must be a multiple of 4 (just trust me)"
-        exit
-    fi
-    
     export DIR=$1
     export BENCH_TBL=$DIR/benchmark.tbl
     export QUERY_HMM=$DIR/query.hmm

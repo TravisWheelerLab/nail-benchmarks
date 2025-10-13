@@ -44,6 +44,7 @@ DATA_TIME := $(FIGURES)/time.txt
 NAIL    := $(SCRIPTS)/run-nail.sh
 HMMER   := $(SCRIPTS)/run-hmmer.sh
 MMSEQS  := $(SCRIPTS)/run-mmseqs.sh
+LAST    := $(SCRIPTS)/run-last.sh
 BLAST   := $(SCRIPTS)/run-blast.sh
 DIAMOND := $(SCRIPTS)/run-diamond.sh
 
@@ -133,6 +134,7 @@ run-%:
 	@$(HMMER)   $* $(THREADS) $(NUMA_NODE) 
 	@$(NAIL)    $* $(THREADS) $(NUMA_NODE)
 	@$(MMSEQS)  $* $(THREADS) $(NUMA_NODE)
+	@$(LAST)    $* $(THREADS) $(NUMA_NODE)
 	@$(BLAST)   $* $(THREADS) $(NUMA_NODE)
 	@$(DIAMOND) $* $(THREADS) $(NUMA_NODE)
 

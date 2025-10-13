@@ -7,6 +7,12 @@ DIR="$(cd -- "$(dirname -- "$0")" && pwd)"
 . $DIR/vars.sh
 set_vars "$@"
 
+if (( THREADS % 4 != 0 )); then
+    echo "threads: $THREADS"
+    echo "threads must be a multiple of 4 (just trust me)"
+    exit
+fi
+
 HMMSEARCH="$NUMA_PREFIX../tools/bin/hmmsearch"
 PHMMER="$NUMA_PREFIX../tools/bin/phmmer"
 HMMBALANCE="$NUMA_PREFIX../util/scripts/hmmbalance"

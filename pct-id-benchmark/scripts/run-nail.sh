@@ -11,34 +11,46 @@ NAIL="$NUMA_PREFIX../tools/bin/nail"
 TMP=./tmp/nail/
 mkdir -p $TMP
 
-STATS=$RESULTS/nail.stats
+SUMMARY=$RESULTS/nail.summary
 
-S_ARGS="-s -t $THREADS -E $E --tmp-dir $TMP --mmseqs-k-score 60"
+run() {
+    PREFIX=$1
+    S_ARGS=$2
 
-PREFIX="nail.seq"
-TBL="$RESULTS/$PREFIX.tbl"
-TIME="$RESULTS/$PREFIX.time"
-echo "running $PREFIX..."
-/usr/bin/time -p -o $TIME \
-    $NAIL search $S_ARGS \
-    --tbl-out $TBL \
-    $QUERY_FA $TARGET >> $STATS
-cat $TIME | grep real | awk '{print $2 "s"}'
-echo
+    TBL="$RESULTS/$PREFIX.tbl"
+    TIME="$RESULTS/$PREFIX.time"
+    SEEDS="$RESULTS/$PREFIX.seeds"
+    STATS="$RESULTS/$PREFIX.stats"
 
-PREFIX="nail.prf"
-TBL="$RESULTS/$PREFIX.tbl"
-TIME="$RESULTS/$PREFIX.time"
-echo "running $PREFIX..."
-/usr/bin/time -p -o $TIME \
-    $NAIL search $S_ARGS \
-    --tbl-out $TBL \
-    $QUERY_HMM $TARGET >> $STATS
-cat $TIME | grep real | awk '{print $2 "s"}'
-echo
+    echo "running $PREFIX | $S_ARGS"
+    echo "   query: $QUERY"
+    echo "  target: $TARGET"
+
+    /usr/bin/time -p -o $TIME \
+        $NAIL search \
+        -s \
+        -t $THREADS \
+        --tmp-dir $TMP \
+        --stats-results-path $STATS \
+        --tbl-out $TBL \
+        -E $E \
+        $S_ARGS \
+        $QUERY $TARGET >> $SUMMARY
+
+    mv $TMP/align_a.tsv $SEEDS
+
+    cat $TIME | grep real | awk '{print $2 "s"}'
+    echo
+}
+
+
+QUERY=$QUERY_HMM
+run "nail.prf" "--mmseqs-k-score 60"
 
 # copy the p7hmm-derived mmseqs2 
 # profile DB to the benchmark dir
 mkdir -p $DIR/p7-queryDB
 cp $TMP/queryDB* $DIR/p7-queryDB
 
+QUERY=$QUERY_FA
+run "nail.seq" "--mmseqs-k-score 60"
