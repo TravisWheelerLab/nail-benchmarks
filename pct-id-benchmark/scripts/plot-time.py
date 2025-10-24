@@ -21,13 +21,15 @@ def main(filename):
     points.sort(key=lambda c: c[1], reverse=True)
 
     fig, ax = plt.subplots(figsize=(16, 9))
-    plt.title("")
+    plt.title("Recall by runtime")
 
-    # ax.set_xlim(1e-3, 5.0)
-    ax.set_xlabel("")
-    ax.set_ylabel("")
-    ax.set_yscale("log")
-    ax.invert_yaxis()
+    ax.set_xlabel("Runtime (seconds; log scale)")
+    ax.set_xscale("log")
+    ax.set_xlim(1.0, 1e4)
+
+    ax.set_ylabel(f"Recall at {fpr} FP per search")
+    ax.set_ylim(0.0, 0.8)
+
     ax.grid(True)
 
     for label, x, y, in points:
@@ -37,7 +39,11 @@ def main(filename):
             s=20,
         )
 
-    fig.legend()
+    fig.legend(
+        fontsize=8,
+        markerscale=1.0,
+        loc='lower right'
+    )
 
     plt.savefig(filename.with_suffix(".pdf"))
 

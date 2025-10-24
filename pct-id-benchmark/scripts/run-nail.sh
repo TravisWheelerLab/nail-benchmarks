@@ -1,56 +1,26 @@
 #!/usr/bin/env bash
 
-set -e
-DIR="$(cd -- "$(dirname -- "$0")" && pwd)"
+SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
+. "$SCRIPT_DIR/init.sh"
 
-. $DIR/vars.sh
-set_vars "$@"
-
-NAIL="$NUMA_PREFIX../tools/bin/nail"
+###
 
 TMP=./tmp/nail/
 mkdir -p $TMP
 
-SUMMARY=$RESULTS/nail.summary
-
-run() {
-    PREFIX=$1
-    S_ARGS=$2
-
-    TBL="$RESULTS/$PREFIX.tbl"
-    TIME="$RESULTS/$PREFIX.time"
-    SEEDS="$RESULTS/$PREFIX.seeds"
-    STATS="$RESULTS/$PREFIX.stats"
-
-    echo "running $PREFIX | $S_ARGS"
-    echo "   query: $QUERY"
-    echo "  target: $TARGET"
-
-    /usr/bin/time -p -o $TIME \
-        $NAIL search \
-        -s \
-        -t $THREADS \
-        --tmp-dir $TMP \
-        --stats-results-path $STATS \
-        --tbl-out $TBL \
-        -E $E \
-        $S_ARGS \
-        $QUERY $TARGET >> $SUMMARY
-
-    mv $TMP/align_a.tsv $SEEDS
-
-    cat $TIME | grep real | awk '{print $2 "s"}'
-    echo
-}
-
+###
 
 QUERY=$QUERY_HMM
-run "nail.prf" "--mmseqs-k-score 60 --mmseqs-max-seqs 2000 -C 0.01"
+run_nail "nail-s12.0.prf" "--mmseqs-s 12.0 -C 0.01"
+# run_nail "nail-s10.0.prf" "--mmseqs-s 10.0 -C 0.01"
+# run_nail "nail-s7.5.prf"  "--mmseqs-s 7.5  -C 0.01"
 
 # copy the p7hmm-derived mmseqs2 
 # profile DB to the benchmark dir
-mkdir -p $DIR/p7-queryDB
-cp $TMP/queryDB* $DIR/p7-queryDB
+mkdir -p $BM_DIR/p7-queryDB
+cp $TMP/queryDB* $BM_DIR/p7-queryDB
 
 QUERY=$QUERY_FA
-run "nail.seq" "--mmseqs-k-score 60 --mmseqs-max-seqs 2000 -C 0.01"
+run_nail "nail-s12.0.seq" "--mmseqs-s 12.0 -C 0.01"
+# run_nail "nail-s10.0.seq" "--mmseqs-s 10.0 -C 0.01"
+# run_nail "nail-s7.5.seq"  "--mmseqs-s 7.5  -C 0.01"

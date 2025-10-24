@@ -1,30 +1,27 @@
 #!/usr/bin/env bash
 
-set -e
-DIR="$(cd -- "$(dirname -- "$0")" && pwd)"
+SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
+. "$SCRIPT_DIR/init.sh"
 
-. $DIR/vars.sh
-set_vars "$@"
-
-DIAMOND="$NUMA_PREFIX../tools/bin/diamond"
+###
 
 TMP=./tmp/diamond
 mkdir -p $TMP
+
 TARGET_DB=$TMP/target_db
-
-TBL=$RESULTS/diamond.seq.tbl
-TIME=$RESULTS/diamond.seq.time
-
 $DIAMOND makedb --in $TARGET --db $TARGET_DB > /dev/null 2>&1
 
-echo "running diamond seq..."
-/usr/bin/time -p -o $TIME \
-    $DIAMOND blastp --query $QUERY_FA \
-    --db $TARGET_DB \
-    --out $TBL \
-    --outfmt 6 \
-    --evalue $E \
-    --threads $THREADS \
-    > /dev/null 2>&1
-cat $TIME | grep real | awk '{print $2 "s"}'
-echo
+###
+
+QUERY=$QUERY_FA
+
+# run_diamond "diamond.faster.seq"     "--faster"
+# run_diamond "diamond.fast.seq"       "--fast"
+
+run_diamond "diamond.default.seq"
+
+run_diamond "diamond.mid-sens.seq"   "--mid-sensitive"
+run_diamond "diamond.sens.seq"       "--sensitive"
+run_diamond "diamond.more-sens.seq"  "--more-sensitive"
+run_diamond "diamond.very-sens.seq"  "--very-sensitive"
+run_diamond "diamond.ultra-sens.seq" "--ultra-sensitive"

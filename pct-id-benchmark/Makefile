@@ -120,6 +120,15 @@ small: profmark $(PID)
 	@$(HMMEMIT) -c benchmark-sm/query.hmm > benchmark-sm/query.cons.fa
 	@echo done
 
+medium: profmark $(PID)
+	@echo building benchmark...
+	@mkdir -p benchmark-med/
+	@$(PID) benchmark-med/ $(QUERY_STO) $(TARGET_STO) $(SRC_STO) $(SRC_FA) 500
+	@echo building query.hmm...
+	@$(HMMBUILD) --cpu $(THREADS) benchmark-med/query.hmm benchmark-med/query.sto > /dev/null
+	@$(HMMEMIT) -c benchmark-med/query.hmm > benchmark-med/query.cons.fa
+	@echo done
+
 benchmark: profmark $(PID)
 	@echo building benchmark...
 	@mkdir -p benchmark/
@@ -147,5 +156,10 @@ plot-%: $(PARSE)
 	@$(PLOT_ROC) $(DATA_ROC)
 	@$(PLOT_TIME) $(DATA_TIME)
 
+just-plot-%: $(PARSE)
+	@$(PLOT_PID) $(DATA_PID)
+	@$(PLOT_ROC) $(DATA_ROC)
+	@$(PLOT_TIME) $(DATA_TIME)
+
 clean:
-	@rm -rf tmp/ benchmark*/results/ benchmark*/p7-queryDB
+	@rm -rf tmp/ benchmark*/results*/ benchmark*/p7-queryDB

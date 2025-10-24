@@ -14,6 +14,7 @@ use glob::glob;
 
 const PRECISION: usize = 4;
 const FIXED_FPR: f32 = 0.01;
+// const FIXED_FPR: f32 = 1_000_000.0;
 
 trait Float: PartialOrd {}
 impl Float for f32 {}
@@ -341,14 +342,18 @@ impl PlotData {
         .filter_map(Result::ok)
         {
             let file = File::open(&path)?;
-            let mut name = path
+
+            let stem_tokens: Vec<&str> = path
                 .file_stem()
                 .and_then(|s| s.to_str())
                 .context("invalid path")?
-                .splitn(2, '.');
+                .split('.')
+                .collect();
 
-            let prefix = name.next().context("no tbl prefix")?;
-            let search_type = match name.next().context("no tbl search type")? {
+            assert!(stem_tokens.len() >= 2);
+
+            let prefix = stem_tokens[..stem_tokens.len() - 1].join(".");
+            let search_type = match *stem_tokens.last().unwrap() {
                 "cons" => SearchType::Consensus,
                 "prf" => SearchType::Profile,
                 "seq" => SearchType::Sequence,
@@ -358,8 +363,8 @@ impl PlotData {
             let name = format!("{prefix} {search_type}");
 
             let tbl = match prefix {
-                "hmmer" => HitTable::parse::<_, HmmerTable>(file, &name),
-                s if s.contains("nail") => HitTable::parse::<_, NailTable>(file, &name),
+                s if s.starts_with("hmmer") => HitTable::parse::<_, HmmerTable>(file, &name),
+                s if s.starts_with("nail") => HitTable::parse::<_, NailTable>(file, &name),
                 _ => HitTable::parse::<_, BlastTable>(file, &name),
             }
             .map(|tbl| HitTable2::new(&tbl, bm, search_type))?;
@@ -409,7 +414,7 @@ impl PlotData {
                     f64::INFINITY
                 }
             };
-
+            println!("{} {:.3e}", tbl.name, e_value_threshold);
             let mut bin_cnts = vec![0usize; self.bin_sizes.len()];
             tbl.positives
                 .iter()
@@ -526,7 +531,7 @@ impl PlotData {
 
                 let recall = count as f64 / self.positive_cnt as f64;
 
-                writeln!(out, "{},({:.4},{:.4})", tbl.name, recall, time)
+                writeln!(out, "{},({:.4},{:.4})", tbl.name, time, recall)
             })?;
         Ok(())
     }

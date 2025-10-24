@@ -49,7 +49,10 @@ def main(filename):
 
     ax_bins.bar(bin_cnt[1], bin_cnt[2], color=COLORS[-1], alpha=0.75, label="pair count")
 
-    fig.legend()
+    fig.legend(
+        fontsize=8,
+        markerscale=1.0,
+    )
 
     plt.savefig(filename.with_suffix(".pdf"))
 
