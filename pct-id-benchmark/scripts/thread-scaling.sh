@@ -3,7 +3,7 @@
 SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 . "$SCRIPT_DIR/init.sh"
 
-set_default THREAD_MAX 96
+set_default THREAD_MAX 32
 set_default E 10
 
 check_defined BM_DIR
@@ -52,6 +52,6 @@ mmseqs() {
     done
 }
 
+mmseqs
 nail
 hmmer
-mmseqs

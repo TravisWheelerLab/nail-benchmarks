@@ -129,6 +129,15 @@ medium: profmark $(PID)
 	@$(HMMEMIT) -c benchmark-med/query.hmm > benchmark-med/query.cons.fa
 	@echo done
 
+large: profmark $(PID)
+	@echo building benchmark...
+	@mkdir -p benchmark-lg/
+	@$(PID) benchmark-lg/ $(QUERY_STO) $(TARGET_STO) $(SRC_STO) $(SRC_FA) 1000
+	@echo building query.hmm...
+	@$(HMMBUILD) --cpu $(THREADS) benchmark-lg/query.hmm benchmark-lg/query.sto > /dev/null
+	@$(HMMEMIT) -c benchmark-lg/query.hmm > benchmark-lg/query.cons.fa
+	@echo done
+
 benchmark: profmark $(PID)
 	@echo building benchmark...
 	@mkdir -p benchmark/

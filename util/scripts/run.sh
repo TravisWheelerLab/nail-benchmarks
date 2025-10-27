@@ -291,6 +291,7 @@ run_mmseqs() {
     local TIME="$RESULTS/$PREFIX.time"
 
     [ -e $ANNOYING ] && rm -rf $ANNOYING
+    [ -e $ADB ] && rm -f $ADB*
     [ -e $ADB.1 ] && rm -f $ADB.*
     
     echo "running $PREFIX | $S_ARGS"
