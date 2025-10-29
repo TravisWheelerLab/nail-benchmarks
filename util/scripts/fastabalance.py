@@ -1,38 +1,9 @@
 #! /usr/bin/python3
 
+from common import FastaIndex
+
 import sys
 import os
-
-
-class Index:
-    def __init__(self, path):
-        self.ranges = []
-        start = 0
-        length = 0
-
-        with open(path) as f:
-            for (i, line) in enumerate(f):
-                if i == 0:
-                    continue
-
-                if line.startswith(">"):
-                    self.ranges.append((start, i - 1, length))
-                    start = i
-                else:
-                    length += len(line)
-
-        self.ranges.append((start, i, length))
-        self.ranges.sort(key=lambda x: x[2])
-
-    def len(self):
-        return len(self.ranges)
-
-    def split(self, n):
-        splits = [[] for _ in range(n)]
-        for i in range(self.len()):
-            splits[i % n].append(self.ranges.pop())
-
-        return splits
 
 
 def write(fa_path, out_dir, splits):
@@ -55,7 +26,9 @@ if __name__ == "__main__":
 
     fa_path = sys.argv[1]
     n = int(sys.argv[2])
-    index = Index(fa_path)
+    index = FastaIndex(fa_path)
+
+    index.ranges.sort(key=lambda x: x[2])
     splits = index.split(n)
 
     if len(sys.argv) > 3:

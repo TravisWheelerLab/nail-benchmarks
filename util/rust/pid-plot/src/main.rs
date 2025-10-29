@@ -11,6 +11,7 @@ use bioio::tbl::{BlastTable, Hit, HitTable, HmmerTable, NailTable};
 
 use anyhow::Context;
 use glob::glob;
+use regex::Regex;
 
 const PRECISION: usize = 4;
 const FIXED_FPR: f32 = 0.01;
@@ -333,6 +334,8 @@ impl PlotData {
             pid_bin_tot_cnts[pid] += 1;
         });
 
+        let time_pattern = Regex::new(r"Elapsed.*\): (?P<time>.*)$").unwrap();
+
         for path in glob(
             results_dir
                 .join("*.tbl")
@@ -374,11 +377,21 @@ impl PlotData {
             let time_path = path.with_extension("time");
             let time: f32 = std::fs::read_to_string(time_path)?
                 .lines()
-                .filter(|l| l.starts_with("real"))
-                .map(|l| l.split_whitespace().last().expect("no time"))
-                .map(|t| t.parse::<f32>().expect("failed to parse time"))
+                .filter_map(|l| time_pattern.captures(l))
+                .map(|c| {
+                    c.name("time")
+                        .unwrap()
+                        .as_str()
+                        .split(':')
+                        .map(|t| t.parse::<f32>().unwrap())
+                        .rev()
+                        .enumerate()
+                        .map(|(i, t)| t * 60.0_f32.powf(i as f32))
+                        .sum()
+                })
                 .max_by(float_cmp)
                 .expect("no times found");
+
             times.push(time);
         }
 

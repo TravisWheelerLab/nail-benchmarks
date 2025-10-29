@@ -44,28 +44,16 @@ styles = {
     "hmmer prf": Style("hmmsearch", "D", COLORS[3]),
     "hmmer seq": Style("phmmer", "o", COLORS[3]),
     #
-    "nail prf": Style("nail (prf)", "D", COLORS[4]),
-    "nail seq": Style("nail (seq)", "o", COLORS[4]),
-    "nail-nc seq": Style("nail (seq, nc)", "o", COLORS[4], filled=False),
-    #
-    # "mmseqs-p7 prf": Style("mmseqs2 (p7 prf) | -s 7.5", "*"),
-    #    "mmseqs prf": Style("mmseqs2 (prf) | -s 7.5", "D"),
-    #    "mmseqs seq": Style("mmseqs2 (seq) | -s 7.5", "o"),
+    "nail-s12.0 prf": Style("nail (prf)", "D", COLORS[4]),
+    "nail-s12.0 seq": Style("nail (seq)", "o", COLORS[4]),
     #
     "mmseqs-default prf": Style("mmseqs2 (prf) | default", "D", COLORS[5], filled=False),
     "mmseqs-sens prf"   : Style("mmseqs2 (prf) | -s 7.5", "D", COLORS[5]),
-    "mmseqs-nail prf"   : Style("mmseqs2 (prf) | --k-score 60 --max-seqs 2000", "<", COLORS[5], filled=False),
-    "mmseqs-nc prf"     : Style("mmseqs2 (prf, nc) | --k-score 60 --max-seqs 2000", ">", COLORS[5], filled=False),
+    "mmseqs-nail prf"   : Style("mmseqs2 (prf) | -s 12.0 --max-seqs 2000", "<", COLORS[5], filled=False),
     #
-    "mmseqs-default-p7 prf" : Style("mmseqs2 (p7 prf) | default", "D", COLORS[0], filled=False),
-    "mmseqs-sens-p7 prf"    : Style("mmseqs2 (p7 prf) | -s 7.5", "D", COLORS[0]),
-    "mmseqs-nail-p7 prf"    : Style("mmseqs2 (p7 prf) | --k-score 60 --max-seqs 2000", "<", COLORS[0], filled=False),
-    "mmseqs-nc-p7 prf"      : Style("mmseqs2 (p7 prf, nc) | --k-score 60 --max-seqs 2000", ">", COLORS[0], filled=False),
-    #
-    "mmseqs-default seq" : Style("mmseqs2 (seq) | default", "o", COLORS[1], filled=False),
-    "mmseqs-sens seq"    : Style("mmseqs2 (seq) | -s 7.5", "o", COLORS[1]),
-    "mmseqs-nail seq"    : Style("mmseqs2 (seq) | --k-score 60 --max-seqs 2000", "<", COLORS[1], filled=False),
-    "mmseqs-nc seq"      : Style("mmseqs2 (seq, nc) | --k-score 60 --max-seqs 2000", ">", COLORS[1], filled=False),
+    "mmseqs-default seq": Style("mmseqs2 (seq) | default", "o", COLORS[1], filled=False),
+    "mmseqs-s7.5 seq"   : Style("mmseqs2 (seq) | -s 7.5", "o", COLORS[1]),
+    "mmseqs-s12.0 seq"  : Style("mmseqs2 (seq) | -s 12.0 --max-seqs 2000", "<", COLORS[1], filled=False),
 }
 
 _marker_seen = {}

@@ -1,33 +1,9 @@
 #! /usr/bin/python3
 
+from common import HmmIndex
+
 import sys
 import os
-
-
-class Index:
-    def __init__(self, path):
-        self.ranges = []
-        start = 0
-        length = 0
-        with open(path) as f:
-            for (i, line) in enumerate(f):
-                if "//" in line:
-                    self.ranges.append((start, i, length))
-                    start = i + 1
-                elif "LENG" in line:
-                    length = int(line.split()[1])
-
-        self.ranges.sort(key=lambda x: x[2])
-
-    def len(self):
-        return len(self.ranges)
-
-    def split(self, n):
-        splits = [[] for _ in range(n)]
-        for i in range(self.len()):
-            splits[i % n].append(self.ranges.pop())
-
-        return splits
 
 
 def write(hmm_path, out_dir, splits):
@@ -50,7 +26,9 @@ if __name__ == "__main__":
 
     hmm_path = sys.argv[1]
     n = int(sys.argv[2])
-    index = Index(hmm_path)
+    index = HmmIndex(hmm_path)
+
+    index.ranges.sort(key=lambda x: x[2])
     splits = index.split(n)
 
     if len(sys.argv) > 3:
