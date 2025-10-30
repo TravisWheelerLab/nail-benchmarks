@@ -100,6 +100,8 @@ run_nail() {
         check_defined $v $FUNCNAME
     done
 
+    mkdir -p $TMP
+
     local PREFIX=$1
     local S_ARGS=$2
 
@@ -283,6 +285,8 @@ run_mmseqs() {
     for v in MMSEQS RESULTS E THREADS QDB TDB ADB ANNOYING; do
         check_defined $v $FUNCNAME
     done
+
+    mkdir -p $ANNOYING
 
     local PREFIX=$1
     local S_ARGS=$2
