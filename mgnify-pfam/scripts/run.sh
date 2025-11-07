@@ -18,7 +18,7 @@ nail() {
 
 hmmer() {
     QUERY=$QUERY_HMM
-    run_hmmsearch "hmmer.prf"
+    run_hmmsearch "hmmer.prf" "--max"
 }
 
 mmseqs() {
@@ -40,6 +40,6 @@ mmseqs() {
     run_mmseqs "mmseqs.prf" "-s 12.0 --max-seqs 2000"
 }
 
-nail
-mmseqs
+# nail
+# mmseqs
 hmmer

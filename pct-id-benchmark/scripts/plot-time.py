@@ -36,7 +36,8 @@ def main(filename):
         ax.scatter(
             x, y,
             **scatter_style(label),
-            s=20,
+            linewidths=2,
+            s=30,
         )
 
     fig.legend(

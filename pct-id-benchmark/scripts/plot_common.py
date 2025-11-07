@@ -34,26 +34,31 @@ class Style:
 
 styles = {
     #
-    "diamond seq": Style("diamond (seq)", "o", COLORS[0]),
+    "diamond.default seq"   : Style("diamond (seq) | --default", "o", COLORS[0]),
+    "diamond.mid-sens seq"  : Style("diamond (seq) | --mid-sensitive", "s", COLORS[0]),
+    "diamond.sens seq"      : Style("diamond (seq) | --sensitive", "^", COLORS[0]),
+    "diamond.more-sens seq" : Style("diamond (seq) | --more-sensitive", "v", COLORS[0]),
+    "diamond.very-sens seq" : Style("diamond (seq) | --very-sensitive", "<", COLORS[0]),
+    "diamond.ultra-sens seq": Style("diamond (seq) | --ultra-sensitive", ">", COLORS[0]),
     #
-    "last seq": Style("last (seq)", "o", COLORS[1]),
+    "last seq": Style("last (seq)", "o", COLORS[5]),
     #
-    "blast prf": Style("psiblast", "D", COLORS[2]),
+    "blast prf": Style("psiblast", "o", COLORS[2], filled=False),
     "blast seq": Style("blastp", "o"  , COLORS[2]),
     #
-    "hmmer prf": Style("hmmsearch", "D", COLORS[3]),
+    "hmmer prf": Style("hmmsearch", "o", COLORS[3], filled=False),
     "hmmer seq": Style("phmmer", "o", COLORS[3]),
     #
-    "nail-s12.0 prf": Style("nail (prf)", "D", COLORS[4]),
+    "nail-s12.0 prf": Style("nail (prf)", "D", COLORS[4], filled=False),
     "nail-s12.0 seq": Style("nail (seq)", "o", COLORS[4]),
     #
-    "mmseqs-default prf": Style("mmseqs2 (prf) | default", "D", COLORS[5], filled=False),
-    "mmseqs-sens prf"   : Style("mmseqs2 (prf) | -s 7.5", "D", COLORS[5]),
-    "mmseqs-nail prf"   : Style("mmseqs2 (prf) | -s 12.0 --max-seqs 2000", "<", COLORS[5], filled=False),
+    "mmseqs-default prf": Style("mmseqs2 (prf) | default", "o", COLORS[1], filled=False),
+    "mmseqs-sens prf"   : Style("mmseqs2 (prf) | -s 7.5", "D", COLORS[1], filled=False),
+    "mmseqs-nail prf"   : Style("mmseqs2 (prf) | -s 12.0 --max-seqs 2000", "s", COLORS[1], filled=False),
     #
-    "mmseqs-default seq": Style("mmseqs2 (seq) | default", "o", COLORS[1], filled=False),
-    "mmseqs-s7.5 seq"   : Style("mmseqs2 (seq) | -s 7.5", "o", COLORS[1]),
-    "mmseqs-s12.0 seq"  : Style("mmseqs2 (seq) | -s 12.0 --max-seqs 2000", "<", COLORS[1], filled=False),
+    "mmseqs-default seq": Style("mmseqs2 (seq) | default", "o", COLORS[1]),
+    "mmseqs-sens seq"   : Style("mmseqs2 (seq) | -s 7.5", "D", COLORS[1]),
+    "mmseqs-nail seq"   : Style("mmseqs2 (seq) | -s 12.0 --max-seqs 2000", "s", COLORS[1]),
 }
 
 _marker_seen = {}

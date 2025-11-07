@@ -5,7 +5,8 @@ members = [
     "pid",
     "pid-plot",
     "bioio",
-    "split-decoys",
+    "split-decoys", 
+    "mgnify-parse", "fab",
 ]
 
 [profile.dev]
