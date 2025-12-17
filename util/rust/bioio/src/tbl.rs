@@ -7,6 +7,110 @@ use std::{
 
 use anyhow::Context;
 
+pub mod hmmer {
+    use std::{
+        collections::HashMap,
+        fs::File,
+        io::{BufRead, BufReader, Read},
+        path::Path,
+    };
+
+    use anyhow::Context;
+
+    pub struct HmmerHit {
+        pub score: f32,
+        pub e_value: f64,
+        pub domains: Vec<Domain>,
+    }
+
+    pub struct Domain {
+        pub query_start: usize,
+        pub query_end: usize,
+        pub target_start: usize,
+        pub target_end: usize,
+        pub score: f32,
+        pub e_value: f64,
+    }
+
+    pub struct HmmerDomainTable {
+        pub name: String,
+        pub hits: HashMap<(String, String), HmmerHit>,
+    }
+
+    impl HmmerDomainTable {
+        pub fn from_path<P: AsRef<Path>>(path: P) -> anyhow::Result<Self> {
+            let path = path.as_ref();
+            let file = File::open(path)?;
+            let name = path
+                .file_stem()
+                .and_then(|s| s.to_str())
+                .context("invalid path")?;
+
+            Self::parse::<File>(file, name)
+        }
+
+        pub fn parse<R: Read>(buf: R, name: &str) -> anyhow::Result<Self> {
+            let reader = BufReader::new(buf);
+
+            let mut hits: HashMap<(String, String), HmmerHit> = HashMap::new();
+            for line in reader.lines() {
+                let line = line.unwrap_or_default();
+                if line.starts_with('#') {
+                    continue;
+                }
+
+                let tokens = line.split_whitespace().collect::<Vec<_>>();
+
+                let query = tokens[3].to_string();
+                let target = tokens[0].to_string();
+
+                let e_value = tokens[6].parse::<f64>()?;
+                let score = tokens[7].parse::<f32>()?;
+
+                let dom_e_value = tokens[12].parse::<f64>()?;
+                let dom_score = tokens[13].parse::<f32>()?;
+
+                let query_start = tokens[15].parse::<usize>()?;
+                let query_end = tokens[16].parse::<usize>()?;
+
+                let target_start = tokens[17].parse::<usize>()?;
+                let target_end = tokens[18].parse::<usize>()?;
+
+                let dom = Domain {
+                    query_start,
+                    query_end,
+                    target_start,
+                    target_end,
+                    score: dom_score,
+                    e_value: dom_e_value,
+                };
+
+                let k = (query, target);
+                match hits.get_mut(&k) {
+                    Some(hit) => {
+                        hit.domains.push(dom);
+                    }
+                    None => {
+                        hits.insert(
+                            (k.0, k.1),
+                            HmmerHit {
+                                score,
+                                e_value,
+                                domains: vec![dom],
+                            },
+                        );
+                    }
+                }
+            }
+
+            Ok(Self {
+                name: name.to_string(),
+                hits,
+            })
+        }
+    }
+}
+
 #[derive(Clone)]
 pub struct Hit {
     pub query: String,
