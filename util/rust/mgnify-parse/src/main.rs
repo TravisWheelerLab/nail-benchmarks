@@ -42,6 +42,21 @@ struct NailStats {
     forward_score: Score,
 }
 
+fn target_db_size(target_path: impl AsRef<Path>) -> anyhow::Result<f64> {
+    let reader = BufReader::new(File::open(target_path.as_ref())?);
+    let mut z = 0.0;
+
+    for line in reader.lines() {
+        let line = line?;
+
+        if line.starts_with('>') {
+            z += 1.0;
+        }
+    }
+
+    Ok(z)
+}
+
 fn nail_stats(
     stats_path: impl AsRef<Path>,
 ) -> anyhow::Result<HashMap<(String, String), NailStats>> {
@@ -99,7 +114,7 @@ fn nail_stats(
     Ok(stats)
 }
 
-fn ga_pvals(hmm_path: impl AsRef<Path>) -> anyhow::Result<HashMap<String, HmmGumbel>> {
+fn hmms(hmm_path: impl AsRef<Path>) -> anyhow::Result<HashMap<String, HmmGumbel>> {
     let reader = BufReader::new(File::open(hmm_path.as_ref())?);
 
     let mut names = vec![];
@@ -352,21 +367,50 @@ fn write_records(out: &mut impl Write, recs: &[Record], w: &[usize]) -> anyhow::
     Ok(())
 }
 
+use clap::Parser;
+
+#[derive(Parser)]
+struct Args {
+    #[arg(value_name = "query.hmm")]
+    query_path: PathBuf,
+
+    #[arg(value_name = "target.fa")]
+    target_path: PathBuf,
+
+    #[arg(value_name = "hmmer.tbl")]
+    hmmer_tbl_path: PathBuf,
+
+    #[arg(value_name = "hmmer.domtbl")]
+    hmmer_domtbl_path: PathBuf,
+
+    #[arg(value_name = "nail.tbl")]
+    nail_tbl_path: PathBuf,
+
+    #[arg(value_name = "nail.stats")]
+    nail_stats_path: PathBuf,
+
+    #[arg(value_name = "mmseqs.tbl")]
+    mmseqs_tbl_path: PathBuf,
+
+    #[arg(value_name = "out.tbl")]
+    out_tbl_path: PathBuf,
+}
+
 fn main() -> anyhow::Result<()> {
-    let z = 2_455_939.0;
+    let args = Args::parse();
 
-    let hmm_path =
-        PathBuf::from("/Users/jack/projects/nail-benchmarks/mgnify-pfam/benchmark-sm/query.hmm");
+    let mut out = BufWriter::new(File::create_new(args.out_tbl_path)?);
 
-    let dir = PathBuf::from("/Users/jack/projects/nail-benchmarks/mgnify-pfam/1/");
-    let hmmer_tbl = HitTable::from_path::<_, HmmerTable>(dir.join("hmmer.1.prf.tbl"))?;
-    let hmmer_domtbl = HmmerDomainTable::from_path(dir.join("hmmer.1.prf.domtbl"))?;
-    let nail_tbl = HitTable::from_path::<_, NailTable>(dir.join("nail.1.prf.tbl"))?;
-    let nail_stats = nail_stats(dir.join("nail.1.prf.stats"))?;
-    let mmseqs_tbl = HitTable::from_path::<_, BlastTable>(dir.join("mmseqs.1.prf.tbl"))?;
+    let z = target_db_size(args.target_path)?;
 
-    let hmm_gumbels = ga_pvals(hmm_path)?;
-    let mut queries = hmm_gumbels.keys().cloned().collect::<Vec<_>>();
+    let hmmer_tbl = HitTable::from_path::<_, HmmerTable>(args.hmmer_tbl_path)?;
+    let hmmer_domtbl = HmmerDomainTable::from_path(args.hmmer_domtbl_path)?;
+    let nail_tbl = HitTable::from_path::<_, NailTable>(args.nail_tbl_path)?;
+    let nail_stats = nail_stats(args.nail_stats_path)?;
+    let mmseqs_tbl = HitTable::from_path::<_, BlastTable>(args.mmseqs_tbl_path)?;
+
+    let hmms = hmms(args.query_path)?;
+    let mut queries = hmms.keys().cloned().collect::<Vec<_>>();
     queries.sort();
 
     let mut hits_by_query = HashMap::new();
@@ -411,9 +455,8 @@ fn main() -> anyhow::Result<()> {
         .map(|s| s.len())
         .collect::<Vec<usize>>();
     let mut recs: Vec<Record> = vec![];
-    let mut out = BufWriter::new(File::create("out.tbl")?);
     for k in hits {
-        let hmm = hmm_gumbels.get(&k.0).unwrap();
+        let hmm = hmms.get(&k.0).unwrap();
 
         let hmmer_hit = hmmer_map.get(&k);
         let nail_hit = nail_map.get(&k);
