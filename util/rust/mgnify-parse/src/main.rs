@@ -397,19 +397,21 @@ struct Args {
 }
 
 fn main() -> anyhow::Result<()> {
+    let now = std::time::Instant::now();
     let args = Args::parse();
-
-    let mut out = BufWriter::new(File::create_new(args.out_tbl_path)?);
 
     let z = target_db_size(args.target_path)?;
 
     let hmmer_tbl = HitTable::from_path::<_, HmmerTable>(args.hmmer_tbl_path)?;
     let hmmer_domtbl = HmmerDomainTable::from_path(args.hmmer_domtbl_path)?;
+
     let nail_tbl = HitTable::from_path::<_, NailTable>(args.nail_tbl_path)?;
     let nail_stats = nail_stats(args.nail_stats_path)?;
+
     let mmseqs_tbl = HitTable::from_path::<_, BlastTable>(args.mmseqs_tbl_path)?;
 
     let hmms = hmms(args.query_path)?;
+
     let mut queries = hmms.keys().cloned().collect::<Vec<_>>();
     queries.sort();
 
@@ -449,6 +451,7 @@ fn main() -> anyhow::Result<()> {
         })
         .collect();
 
+    let mut out = BufWriter::new(File::create_new(&args.out_tbl_path)?);
     let mut header_written = false;
     let widths = HEADER[2]
         .split_whitespace()
@@ -493,5 +496,10 @@ fn main() -> anyhow::Result<()> {
     }
     write_records(&mut out, &recs, &widths)?;
 
+    println!(
+        "{} took {:.2}s",
+        args.out_tbl_path.to_string_lossy(),
+        now.elapsed().as_secs_f32()
+    );
     Ok(())
 }
