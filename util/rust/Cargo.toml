@@ -2,11 +2,8 @@
 resolver = "2"
 
 members = [
-    "pid",
-    "pid-plot",
     "bioio",
-    "split-decoys", 
-    "mgnify-parse", "fab",
+    "bm",
 ]
 
 [profile.dev]
