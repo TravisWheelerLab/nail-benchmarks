@@ -10,13 +10,15 @@ use bioio::tbl::{
     BlastTable, Hit, HitTable, HmmerTable, NailTable,
 };
 
+use clap::Parser;
+
 pub fn p_value(score: f64, lambda: f64, tau: f64) -> f64 {
     (-lambda * (score - tau)).exp()
 }
 
-struct HmmGumbel {
+pub struct HmmGumbel {
     ga_full: f64,
-    ga_dom: f64,
+    _ga_dom: f64,
     tau: f64,
     lambda: f64,
 }
@@ -28,18 +30,18 @@ impl HmmGumbel {
 }
 
 #[derive(Debug)]
-enum Score {
+pub enum Score {
     None,
     Pass(f32),
     Filtered(f32),
 }
 
 #[derive(Debug)]
-struct NailStats {
+pub struct NailStats {
     query: String,
     target: String,
     cloud_score: Score,
-    forward_score: Score,
+    _forward_score: Score,
 }
 
 fn target_db_size(target_path: impl AsRef<Path>) -> anyhow::Result<f64> {
@@ -105,7 +107,7 @@ fn nail_stats(
             query,
             target,
             cloud_score,
-            forward_score,
+            _forward_score: forward_score,
         };
 
         stats.insert((s.query.clone(), s.target.clone()), s);
@@ -158,7 +160,7 @@ fn hmms(hmm_path: impl AsRef<Path>) -> anyhow::Result<HashMap<String, HmmGumbel>
                 n,
                 HmmGumbel {
                     ga_full: gathering_thresholds[1].0,
-                    ga_dom: gathering_thresholds[1].1,
+                    _ga_dom: gathering_thresholds[1].1,
                     tau: gumbels[i].0,
                     lambda: gumbels[i].1,
                 },
@@ -168,7 +170,7 @@ fn hmms(hmm_path: impl AsRef<Path>) -> anyhow::Result<HashMap<String, HmmGumbel>
 }
 
 #[derive(Default)]
-struct Record {
+pub struct Record {
     query: String,
     target: String,
     ga_score: f32,
@@ -269,22 +271,22 @@ impl Record {
 
 fn score_fmt(f: Option<f32>, w: usize) -> String {
     match f {
-        Some(s) => format!("{s:<W$.1}", W = w),
-        None => format!("{:<W$}", "-", W = w),
+        Some(s) => format!("{s:^W$.1}", W = w),
+        None => format!("{:^W$}", "-", W = w),
     }
 }
 
 fn p_value_fmt(f: Option<f64>, w: usize) -> String {
     match f {
-        Some(s) => format!("{s:<W$.2e}", W = w),
-        None => format!("{:<W$}", "-", W = w),
+        Some(s) => format!("{s:^W$.2e}", W = w),
+        None => format!("{:^W$}", "-", W = w),
     }
 }
 
 fn int_fmt(f: Option<usize>, w: usize) -> String {
     match f {
-        Some(s) => format!("{s:<W$}", W = w),
-        None => format!("{:<W$}", "-", W = w),
+        Some(s) => format!("{s:^W$}", W = w),
+        None => format!("{:^W$}", "-", W = w),
     }
 }
 
@@ -295,34 +297,34 @@ const HEADER: [&str; 3] = [
     ];
 
 fn write_header(out: &mut impl Write, recs: &[Record]) -> anyhow::Result<()> {
-    let q_max = recs.iter().map(|r| r.query.len()).max().unwrap() + 1;
-    let t_max = recs.iter().map(|r| r.target.len()).max().unwrap() + 1;
+    let q_max = recs.iter().map(|r| r.query.len()).max().unwrap();
+    let t_max = recs.iter().map(|r| r.target.len()).max().unwrap();
 
     writeln!(
         out,
-        "{:W1$} {:W2$} {}",
+        "#{:W1$} {:W2$}{}",
         " ",
         " ",
         HEADER[0],
-        W1 = q_max,
+        W1 = q_max - 1,
         W2 = t_max
     )?;
     writeln!(
         out,
-        "{:W1$} {:W2$} {}",
+        "#{:^W1$} {:^W2$}{}",
         "query",
         "target",
         HEADER[1],
-        W1 = q_max,
+        W1 = q_max - 1,
         W2 = t_max,
     )?;
     writeln!(
         out,
-        "{:W1$} {:W2$} {}",
-        "-".repeat(q_max),
+        "#{:W1$} {:W2$}{}",
+        "-".repeat(q_max - 1),
         "-".repeat(t_max),
         HEADER[2],
-        W1 = q_max,
+        W1 = q_max - 1,
         W2 = t_max,
     )?;
 
@@ -330,13 +332,13 @@ fn write_header(out: &mut impl Write, recs: &[Record]) -> anyhow::Result<()> {
 }
 
 fn write_records(out: &mut impl Write, recs: &[Record], w: &[usize]) -> anyhow::Result<()> {
-    let q_max = recs.iter().map(|r| r.query.len()).max().unwrap() + 1;
-    let t_max = recs.iter().map(|r| r.target.len()).max().unwrap() + 1;
+    let q_max = recs.iter().map(|r| r.query.len()).max().unwrap();
+    let t_max = recs.iter().map(|r| r.target.len()).max().unwrap();
 
     for r in recs.iter() {
         writeln!(
             out,
-            "{:W1$} {:W2$}  {} {} {} {} {} {} {} {} {} {} {} {} {} {}",
+            "{:W1$} {:W2$} {} {} {} {} {} {} {} {} {} {} {} {} {} {}",
             r.query,
             r.target,
             score_fmt(Some(r.ga_score), w[0]),
@@ -366,8 +368,6 @@ fn write_records(out: &mut impl Write, recs: &[Record], w: &[usize]) -> anyhow::
     }
     Ok(())
 }
-
-use clap::Parser;
 
 #[derive(Parser)]
 struct Args {
