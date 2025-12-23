@@ -1,5 +1,6 @@
 use std::path::PathBuf;
 
+use anyhow::Context;
 use clap::Parser;
 use rayon::prelude::*;
 
@@ -37,10 +38,8 @@ mod mmseqs_db {
         where
             P: AsRef<Path>,
         {
-            let reader = BufReader::new(
-                File::open(&path)
-                    .with_context(|| format!("{}", path.as_ref().to_string_lossy()))?,
-            );
+            let reader =
+                BufReader::new(File::open(&path).with_context(|| format!("{:?}", path.as_ref()))?);
 
             let mut offsets = vec![];
             let mut lengths = vec![];
@@ -91,7 +90,7 @@ mod mmseqs_db {
             let offset = self.index.offsets[idx];
             let length = self.index.lengths[idx];
 
-            let mut file = File::open(&self.path)?;
+            let mut file = File::open(&self.path).with_context(|| format!("{:?}", &self.path))?;
             file.seek(std::io::SeekFrom::Start(offset))?;
             let mut buf = vec![0u8; length as usize];
             file.read_exact(&mut buf)?;
@@ -181,8 +180,9 @@ mod mmseqs_db {
             };
 
             let offset = offset - self.sizes[file_idx];
+            let path = &self.paths[file_idx];
 
-            let mut file = File::open(&self.paths[file_idx])?;
+            let mut file = File::open(path).with_context(|| format!("{path:?}"))?;
             file.seek(std::io::SeekFrom::Start(offset))?;
             let mut buf = vec![0u8; length as usize];
             file.read_exact(&mut buf)?;
@@ -200,8 +200,10 @@ fn main() -> anyhow::Result<()> {
         .build_global()
         .unwrap();
 
-    let prefilter_db = SplitDb::from_path("./tmp/prefilterDB")?;
-    let query_db_header = Db::from_path("./tmp/queryDB_h")?;
+    let prefilter_db =
+        SplitDb::from_path("./tmp/prefilterDB").context("failed to build prefilter db")?;
+    let query_db_header =
+        Db::from_path("./tmp/queryDB_h").context("failed to build query db header")?;
 
     for i in 0..prefilter_db.len() {
         let q = query_db_header.get(i)?;
