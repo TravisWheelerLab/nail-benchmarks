@@ -6,7 +6,7 @@ use std::{
 };
 
 use anyhow::Context;
-use clap::Parser;
+use clap::{Parser, Subcommand};
 use glob::glob;
 use rayon::prelude::*;
 
@@ -15,40 +15,56 @@ use rayon::prelude::*;
 //  ---- ----------- -------- ----------- -------- ----------- -------- ----------- ------- ----------- ----- ----- ----- ------------
 
 #[derive(Parser)]
-struct Args {
-    #[arg(value_name = "hits/")]
-    dir_path: PathBuf,
+struct Cli {
+    #[command(subcommand)]
+    cmd: Cmd,
+}
 
-    #[arg(short, long, value_name = "path")]
-    out_path: Option<PathBuf>,
+#[derive(Subcommand)]
+enum Cmd {
+    Dist {
+        #[arg(value_name = "hits/")]
+        dir_path: PathBuf,
 
-    #[arg(short, value_name = "n", default_value_t = 8)]
-    threads: usize,
+        #[arg(short, long, value_name = "path")]
+        out_path: Option<PathBuf>,
+
+        #[arg(short, value_name = "n", default_value_t = 8)]
+        threads: usize,
+    },
+    Ga {
+        #[arg(value_name = "hits.tbl")]
+        tbl_path: PathBuf,
+    },
 }
 
 fn main() -> anyhow::Result<()> {
-    let args = Args::parse();
+    match Cli::parse().cmd {
+        Cmd::Dist {
+            dir_path,
+            out_path,
+            threads,
+        } => {
+            rayon::ThreadPoolBuilder::new()
+                .num_threads(threads)
+                .build_global()
+                .unwrap();
 
-    rayon::ThreadPoolBuilder::new()
-        .num_threads(args.threads)
-        .build_global()
-        .unwrap();
+            let paths = glob(dir_path.join("*.tbl").to_str().context("invalid glob")?)?
+                .filter_map(Result::ok)
+                .collect::<Vec<_>>();
 
-    let paths = glob(
-        args.dir_path
-            .join("*.tbl")
-            .to_str()
-            .context("invalid glob")?,
-    )?
-    .filter_map(Result::ok)
-    .collect::<Vec<_>>();
+            let mut out: Box<dyn Write> = match out_path {
+                Some(p) => Box::new(BufWriter::new(File::create(p)?)),
+                None => Box::new(BufWriter::new(stdout())),
+            };
 
-    let mut out: Box<dyn Write> = match args.out_path {
-        Some(p) => Box::new(BufWriter::new(File::create(p)?)),
-        None => Box::new(BufWriter::new(stdout())),
-    };
-
-    query_distribution(paths, &mut out)?;
+            query_distribution(paths, &mut out)?;
+        }
+        Cmd::Ga { tbl_path } => {
+            max_seqs_info(tbl_path)?;
+        }
+    }
 
     Ok(())
 }
