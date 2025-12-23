@@ -113,7 +113,6 @@ mod mmseqs_db {
             let path = path.as_ref();
             let index_path = path.with_extension("index");
 
-            // let index_path = dir.join(format!("{name}.index"));
             let dir = path.parent().unwrap();
             let name = path.file_stem().unwrap().to_str().unwrap();
 
@@ -200,10 +199,11 @@ fn main() -> anyhow::Result<()> {
         .build_global()
         .unwrap();
 
-    let prefilter_db =
-        SplitDb::from_path("./tmp/prefilterDB").context("failed to build prefilter db")?;
-    let query_db_header =
-        Db::from_path("./tmp/queryDB_h").context("failed to build query db header")?;
+    let prefilter_db = SplitDb::from_path(args.dir_path.join("prefilterDB"))
+        .context("failed to build prefilter db")?;
+
+    let query_db_header = Db::from_path(args.dir_path.join("queryDB_h"))
+        .context("failed to build query db header")?;
 
     for i in 0..prefilter_db.len() {
         let q = query_db_header.get(i)?;
