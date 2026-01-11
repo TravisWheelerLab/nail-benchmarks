@@ -1,24 +1,33 @@
 use std::{
-    collections::HashMap,
+    collections::{HashMap, HashSet},
     fs::File,
     io::{BufRead, BufReader, BufWriter, Write},
     path::{Path, PathBuf},
 };
 
-use bioio::tbl::{
-    hmmer::{HmmerDomainTable, HmmerHit},
-    BlastTable, Hit, HitTable, HmmerTable, NailTable,
-};
+use anyhow::Context;
+use bioio::tbl::{hmmer::HmmerDomainTable, BlastTable, HitTable, HmmerTable, NailTable};
 
 use clap::Parser;
+use rayon::{
+    iter::{IntoParallelRefIterator, ParallelIterator},
+    ThreadPoolBuilder,
+};
+
+pub fn set_threads(num_threads: usize) -> anyhow::Result<()> {
+    ThreadPoolBuilder::new()
+        .num_threads(num_threads)
+        .build_global()
+        .context("failed to build rayon global threadpool")
+}
 
 pub fn p_value(score: f64, lambda: f64, tau: f64) -> f64 {
     (-lambda * (score - tau)).exp()
 }
 
 pub struct HmmGumbel {
-    ga_full: f64,
-    _ga_dom: f64,
+    ga_sc: f64,
+    ga_p: f64,
     tau: f64,
     lambda: f64,
 }
@@ -27,21 +36,6 @@ impl HmmGumbel {
     pub fn p_value(&self, score: f64) -> f64 {
         (-self.lambda * (score - self.tau)).exp()
     }
-}
-
-#[derive(Debug)]
-pub enum Score {
-    None,
-    Pass(f32),
-    Filtered(f32),
-}
-
-#[derive(Debug)]
-pub struct NailStats {
-    query: String,
-    target: String,
-    cloud_score: Score,
-    _forward_score: Score,
 }
 
 fn target_db_size(target_path: impl AsRef<Path>) -> anyhow::Result<f64> {
@@ -57,63 +51,6 @@ fn target_db_size(target_path: impl AsRef<Path>) -> anyhow::Result<f64> {
     }
 
     Ok(z)
-}
-
-fn nail_stats(
-    stats_path: impl AsRef<Path>,
-) -> anyhow::Result<HashMap<(String, String), NailStats>> {
-    let reader = BufReader::new(File::open(stats_path.as_ref())?);
-
-    let mut stats = HashMap::new();
-
-    for line in reader.lines() {
-        let line = line?;
-        let line = &line[1..line.len()];
-        let tokens = line
-            .split(") (")
-            .map(|t| t.split_whitespace().collect::<Vec<_>>())
-            .collect::<Vec<_>>();
-        let query = tokens[0][0].to_string();
-        let target = tokens[0][1].to_string();
-
-        let sc = tokens[1][1]
-            .strip_suffix("b")
-            .unwrap()
-            .parse::<f32>()
-            .unwrap();
-
-        let cloud_score = if tokens[1][0] == "P" {
-            Score::Pass(sc)
-        } else {
-            Score::Filtered(sc)
-        };
-
-        let forward_score = if tokens[1][0] == "P" {
-            let s = tokens[2][1]
-                .strip_suffix("b")
-                .unwrap()
-                .parse::<f32>()
-                .unwrap();
-            if tokens[2][0] == "P" {
-                Score::Pass(s)
-            } else {
-                Score::Filtered(s)
-            }
-        } else {
-            Score::None
-        };
-
-        let s = NailStats {
-            query,
-            target,
-            cloud_score,
-            _forward_score: forward_score,
-        };
-
-        stats.insert((s.query.clone(), s.target.clone()), s);
-    }
-
-    Ok(stats)
 }
 
 fn hmms(hmm_path: impl AsRef<Path>) -> anyhow::Result<HashMap<String, HmmGumbel>> {
@@ -156,13 +93,17 @@ fn hmms(hmm_path: impl AsRef<Path>) -> anyhow::Result<HashMap<String, HmmGumbel>
         .into_iter()
         .enumerate()
         .map(|(i, n)| {
+            let ga_sc = gathering_thresholds[1].0;
+            let tau = gumbels[i].0;
+            let lambda = gumbels[i].1;
+            let ga_p = (-lambda * (ga_sc - tau)).exp();
             (
                 n,
                 HmmGumbel {
-                    ga_full: gathering_thresholds[1].0,
-                    _ga_dom: gathering_thresholds[1].1,
-                    tau: gumbels[i].0,
-                    lambda: gumbels[i].1,
+                    ga_sc,
+                    ga_p,
+                    tau,
+                    lambda,
                 },
             )
         })
@@ -187,86 +128,6 @@ pub struct Record {
     dom_score_max: Option<f32>,
     dom_sig_cnt: Option<usize>,
     dom_scores: Option<Vec<f32>>,
-}
-
-impl Record {
-    pub fn new(
-        hmmer_hit: Option<&Hit>,
-        hmmer_dom: Option<&HmmerHit>,
-        nail_hit: Option<&Hit>,
-        nail_stats: Option<&NailStats>,
-        mmseqs_hit: Option<&Hit>,
-        hmm: &HmmGumbel,
-        z: f64,
-    ) -> Self {
-        let hit = hmmer_hit.or(nail_hit).or(mmseqs_hit).unwrap();
-        let (query, target) = (hit.query.to_string(), hit.target.to_string());
-
-        let ga_score = hmm.ga_full as f32;
-        let ga_p_value = hmm.p_value(hmm.ga_full);
-
-        let (nail_score, nail_p_value) = nail_hit
-            .map(|h| (Some(h.score as f32), Some(h.e_value / z)))
-            .unwrap_or_default();
-
-        let (nail_cloud_score, nail_cloud_p_value) = nail_stats
-            .map(|s| match s.cloud_score {
-                Score::None => (None, None),
-                Score::Pass(sc) | Score::Filtered(sc) => (Some(sc), Some(hmm.p_value(sc as f64))),
-            })
-            .unwrap_or_default();
-
-        let (mmseqs_score, mmseqs_p_value) = mmseqs_hit
-            .map(|h| (Some(h.score as f32), Some(h.e_value / z)))
-            .unwrap_or_default();
-
-        let (hmmer_score, hmmer_p_value) = hmmer_hit
-            .map(|h| (Some(h.score as f32), Some(h.e_value / z)))
-            .unwrap_or_default();
-
-        let (dom_score_sum, dom_score_max, dom_sig_cnt, dom_scores) = hmmer_dom
-            .map(|dom| {
-                let mut dom_scores = dom.domains.iter().map(|d| d.score).collect::<Vec<_>>();
-
-                let dom_score_sum = dom_scores.iter().sum();
-                dom_scores.sort_by(|a, b| a.partial_cmp(b).unwrap());
-                let dom_score_max = *dom_scores.last().unwrap();
-
-                dom_scores.reverse();
-
-                let dom_pct = dom_scores
-                    .iter()
-                    .map(|s| s / dom_score_max)
-                    .collect::<Vec<_>>();
-                let dom_sig_cnt = dom_pct.iter().filter(|p| **p >= 0.1).count();
-                (
-                    Some(dom_score_sum),
-                    Some(dom_score_max),
-                    Some(dom_sig_cnt),
-                    Some(dom_scores),
-                )
-            })
-            .unwrap_or_default();
-
-        Self {
-            query,
-            target,
-            ga_score,
-            ga_p_value,
-            nail_cloud_score,
-            nail_cloud_p_value,
-            nail_score,
-            nail_p_value,
-            mmseqs_score,
-            mmseqs_p_value,
-            hmmer_score,
-            hmmer_p_value,
-            dom_score_sum,
-            dom_score_max,
-            dom_sig_cnt,
-            dom_scores,
-        }
-    }
 }
 
 fn score_fmt(f: Option<f32>, w: usize) -> String {
@@ -386,120 +247,219 @@ struct Args {
     #[arg(value_name = "nail.tbl")]
     nail_tbl_path: PathBuf,
 
-    #[arg(value_name = "nail.stats")]
-    nail_stats_path: PathBuf,
+    #[arg(long, value_name = "nail.stats")]
+    nail_stats_path: Option<PathBuf>,
 
     #[arg(value_name = "mmseqs.tbl")]
     mmseqs_tbl_path: PathBuf,
 
     #[arg(value_name = "out.tbl")]
     out_tbl_path: PathBuf,
+
+    #[arg(short = 't', default_value_t = 4usize, value_name = "N")]
+    pub num_threads: usize,
 }
 
 fn main() -> anyhow::Result<()> {
-    let now = std::time::Instant::now();
+    let start = std::time::Instant::now();
     let args = Args::parse();
+
+    set_threads(args.num_threads)?;
 
     let z = target_db_size(args.target_path)?;
 
-    let hmmer_tbl = HitTable::from_path::<_, HmmerTable>(args.hmmer_tbl_path)?;
-    let hmmer_domtbl = HmmerDomainTable::from_path(args.hmmer_domtbl_path)?;
-
-    let nail_tbl = HitTable::from_path::<_, NailTable>(args.nail_tbl_path)?;
-    let nail_stats = nail_stats(args.nail_stats_path)?;
-
-    let mmseqs_tbl = HitTable::from_path::<_, BlastTable>(args.mmseqs_tbl_path)?;
-
     let hmms = hmms(args.query_path)?;
 
-    let mut queries = hmms.keys().cloned().collect::<Vec<_>>();
-    queries.sort();
+    let nail_tbl = HitTable::from_path::<_, NailTable>(args.nail_tbl_path)?;
+    let hmmer_tbl = HitTable::from_path::<_, HmmerTable>(args.hmmer_tbl_path)?;
+    let mmseqs_tbl = HitTable::from_path::<_, BlastTable>(args.mmseqs_tbl_path)?;
 
-    let mut hits_by_query = HashMap::new();
+    let mut ga_any: HashSet<(&str, &str)> = HashSet::new();
 
-    fn map_fn(
-        tbl: HitTable,
-        hits: &mut HashMap<String, Vec<String>>,
-    ) -> HashMap<(String, String), Hit> {
-        tbl.hits
-            .into_iter()
-            .map(|h| {
-                let vec = hits.entry(h.query.clone()).or_default();
+    // ---
 
-                if !vec.contains(&h.target) {
-                    vec.push(h.target.clone());
-                }
+    for h in &nail_tbl.hits {
+        let hmm = hmms.get(&h.query).unwrap();
 
-                ((h.query.clone(), h.target.clone()), h)
-            })
-            .collect::<HashMap<_, _>>()
+        if h.score >= hmm.ga_sc {
+            ga_any.insert((&h.query, &h.target));
+        }
     }
 
-    let hmmer_map = map_fn(hmmer_tbl, &mut hits_by_query);
-    let nail_map = map_fn(nail_tbl, &mut hits_by_query);
-    let mmseqs_map = map_fn(mmseqs_tbl, &mut hits_by_query);
+    for h in &hmmer_tbl.hits {
+        let hmm = hmms.get(&h.query).unwrap();
 
-    let hits: Vec<(String, String)> = queries
-        .into_iter()
-        .flat_map(|q| {
-            hits_by_query
-                .remove(&q)
-                .unwrap_or_default()
-                .into_iter()
-                .map(|t| (q.clone(), t.clone()))
-                .collect::<Vec<(String, String)>>()
+        if h.score >= hmm.ga_sc {
+            ga_any.insert((&h.query, &h.target));
+        }
+    }
+
+    for h in &mmseqs_tbl.hits {
+        let hmm = hmms.get(&h.query).unwrap();
+
+        if h.e_value / z <= hmm.ga_p {
+            ga_any.insert((&h.query, &h.target));
+        }
+    }
+
+    // ---
+
+    let mut records_by_pair = ga_any
+        .iter()
+        .map(|(q, t)| {
+            let hmm = hmms.get(*q).unwrap();
+
+            (
+                (q.to_string(), t.to_string()),
+                Record {
+                    query: q.to_string(),
+                    target: t.to_string(),
+                    ga_score: hmm.ga_sc as f32,
+                    ga_p_value: hmm.ga_p,
+                    ..Default::default()
+                },
+            )
         })
+        .collect::<HashMap<(String, String), Record>>();
+
+    let test: HashSet<_> = ga_any
+        .iter()
+        .map(|(q, t)| (q.to_string(), t.to_string()))
         .collect();
 
+    let test = std::sync::Arc::new(test);
+
+    // ---
+
+    for h in nail_tbl.hits {
+        if let Some(r) = records_by_pair.get_mut(&(h.query, h.target)) {
+            r.nail_score = Some(h.score as f32);
+            r.nail_p_value = Some(h.e_value / z);
+        }
+    }
+
+    for h in hmmer_tbl.hits {
+        if let Some(r) = records_by_pair.get_mut(&(h.query, h.target)) {
+            r.hmmer_score = Some(h.score as f32);
+            r.hmmer_p_value = Some(h.e_value / z);
+        }
+    }
+
+    for h in mmseqs_tbl.hits {
+        if let Some(r) = records_by_pair.get_mut(&(h.query, h.target)) {
+            r.mmseqs_score = Some(h.score as f32);
+            r.mmseqs_p_value = Some(h.e_value / z);
+        }
+    }
+
+    // --
+
+    if let Some(path) = args.nail_stats_path {
+        let reader = BufReader::new(File::open(path)?);
+
+        let mut it = reader.lines();
+
+        while let Ok(batch) = it.by_ref().take(100_000).collect::<Result<Vec<_>, _>>() {
+            if batch.is_empty() {
+                break;
+            }
+
+            let filtered = batch
+                .par_iter()
+                .filter_map(|line| {
+                    let mut it = line.split_whitespace();
+
+                    let q = it.next()?.to_string();
+                    let t = it.next()?.to_string();
+
+                    // skip 4 fields
+                    it.nth(3)?;
+
+                    let sc = it.next()?.parse::<f32>().ok()?;
+                    let p = it.next()?.parse::<f64>().ok()?;
+
+                    let key = (q, t);
+                    test.contains(&key).then_some((key, sc, p))
+                })
+                .collect::<Vec<_>>();
+
+            for (k, sc, p) in filtered {
+                if let Some(r) = records_by_pair.get_mut(&k) {
+                    r.nail_cloud_score = Some(sc);
+                    r.nail_cloud_p_value = Some(p);
+                }
+            }
+        }
+    }
+    // --
+
+    let dom_tbl = HmmerDomainTable::from_path(args.hmmer_domtbl_path)?;
+
+    for (k, v) in records_by_pair.iter_mut() {
+        let hit = match dom_tbl.hits.get(k) {
+            Some(d) => d,
+            None => continue,
+        };
+
+        let mut dom = hit.domains.iter().map(|d| d.score).collect::<Vec<_>>();
+
+        let dom_score_sum = dom.iter().sum::<f32>();
+        dom.sort_by(|a, b| a.partial_cmp(b).unwrap());
+        let dom_score_max = *dom.last().unwrap();
+
+        dom.reverse();
+
+        let dom_pct = dom.iter().map(|s| s / dom_score_max).collect::<Vec<_>>();
+        let dom_sig_cnt = dom_pct.iter().filter(|p| **p >= 0.1).count();
+        v.dom_score_sum = Some(dom_score_sum);
+        v.dom_score_max = Some(dom_score_max);
+        v.dom_sig_cnt = Some(dom_sig_cnt);
+        v.dom_scores = Some(dom);
+    }
+
+    // --
+
+    let mut records_by_query = hmms
+        .keys()
+        .map(|q| (q.as_str(), vec![]))
+        .collect::<HashMap<&str, Vec<Record>>>();
+
+    records_by_pair
+        .into_iter()
+        .for_each(|(k, v)| match records_by_query.get_mut(k.0.as_str()) {
+            Some(vec) => vec.push(v),
+            None => panic!(),
+        });
+
+    records_by_query.values_mut().for_each(|v| {
+        v.sort_by(|a, b| match (a.hmmer_p_value, b.hmmer_p_value) {
+            (Some(ap), Some(bp)) => ap.partial_cmp(&bp).unwrap(),
+            (Some(_), _) => std::cmp::Ordering::Greater,
+            (_, Some(_)) => std::cmp::Ordering::Less,
+            _ => std::cmp::Ordering::Equal,
+        })
+    });
+
     let mut out = BufWriter::new(File::create_new(&args.out_tbl_path)?);
-    let mut header_written = false;
+
     let widths = HEADER[2]
         .split_whitespace()
         .map(|s| s.len())
         .collect::<Vec<usize>>();
-    let mut recs: Vec<Record> = vec![];
-    for k in hits {
-        let hmm = hmms.get(&k.0).unwrap();
 
-        let hmmer_hit = hmmer_map.get(&k);
-        let nail_hit = nail_map.get(&k);
-        let mmseqs_hit = mmseqs_map.get(&k);
+    let mut it = records_by_query.into_values().filter(|v| !v.is_empty());
 
-        let hmmer_passed = hmmer_hit.map(|h| h.score >= hmm.ga_full).unwrap_or(false);
-        let nail_passed = nail_hit.map(|h| h.score >= hmm.ga_full).unwrap_or(false);
-        let mmseqs_passed = mmseqs_hit
-            .map(|h| h.e_value / z <= hmm.p_value(hmm.ga_full))
-            .unwrap_or(false);
+    let recs = it.next().unwrap();
+    write_header(&mut out, &recs)?;
 
-        if !(hmmer_passed || nail_passed || mmseqs_passed) {
-            continue;
-        }
-
-        let hmmer_dom = hmmer_domtbl.hits.get(&k);
-        let nail_stats = nail_stats.get(&k);
-
-        let rec = Record::new(
-            hmmer_hit, hmmer_dom, nail_hit, nail_stats, mmseqs_hit, hmm, z,
-        );
-
-        if !recs.is_empty() && rec.query != *recs.last().unwrap().query {
-            if !header_written {
-                write_header(&mut out, &recs)?;
-                header_written = true;
-            }
-
-            write_records(&mut out, &recs, &widths)?;
-            recs.clear();
-        }
-
-        recs.push(rec);
+    for recs in it {
+        write_records(&mut out, &recs, &widths)?;
     }
-    write_records(&mut out, &recs, &widths)?;
 
     println!(
         "{} took {:.2}s",
         args.out_tbl_path.to_string_lossy(),
-        now.elapsed().as_secs_f32()
+        start.elapsed().as_secs_f32()
     );
     Ok(())
 }
