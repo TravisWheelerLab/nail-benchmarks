@@ -28,7 +28,7 @@ init() {
     BM_TBL="$BM_DIR/benchmark.tbl"
     QUERY_HMM="$BM_DIR/query.hmm"
     QUERY_MSA="$BM_DIR/query.sto"
-    QUERY_AFA_DIR="$BM_DIR/afa"
+    QUERY_AFA="$BM_DIR/afa"
     QUERY_FA="$BM_DIR/query.fa"
     QUERY_CONS_FA="$BM_DIR/query.cons.fa"
     TARGET="$BM_DIR/target.fa"

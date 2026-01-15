@@ -24,13 +24,13 @@ RUST_BIN := $(RUST)/target/release
 
 # benchmark creation
 PID       := $(RUST_BIN)/pid
-PID_SRC   := $(RUST)/pid/src
+PID_SRC   := $(RUST)/bm/src/bin/pid.rs
 
 # plotting
 FIGURES   := $(MAKEFILE_DIR)/figures
 
 PARSE     := $(RUST_BIN)/pid-plot
-PARSE_SRC := $(RUST)/pid-plot/src
+PARSE_SRC := $(RUST)/bm/src/bin/pid-plot.rs
 
 PLOT_PID  := $(SCRIPTS)/plot-pid.py
 PLOT_ROC  := $(SCRIPTS)/plot-roc.py
@@ -108,8 +108,8 @@ pmark:
 		--maxtest $(MAX_TEST) \
 		$(PM_NAME) $(SRC_STO)
 	
-$(PID): $(PID_SRC)/main.rs
-	@cd $(PID_SRC) && cargo build --release
+$(PID): $(PID_SRC)
+	@cd $(RUST) && cargo build --release --bin pid
 
 small: profmark $(PID)
 	@echo building benchmark...
@@ -149,15 +149,18 @@ benchmark: profmark $(PID)
 
 run-%:
 	@echo "benchmarking $*/ with $(THREADS) threads..."
-	@$(HMMER)   $* $(THREADS) $(NUMA_NODE) 
-	@$(NAIL)    $* $(THREADS) $(NUMA_NODE)
-	@$(MMSEQS)  $* $(THREADS) $(NUMA_NODE)
-	@$(LAST)    $* $(THREADS) $(NUMA_NODE)
-	@$(BLAST)   $* $(THREADS) $(NUMA_NODE)
-	@$(DIAMOND) $* $(THREADS) $(NUMA_NODE)
+	$(eval N := $(if $(NUMA_NODE),--numa_node $(NUMA_NODE),))
+	$(eval ARGS := --threads $(THREADS) --e 10.0 --results $*/results/ $(N) $*)
+	@mkdir $*/results/
+	@$(HMMER)   $(ARGS) 
+	@$(NAIL)    $(ARGS) 
+	@$(MMSEQS)  $(ARGS) 
+	@$(LAST)    $(ARGS) 
+	@$(DIAMOND) $(ARGS) 
+	# @$(BLAST)   $(ARGS) 
 
-$(PARSE): $(PARSE_SRC)/main.rs
-	@cd $(PARSE_SRC) && cargo build --release
+$(PARSE): $(PARSE_SRC)
+	@cd $(RUST) && cargo build --release --bin pid-plot
 
 plot-%: $(PARSE)
 	@$(PARSE) $*

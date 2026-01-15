@@ -22,7 +22,7 @@ $MMSEQS convertmsa $QUERY_MSA $MDB --identifier-field 0 > /dev/null
 QDB_PRF=$TMP/queryDB-prf
 $MMSEQS msa2profile $MDB $QDB_PRF --match-mode 1 > /dev/null
 
-QDB_P7=$DIR/p7-queryDB/queryDB 
+QDB_P7=$BM_DIR/p7-queryDB/queryDB 
 
 ADB=$TMP/alignDB
 
@@ -41,9 +41,9 @@ run_mmseqs "mmseqs-default.seq"
 run_mmseqs "mmseqs-sens.seq" "$ARGS_SENS"
 run_mmseqs "mmseqs-nail.seq" "$ARGS_NAIL"
 
-if [ -e $P7_QDB ]; then
-    QDB=$QDB_P7
-    run_mmseqs "mmseqs-default-p7.prf"
-    run_mmseqs "mmseqs-sens-p7.prf" "$ARGS_SENS"
-    run_mmseqs "mmseqs-nail-p7.prf" "$ARGS_NAIL"
-fi
+# if [ -e $P7_QDB ]; then
+#     QDB=$QDB_P7
+#     run_mmseqs "mmseqs-default-p7.prf"
+#     run_mmseqs "mmseqs-sens-p7.prf" "$ARGS_SENS"
+#     run_mmseqs "mmseqs-nail-p7.prf" "$ARGS_NAIL"
+# fi

@@ -89,8 +89,8 @@ set_tool_vars() {
     LASTDB="$NUMA_PREFIX $TOOL_BIN/lastdb"
     
     local UTIL="$(realpath "$SCRIPT_DIR/../../util")"
-    HMMBALANCE="$NUMA_PREFIX $UTIL/scripts/hmmbalance"
-    FASTABALANCE="$NUMA_PREFIX $UTIL/scripts/fastabalance"
+    HMMBALANCE="$NUMA_PREFIX $UTIL/scripts/hmmbalance.py"
+    FASTABALANCE="$NUMA_PREFIX $UTIL/scripts/fastabalance.py"
 }
 
 run_nail() {
@@ -126,7 +126,7 @@ run_nail() {
         $S_ARGS \
         $QUERY $TARGET >> $SUMMARY
 
-    mv $TMP/align_a.tsv $SEEDS
+    mv $TMP/seeds.tsv $SEEDS
 }
 
 run_phmmer() {
