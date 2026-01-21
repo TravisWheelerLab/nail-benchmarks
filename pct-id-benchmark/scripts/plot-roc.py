@@ -48,10 +48,26 @@ def main(filename):
     ax.set_ylim(0.0, 0.8)
 
     for _auc, label, x, y, in curves:
+        style = plot_style(label)
         ax.plot(
             x, y,
-            **plot_style(label),
+            **style,
             markersize=3,
+        )
+
+        for (xx, yy) in zip(x, y) :
+            if xx >= X_MIN:
+                y = yy
+                break
+
+        ax.text(
+            X_MIN, y,
+            label,
+            color=style['color'],
+            fontsize=8,
+            fontweight="bold",
+            ha="right",
+            va="center",
         )
 
     fig.legend(

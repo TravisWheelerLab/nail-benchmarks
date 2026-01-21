@@ -33,11 +33,22 @@ def main(filename):
     ax.grid(True)
 
     for label, x, y, in points:
+        style = scatter_style(label)
         ax.scatter(
             x, y,
-            **scatter_style(label),
+            **style,
             linewidths=2,
             s=30,
+        )
+
+        label = style['label'].replace('|', '\n')
+        plt.text(
+            x, y + 0.01,
+            label,
+            color=style['color'],
+            fontweight="bold",
+            ha="center",
+            va="bottom",
         )
 
     fig.legend(
