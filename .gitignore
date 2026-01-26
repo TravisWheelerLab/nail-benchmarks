@@ -1,2 +1,6 @@
 *.DS_Store
 data/
+tools/
+**/benchmark*/
+**/figures*/
+**/tmp/
