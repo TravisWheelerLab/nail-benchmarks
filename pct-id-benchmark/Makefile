@@ -27,18 +27,13 @@ PID       := $(RUST_BIN)/pid
 PID_SRC   := $(RUST)/bm/src/bin/pid.rs
 
 # plotting
-FIGURES   := $(MAKEFILE_DIR)/figures
+PARSE     := $(RUST_BIN)/pid-parse
+PARSE_SRC := $(RUST)/bm/src/bin/pid-parse.rs
 
-PARSE     := $(RUST_BIN)/pid-plot
-PARSE_SRC := $(RUST)/bm/src/bin/pid-plot.rs
-
-PLOT_PID  := $(SCRIPTS)/plot-pid.py
-PLOT_ROC  := $(SCRIPTS)/plot-roc.py
-PLOT_TIME := $(SCRIPTS)/plot-time.py
-
-DATA_PID  := $(FIGURES)/pid.txt
-DATA_ROC  := $(FIGURES)/roc.txt
-DATA_TIME := $(FIGURES)/time.txt
+PLOT_PID    := $(SCRIPTS)/plot-pid.py
+PLOT_ROC    := $(SCRIPTS)/plot-roc.py
+PLOT_TIME   := $(SCRIPTS)/plot-time.py
+PLOT_PARAMS := $(SCRIPTS)/plot-params.py
 
 # align scripts
 NAIL    := $(SCRIPTS)/run-nail.sh
@@ -160,18 +155,23 @@ run-%:
 	# @$(BLAST)   $(ARGS) 
 
 $(PARSE): $(PARSE_SRC)
-	@cd $(RUST) && cargo build --release --bin pid-plot
+	@cd $(RUST) && cargo build --release --bin pid-parse
 
 plot-%: $(PARSE)
-	@$(PARSE) $*
-	@$(PLOT_PID) $(DATA_PID)
-	@$(PLOT_ROC) $(DATA_ROC)
-	@$(PLOT_TIME) $(DATA_TIME)
+	@$(PARSE) $*/benchmark.tbl $*/results/ figures/
+	@$(PLOT_PID) figures/pid.txt
+	@$(PLOT_ROC) figures/roc.txt
+	@$(PLOT_TIME) figures/time.txt
 
-just-plot-%: $(PARSE)
-	@$(PLOT_PID) $(DATA_PID)
-	@$(PLOT_ROC) $(DATA_ROC)
-	@$(PLOT_TIME) $(DATA_TIME)
+params-%: $(PARSE)
+	$(eval P := figures-params/)
+	@mkdir -p $(P)/tmp/
+	@$(PARSE) $*/benchmark.tbl $*/results-nail-params/ $(P)/tmp/
+	@mv $(P)/tmp/time.txt $(P)/nail.txt
+	@$(PARSE) $*/benchmark.tbl $*/results-mmseqs-params/ $(P)/tmp/
+	@mv $(P)/tmp/time.txt $(P)/mmseqs.txt
+	@rm -rf $(P)/tmp/
+	@$(PLOT_PARAMS) $(P)/nail.txt $(P)/mmseqs.txt $(P)/params.pdf
 
 clean:
 	@rm -rf tmp/ benchmark*/results*/ benchmark*/p7-queryDB

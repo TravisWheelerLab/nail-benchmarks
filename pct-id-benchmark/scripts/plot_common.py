@@ -87,7 +87,7 @@ def color_for(s):
 
 def _style(label):
     if label not in styles:
-        return ({'label': label}, None)
+        return ({'label': label, 'color': None}, None)
 
     prefix, search_type = label.split(" ")
     style = styles[label]

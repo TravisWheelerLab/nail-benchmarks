@@ -51,12 +51,6 @@ def main(filename):
             va="bottom",
         )
 
-    fig.legend(
-        fontsize=8,
-        markerscale=1.0,
-        loc='lower right'
-    )
-
     plt.savefig(filename.with_suffix(".pdf"))
 
 
