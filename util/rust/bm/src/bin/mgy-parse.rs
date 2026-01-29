@@ -8,24 +8,34 @@ use std::{
 use anyhow::Context;
 use bioio::tbl::{hmmer::HmmerDomainTable, BlastTable, HitTable, HmmerTable, NailTable};
 
-use clap::Parser;
+use clap::{Parser, Subcommand};
+use glob::glob;
 use rayon::{
     iter::{IntoParallelRefIterator, ParallelIterator},
     ThreadPoolBuilder,
 };
+use regex::Regex;
 
-pub fn set_threads(num_threads: usize) -> anyhow::Result<()> {
+trait Float: PartialOrd {}
+impl Float for f32 {}
+impl Float for f64 {}
+
+fn float_cmp<F: Float>(a: &F, b: &F) -> std::cmp::Ordering {
+    a.partial_cmp(b).expect("NaN encountered in float cmp")
+}
+
+fn set_threads(num_threads: usize) -> anyhow::Result<()> {
     ThreadPoolBuilder::new()
         .num_threads(num_threads)
         .build_global()
         .context("failed to build rayon global threadpool")
 }
 
-pub fn p_value(score: f64, lambda: f64, tau: f64) -> f64 {
+fn p_value(score: f64, lambda: f64, tau: f64) -> f64 {
     (-lambda * (score - tau)).exp()
 }
 
-pub struct HmmGumbel {
+struct HmmGumbel {
     ga_sc: f64,
     ga_p: f64,
     tau: f64,
@@ -33,7 +43,7 @@ pub struct HmmGumbel {
 }
 
 impl HmmGumbel {
-    pub fn p_value(&self, score: f64) -> f64 {
+    fn p_value(&self, score: f64) -> f64 {
         (-self.lambda * (score - self.tau)).exp()
     }
 }
@@ -230,8 +240,20 @@ fn write_records(out: &mut impl Write, recs: &[Record], w: &[usize]) -> anyhow::
     Ok(())
 }
 
+#[derive(Subcommand)]
+enum SubCommands {
+    Standard(StandardArgs),
+    Params(ParamsArgs),
+}
+
 #[derive(Parser)]
-struct Args {
+struct Cli {
+    #[command(subcommand)]
+    pub command: SubCommands,
+}
+
+#[derive(Parser)]
+struct StandardArgs {
     #[arg(value_name = "query.hmm")]
     query_path: PathBuf,
 
@@ -257,12 +279,177 @@ struct Args {
     out_tbl_path: PathBuf,
 
     #[arg(short = 't', default_value_t = 4usize, value_name = "N")]
-    pub num_threads: usize,
+    num_threads: usize,
+}
+
+#[derive(Parser)]
+struct ParamsArgs {
+    #[arg(value_name = "query.hmm")]
+    query_path: PathBuf,
+
+    #[arg(value_name = "target.fa")]
+    target_path: PathBuf,
+
+    #[arg(value_name = "hmmer.tbl")]
+    hmmer_tbl_path: PathBuf,
+
+    #[arg(value_name = "nail/")]
+    nail_dir: PathBuf,
+
+    #[arg(value_name = "mmseqs/")]
+    mmseqs_dir: PathBuf,
+
+    #[arg(value_name = "out.txt")]
+    out_path: PathBuf,
 }
 
 fn main() -> anyhow::Result<()> {
+    match Cli::parse().command {
+        SubCommands::Standard(args) => standard(args),
+        SubCommands::Params(args) => params(args),
+    }
+}
+
+fn params(args: ParamsArgs) -> anyhow::Result<()> {
     let start = std::time::Instant::now();
-    let args = Args::parse();
+
+    let z = target_db_size(args.target_path)?;
+
+    let hmms = hmms(args.query_path)?;
+
+    let hmmer_tbl = HitTable::from_path::<_, HmmerTable>(args.hmmer_tbl_path)?;
+
+    let mut ga_hmmer: HashSet<(&str, &str)> = HashSet::new();
+
+    for h in &hmmer_tbl.hits {
+        let hmm = hmms.get(&h.query).unwrap();
+
+        if h.score >= hmm.ga_sc {
+            ga_hmmer.insert((&h.query, &h.target));
+        }
+    }
+
+    let hmmer_cnt = ga_hmmer.len() as f32;
+
+    let time_pattern = Regex::new(r"Elapsed.*\): (?P<time>.*)$").unwrap();
+
+    let mut out = BufWriter::new(File::create(&args.out_path)?);
+
+    for path in glob(
+        args.nail_dir
+            .join("*.tbl")
+            .to_str()
+            .context("invalid *.tbl glob")?,
+    )?
+    .filter_map(Result::ok)
+    {
+        let mut cnt = 0.0;
+
+        let tbl = HitTable::from_path::<_, NailTable>(&path)?;
+        for h in &tbl.hits {
+            let hmm = hmms.get(&h.query).unwrap();
+
+            if ga_hmmer.contains(&(&h.query, &h.target)) && h.score >= hmm.ga_sc {
+                cnt += 1.0;
+            }
+        }
+
+        let frac = cnt / hmmer_cnt;
+
+        let stem_tokens: Vec<&str> = path
+            .file_stem()
+            .and_then(|s| s.to_str())
+            .context("invalid path")?
+            .split('.')
+            .collect();
+
+        let prefix = stem_tokens[..stem_tokens.len() - 1].join(".");
+        let search_type = stem_tokens.last().unwrap();
+
+        let time_path = path.with_extension("time");
+        let time: f32 = std::fs::read_to_string(time_path)?
+            .lines()
+            .filter_map(|l| time_pattern.captures(l))
+            .map(|c| {
+                c.name("time")
+                    .unwrap()
+                    .as_str()
+                    .split(':')
+                    .map(|t| t.parse::<f32>().unwrap())
+                    .rev()
+                    .enumerate()
+                    .map(|(i, t)| t * 60.0_f32.powf(i as f32))
+                    .sum()
+            })
+            .max_by(float_cmp)
+            .expect("no times found");
+
+        writeln!(out, "{prefix},{search_type},({time:.4},{frac:.4})")?;
+    }
+
+    for path in glob(
+        args.mmseqs_dir
+            .join("*.tbl")
+            .to_str()
+            .context("invalid *.tbl glob")?,
+    )?
+    .filter_map(Result::ok)
+    {
+        let mut cnt = 0.0;
+
+        let tbl = HitTable::from_path::<_, BlastTable>(&path)?;
+        for h in &tbl.hits {
+            let hmm = hmms.get(&h.query).unwrap();
+
+            if ga_hmmer.contains(&(&h.query, &h.target)) && h.e_value / z <= hmm.ga_p {
+                cnt += 1.0;
+            }
+        }
+
+        let frac = cnt / hmmer_cnt;
+
+        let stem_tokens: Vec<&str> = path
+            .file_stem()
+            .and_then(|s| s.to_str())
+            .context("invalid path")?
+            .split('.')
+            .collect();
+
+        let prefix = stem_tokens[..stem_tokens.len() - 1].join(".");
+        let search_type = stem_tokens.last().unwrap();
+
+        let time_path = path.with_extension("time");
+        let time: f32 = std::fs::read_to_string(time_path)?
+            .lines()
+            .filter_map(|l| time_pattern.captures(l))
+            .map(|c| {
+                c.name("time")
+                    .unwrap()
+                    .as_str()
+                    .split(':')
+                    .map(|t| t.parse::<f32>().unwrap())
+                    .rev()
+                    .enumerate()
+                    .map(|(i, t)| t * 60.0_f32.powf(i as f32))
+                    .sum()
+            })
+            .max_by(float_cmp)
+            .expect("no times found");
+
+        writeln!(out, "{prefix},{search_type},({time:.4},{frac:.4})")?;
+    }
+
+    println!(
+        "{} took {:.2}s",
+        args.out_path.to_string_lossy(),
+        start.elapsed().as_secs_f32()
+    );
+
+    Ok(())
+}
+
+fn standard(args: StandardArgs) -> anyhow::Result<()> {
+    let start = std::time::Instant::now();
 
     set_threads(args.num_threads)?;
 

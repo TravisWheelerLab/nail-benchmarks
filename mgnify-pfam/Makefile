@@ -92,7 +92,6 @@ parse-all: $(PARSE)
 		$(MMSEQS)/mmseqs.{}.prf.tbl \
 		$(ANALYSIS)/ga_hits.{}.tbl
 
-
 $(PLOT): $(PLOT_SRC) $(BIOIO_SRC)
 	@cd $(RUST) && cargo build --release --bin mgy-plot
 
@@ -100,5 +99,14 @@ plot-all: $(PLOT)
 	@echo plotting benchmark-all...
 	@$(PLOT) -t $(THREADS) -o dist.tbl benchmark-all/results/analysis
 
-clean:
-	@rm -rf tmp/
+params-%: $(PARSE)
+	$(eval DIR:= $*)
+	$(eval P := figures-params/)
+	@$(PARSE) params \
+		$(DIR)/query.hmm \
+		$(DIR)/target.fa \
+		$(DIR)/results/hmmer.prf.tbl \
+		$(DIR)/results-nail-params \
+		$(DIR)/results-mmseqs-params \
+		params.txt
+
