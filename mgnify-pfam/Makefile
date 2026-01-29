@@ -99,6 +99,12 @@ plot-all: $(PLOT)
 	@echo plotting benchmark-all...
 	@$(PLOT) -t $(THREADS) -o dist.tbl benchmark-all/results/analysis
 
+run-params-nail: 
+	./scripts/params-nail.sh benchmark-one/ --numa_node 1
+	
+run-params-mmseqs: 
+	./scripts/params-mmseqs.sh benchmark-one/ --numa_node 0
+
 params-%: $(PARSE)
 	$(eval DIR:= $*)
 	$(eval P := figures-params/)

@@ -29,7 +29,7 @@ ADB=$TMP/alignDB
 ###
 
 ARGS_SENS="-s 7.5"
-ARGS_NAIL="--k-score 60 --max-seqs 2000"
+ARGS_NAIL="-s 12.0 --max-seqs 2000"
 
 QDB=$QDB_PRF
 run_mmseqs "mmseqs-default.prf"
