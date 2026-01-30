@@ -30,10 +30,10 @@ PID_SRC   := $(RUST)/bm/src/bin/pid.rs
 PARSE     := $(RUST_BIN)/pid-parse
 PARSE_SRC := $(RUST)/bm/src/bin/pid-parse.rs
 
-PLOT_PID    := $(SCRIPTS)/plot-pid.py
-PLOT_ROC    := $(SCRIPTS)/plot-roc.py
-PLOT_TIME   := $(SCRIPTS)/plot-time.py
-PLOT_PARAMS := $(SCRIPTS)/plot-params.py
+PLOT_PID    := $(SCRIPTS)/plot_pid.py
+PLOT_ROC    := $(SCRIPTS)/plot_roc.py
+PLOT_TIME   := $(SCRIPTS)/plot_time.py
+PLOT_PARAMS := $(SCRIPTS)/plot_params.py
 
 # align scripts
 NAIL    := $(SCRIPTS)/run-nail.sh
@@ -165,6 +165,7 @@ plot-%: $(PARSE)
 
 params-%: $(PARSE)
 	$(eval P := figures-params/)
+	$(eval OVERLAY := $(if $(wildcard figures/time.txt),--overlay figures/time.txt,))
 	@mkdir -p $(P)/tmp/
 	@$(PARSE) $*/benchmark.tbl $*/results-nail-params/ $(P)/tmp/
 	@mv $(P)/tmp/time.txt $(P)/nail.txt
@@ -172,6 +173,7 @@ params-%: $(PARSE)
 	@mv $(P)/tmp/time.txt $(P)/mmseqs.txt
 	@rm -rf $(P)/tmp/
 	@$(PLOT_PARAMS) $(P)/nail.txt $(P)/mmseqs.txt $(P)/params.pdf
+	@$(PLOT_PARAMS) $(OVERLAY) $(P)/nail.txt $(P)/mmseqs.txt $(P)/overlay.pdf
 
 clean:
 	@rm -rf tmp/ benchmark*/results*/ benchmark*/p7-queryDB

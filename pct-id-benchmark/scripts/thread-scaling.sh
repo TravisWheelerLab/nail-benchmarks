@@ -3,7 +3,9 @@
 SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 . "$SCRIPT_DIR/init.sh"
 
-set_default THREAD_MAX 32
+THREAD_LIST=(1 2 4 8 16 32 64 96)
+
+set_default THREAD_MAX 64
 set_default E 10
 
 check_defined BM_DIR
@@ -15,16 +17,28 @@ nail() {
     mkdir -p $TMP
 
     QUERY=$QUERY_HMM
-    for ((i=1; i<=$THREAD_MAX; i++)); do
+    for i in "${THREAD_LIST[@]}"; do
         THREADS=$i
-        run_nail "nail-t${i}.prf" "--mmseqs-s 12.0 --mmseqs-max-seqs 2000 -C 0.01"
+        run_nail "nail-t${i}-prog.prf"   "--allow-overwrite --mmseqs-s 12.0 --prog-seed"
+        run_nail "nail-t${i}-ms2000.prf" "--allow-overwrite --mmseqs-s 12.0 --mmseqs-max-seqs 2000"
     done
 }
 
 hmmer() {
+    TMP=./tmp/hmmer/
     QUERY=$QUERY_HMM
-    for ((i=1; i<=$THREAD_MAX; i++)); do
+    for i in "${THREAD_LIST[@]}"; do
         THREADS=$i
+        if (($i >= 4)); then
+            THREADS_PER=2
+            run_hmmsearch_split "hmmer-t${i}-spl2.prf"
+        fi
+
+        if (($i >= 8)); then
+            THREADS_PER=4
+            run_hmmsearch_split "hmmer-t${i}-spl4.prf"
+        fi
+
         run_hmmsearch "hmmer-t${i}.prf"
     done
 }
@@ -45,13 +59,12 @@ mmseqs() {
     $MMSEQS createdb $TARGET $TDB > /dev/null
 
     ADB=$TMP/alignDB
-    
-    for ((i=1; i<=$THREAD_MAX; i++)); do
+    for i in "${THREAD_LIST[@]}"; do
         THREADS=$i
         run_mmseqs "mmseqs-t${i}.prf" "-s 12.0 --max-seqs 2000"
     done
 }
 
-mmseqs
-nail
 hmmer
+nail
+mmseqs

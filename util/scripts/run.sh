@@ -236,13 +236,18 @@ run_hmmsearch() {
 run_hmmsearch_split() {
     set_time_cmd
 
-    for v in HMMSEARCH HMMBALANCE RESULTS TMP E THREADS QUERY TARGET; do
+    for v in HMMSEARCH HMMBALANCE RESULTS TMP E THREADS THREADS_PER QUERY TARGET; do
         check_defined $v $FUNCNAME
     done
+    
+    if ((THREADS_PER > THREADS)); then
+        run_hmmsearch $1 $2
+        return 0
+    fi
 
-    if (( THREADS % 4 != 0 )); then
-        echo "threads: $THREADS"
-        echo "threads must be a multiple of 4 (just trust me)"
+
+    if (( THREADS % THREADS_PER != 0 )); then
+        echo "can't split $THREADS threads by $THREADS_PER"
         exit
     fi
 
@@ -254,7 +259,7 @@ run_hmmsearch_split() {
     local OUT="$RESULTS/$PREFIX.out"
     local TIME="$RESULTS/$PREFIX.time"
 
-    local N_SPLITS=$(( THREADS / 4 ))
+    local N_SPLITS=$(( THREADS / $THREADS_PER ))
     local SPLIT_THREADS=4
     local SPLIT_DIR=$TMP/query-splits
 

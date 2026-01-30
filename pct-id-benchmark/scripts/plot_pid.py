@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 
-from plot_common import parse_curve, plot_style, COLORS
+from plot import Curve, COLORS, TOOL_COLORS
 
 from pathlib import Path
 
@@ -15,14 +15,14 @@ def main(filename):
         lines = list(filter(lambda line: not line.startswith("#"), f.readlines()))
 
         fpr = float(lines[0].split()[-1])
-        bin_cnt = parse_curve(lines[1])
+        bin_cnt = Curve(lines[1])
 
         for line in lines[2:]:
-            label, x, y = parse_curve(line)
-            auc = np.trapezoid(y, x)
-            curves.append((auc, label, x, y))
+            curve = Curve(line)
+            curve.auc = np.trapezoid(curve.y, curve.x)
+            curves.append(curve)
 
-    curves.sort(key=lambda c: c[0], reverse=True)
+    curves.sort(key=lambda c: c.auc, reverse=True)
 
     fig, ax_recall = plt.subplots(figsize=(16, 9))
     plt.title("Recall by decreasing pairwise %identity")
@@ -36,18 +36,30 @@ def main(filename):
 
     ax_recall.axhline(0.5, color="black", linestyle="--", linewidth=1)
 
-    for _auc, label, x, y, in curves:
+    for curve in curves:
+        color = TOOL_COLORS[curve.tool]
+
+        if "seq" in curve.extra:
+            mfc = color
+            label = f"{curve.prefix} seq"
+        elif "prf" in curve.extra:
+            mfc = 'white'
+            label = f"{curve.prefix} prf"
+
         ax_recall.plot(
-            x, y,
-            **plot_style(label),
+            curve.x, curve.y,
+            color=color,
+            marker='o',
+            mfc=mfc,
             markersize=5,
+            label=label
         )
 
     ax_bins = ax_recall.twinx()
     ax_bins.set_zorder(1)
     ax_bins.set_ylabel("sequence pairs (count)")
 
-    ax_bins.bar(bin_cnt[1], bin_cnt[2], color=COLORS[-1], alpha=0.75, label="pair count")
+    ax_bins.bar(bin_cnt.x, bin_cnt.y, color=COLORS[-1], alpha=0.75, label="pair count")
 
     fig.legend(
         fontsize=8,

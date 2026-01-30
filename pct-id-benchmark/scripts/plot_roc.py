@@ -1,17 +1,15 @@
 #!/usr/bin/env python3
 
-from plot_common import parse_curve, plot_style
+from plot import Curve, TOOL_COLORS
 
-import bisect
 from pathlib import Path
 
 import matplotlib.pyplot as plt
-import numpy as np
 
 
 X_MIN = 1e-3
-X_MAX = 1_000.0
-# X_MAX = 10.0
+# X_MAX = 1_000.0
+X_MAX = 1.0
 
 AUC_X_MAX = 1.0
 
@@ -23,19 +21,7 @@ def main(filename):
         lines = list(filter(lambda line: not line.startswith("#"), f.readlines()))
 
         for line in lines:
-            label, x, y = parse_curve(line)
-            z = bisect.bisect_right(x, X_MAX)
-            x = x[:z]
-            y = y[:z]
-
-            zz = bisect.bisect_right(x, AUC_X_MAX)
-            xx = x[:zz]
-            yy = y[:zz]
-            auc = np.trapezoid(yy, xx)
-
-            curves.append((auc, label, x, y))
-
-    curves.sort(key=lambda c: c[0], reverse=True)
+            curves.append(Curve(line))
 
     fig, ax = plt.subplots(figsize=(16, 9))
     plt.title("Recall by FPR")
@@ -46,35 +32,33 @@ def main(filename):
 
     ax.set_ylabel("Recall")
     ax.set_ylim(0.0, 0.8)
+    ax.yaxis.tick_right()
+    ax.yaxis.set_label_position("right")
 
-    for _auc, label, x, y, in curves:
-        style = plot_style(label)
+    ax.grid(True)
+
+    for curve in curves:
+        color = TOOL_COLORS[curve.tool]
+
         ax.plot(
-            x, y,
-            **style,
-            markersize=3,
+            curve.x, curve.y,
+            color=color,
         )
 
-        for (xx, yy) in zip(x, y) :
+        for (xx, yy) in zip(curve.x, curve.y) :
             if xx >= X_MIN:
                 y = yy
                 break
 
         ax.text(
             X_MIN, y,
-            label,
-            color=style['color'],
+            s=curve.prefix,
+            color=color,
             fontsize=8,
             fontweight="bold",
             ha="right",
             va="center",
         )
-
-    fig.legend(
-        fontsize=8,
-        markerscale=1.0,
-        loc='lower right'
-    )
 
     plt.savefig(filename.with_suffix(".pdf"))
 

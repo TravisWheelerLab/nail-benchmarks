@@ -121,8 +121,8 @@ def scatter_style(label):
     return d
 
 
-def parse_point(point):
-    label, rest = point.split(",", 1)
+def parse_point(line):
+    label, tool, rest = line.split(",", 2)
     p = rest.strip().lstrip("(").rstrip(")")
     x, y = p.split(",")
     x, y = float(x), float(y)
@@ -131,7 +131,9 @@ def parse_point(point):
 
 
 def parse_curve(line):
-    label, rest = line.split(",", 1)
+    print(line)
+    label, tool, rest = line.split(",", 2)
+    print(rest)
     pairs = rest.strip().split("),")
     xs = []
     ys = []

@@ -369,7 +369,7 @@ impl PlotData {
                 _ => panic!("unknown search type"),
             };
 
-            let name = format!("{prefix} {search_type}");
+            let name = format!("{prefix},{search_type}");
 
             let tbl = match prefix {
                 s if s.starts_with("hmmer") => HitTable::parse::<_, HmmerTable>(file, &name),
@@ -433,7 +433,7 @@ impl PlotData {
                     f64::INFINITY
                 }
             };
-            println!("{} {:.3e}", tbl.name, e_value_threshold);
+            // println!("{} {:.3e}", tbl.name, e_value_threshold);
             let mut bin_cnts = vec![0usize; self.bin_sizes.len()];
             tbl.positives
                 .iter()
