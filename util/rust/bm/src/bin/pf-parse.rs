@@ -1,386 +1,207 @@
 use std::{
-    collections::{HashMap, HashSet},
+    collections::HashMap,
     fs::File,
-    io::{stdout, BufRead, BufReader, BufWriter, Write},
+    io::{BufWriter, Write},
     path::PathBuf,
 };
 
 use anyhow::Context;
-use clap::Parser;
-use rayon::prelude::*;
+use bioio::mmseqs::Db;
+use clap::{Args, Parser, Subcommand};
 
-use crate::mmseqs_db::{Db, SplitDb};
+#[derive(Subcommand)]
+enum SubCommands {
+    Prog(ProgArgs),
+    Score(ScoreArgs),
+}
 
 #[derive(Parser)]
-struct Args {
-    #[arg(value_name = "dir/")]
-    dir_path: PathBuf,
-
-    #[arg(value_name = "ga_hits.tbl")]
-    ga_hits: PathBuf,
-
-    #[arg(short, long, value_name = "path")]
-    out_path: Option<PathBuf>,
-
-    #[arg(short, value_name = "n", default_value_t = 8)]
-    threads: usize,
+struct Cli {
+    #[command(subcommand)]
+    pub command: SubCommands,
 }
 
-mod mmseqs_db {
-    use std::{
-        collections::HashMap,
-        fs::{self, File},
-        io::{BufRead, BufReader, Read, Seek},
-        path::{Path, PathBuf},
-    };
+#[derive(Args)]
+struct CommonArgs {
+    #[arg(value_name = "prefilterDB")]
+    pdb_path: PathBuf,
 
-    use anyhow::Context;
-    use regex::Regex;
+    #[arg(value_name = "queryDB_h")]
+    qdb_h_path: PathBuf,
 
-    pub struct Index {
-        pub offsets: Vec<u64>,
-        pub lengths: Vec<u64>,
-    }
+    #[arg(value_name = "alignDB")]
+    adb_path: PathBuf,
 
-    impl Index {
-        pub fn from_path<P>(path: P) -> anyhow::Result<Self>
-        where
-            P: AsRef<Path>,
-        {
-            let reader =
-                BufReader::new(File::open(&path).with_context(|| format!("{:?}", path.as_ref()))?);
+    #[arg(long, default_value_t = 1_000_000)]
+    map_cap: usize,
 
-            let mut offsets = vec![];
-            let mut lengths = vec![];
-            for line in reader.lines() {
-                let line = line?;
-
-                let tokens = line
-                    .split('\t')
-                    .map(|s| s.parse::<u64>().expect("failed to parse index line"))
-                    .collect::<Vec<_>>();
-
-                offsets.push(tokens[1]);
-                // -1 because the index lengths include a null byte
-                lengths.push(tokens[2] - 1);
-            }
-
-            offsets.shrink_to_fit();
-            lengths.shrink_to_fit();
-
-            Ok(Self { offsets, lengths })
-        }
-    }
-
-    pub struct Db {
-        pub index: Index,
-        pub path: PathBuf,
-    }
-
-    impl Db {
-        pub fn from_path<P>(path: P) -> anyhow::Result<Self>
-        where
-            P: AsRef<Path>,
-        {
-            let path = path.as_ref();
-            let index_path = path.with_extension("index");
-
-            Ok(Self {
-                index: Index::from_path(index_path)?,
-                path: path.to_path_buf(),
-            })
-        }
-
-        pub fn len(&self) -> usize {
-            self.index.offsets.len()
-        }
-
-        pub fn get(&self, idx: usize) -> anyhow::Result<String> {
-            let offset = self.index.offsets[idx];
-            let length = self.index.lengths[idx];
-
-            let mut file = File::open(&self.path).with_context(|| format!("{:?}", &self.path))?;
-            file.seek(std::io::SeekFrom::Start(offset))?;
-            let mut buf = vec![0u8; length as usize];
-            file.read_exact(&mut buf)?;
-
-            let mut value = String::from_utf8(buf)?;
-            value.truncate(value.trim_end().len());
-            Ok(value)
-        }
-
-        pub fn into_map(self) -> HashMap<String, usize> {
-            let mut map = HashMap::new();
-            for idx in 0..self.len() {
-                let key = self.get(idx).unwrap();
-                map.insert(key, idx);
-            }
-
-            map
-        }
-    }
-
-    pub struct SplitDb {
-        pub index: Index,
-        pub paths: Vec<PathBuf>,
-        pub sizes: Vec<u64>,
-    }
-
-    impl SplitDb {
-        pub fn from_path<P>(path: P) -> anyhow::Result<Self>
-        where
-            P: AsRef<Path>,
-        {
-            let path = path.as_ref();
-            let index_path = path.with_extension("index");
-
-            let dir = path.parent().unwrap();
-            let name = path.file_stem().unwrap().to_str().unwrap();
-
-            let re = Regex::new(&format!(r"^{}\.\d+$", regex::escape(name)))?;
-            let mut paths = fs::read_dir(dir)?
-                .filter_map(Result::ok)
-                .map(|e| e.path())
-                .filter(|p| {
-                    p.file_name()
-                        .and_then(|s| s.to_str())
-                        .map(|s| re.is_match(s))
-                        .unwrap_or(false)
-                })
-                .collect::<Vec<_>>();
-
-            paths.sort_by_key(|p| {
-                p.extension()
-                    .and_then(|e| e.to_str())
-                    .and_then(|s| s.parse::<usize>().ok())
-                    .expect("bad DB split suffix")
-            });
-
-            let sizes = paths
-                .iter()
-                .map(|p| fs::metadata(p).unwrap().len())
-                .collect::<Vec<_>>();
-
-            let prefix = sizes
-                .into_iter()
-                .scan(0u64, |acc, x| {
-                    let cur = *acc;
-                    *acc += x;
-                    Some(cur)
-                })
-                .collect::<Vec<_>>();
-
-            Ok(Self {
-                index: Index::from_path(index_path)?,
-                paths,
-                sizes: prefix,
-            })
-        }
-
-        pub fn len(&self) -> usize {
-            self.index.offsets.len()
-        }
-
-        fn offset_idx(&self, offset: u64) -> usize {
-            match self.sizes.binary_search(&offset) {
-                Ok(idx) => idx,
-                Err(idx) => idx,
-            }
-        }
-
-        pub fn get(&self, idx: usize) -> anyhow::Result<String> {
-            let offset = self.index.offsets[idx];
-            let length = self.index.lengths[idx];
-
-            let file_idx = match self.sizes.binary_search(&offset) {
-                // this means the binary search found the exact offset
-                Ok(idx) => idx,
-                // this means the binary search landed between offsets
-                Err(idx) => idx.saturating_sub(1),
-            };
-
-            let offset = offset - self.sizes[file_idx];
-            let path = &self.paths[file_idx];
-
-            let mut file = File::open(path).with_context(|| format!("{path:?}"))?;
-            file.seek(std::io::SeekFrom::Start(offset))?;
-            let mut buf = vec![0u8; length as usize];
-            file.read_exact(&mut buf)?;
-
-            Ok(String::from_utf8(buf)?)
-        }
-    }
+    #[arg(long, value_name = "dir/", default_value = "./figures-max-seqs")]
+    out_dir: PathBuf,
 }
 
-pub fn print_histogram(data: &[(usize, usize)]) {
-    if data.is_empty() {
-        return;
-    }
+#[derive(Args)]
+struct ProgArgs {
+    #[command(flatten)]
+    common: CommonArgs,
 
-    let max = data.iter().map(|&(_, v)| v).max().unwrap();
-    let maxw = max.to_string().len();
-    let width = 40usize;
-    let scale = max.div_ceil(width);
-    let scale = scale.max(1);
-
-    for &(label, value) in data {
-        let blocks = value / scale;
-        println!(
-            "{:>4}b | {value:>W$} | {}",
-            label,
-            "█".repeat(blocks),
-            W = maxw
-        );
-    }
+    #[arg(long, value_name = "n", default_value_t = 200usize)]
+    prog_n: usize,
 }
 
-#[derive(Default, Clone)]
-pub struct ScoreDistribution {
-    score_counts: Vec<usize>,
-}
+#[derive(Args)]
+struct ScoreArgs {
+    #[command(flatten)]
+    common: CommonArgs,
 
-impl ScoreDistribution {
-    pub fn add(&mut self, score: usize) {
-        if self.score_counts.len() < score {
-            self.score_counts.resize(score + 1, 0);
-        }
-        self.score_counts[score] += 1;
-    }
+    #[arg(long, default_value_t = 100)]
+    max_psc: usize,
 
-    pub fn histogram(&self) {
-        let max = self.score_counts.iter().max().unwrap();
-        let maxw = max.to_string().len();
-        let width = 40usize;
-        let scale = max.div_ceil(width);
-        let scale = scale.max(1);
-
-        for (label, value) in self.score_counts.iter().enumerate() {
-            let blocks = value / scale;
-            println!(
-                "{:>4}b | {value:>W$} | {}",
-                label,
-                "∎".repeat(blocks),
-                W = maxw
-            );
-        }
-    }
-
-    pub fn min(&self) -> usize {
-        self.score_counts.iter().position(|c| *c != 0).unwrap_or(0)
-    }
-
-    pub fn total(&self) -> usize {
-        self.score_counts.iter().sum()
-    }
-
-    pub fn below(&self, score: usize) -> f32 {
-        let cnt = self.score_counts.iter().take(score + 1).sum::<usize>() as f32;
-        cnt / self.total() as f32
-    }
-
-    pub fn dump(&self, out: &mut impl Write) -> anyhow::Result<()> {
-        for (sc, cnt) in self
-            .score_counts
-            .iter()
-            .enumerate()
-            .filter(|(_, c)| **c != 0)
-        {
-            writeln!(out, "{sc}: {cnt}")?;
-        }
-
-        Ok(())
-    }
+    #[arg(long, default_value_t = 10)]
+    min_chunk: usize,
 }
 
 fn main() -> anyhow::Result<()> {
-    let args = Args::parse();
-
-    let mut out: Box<dyn Write> = match args.out_path {
-        Some(p) => Box::new(BufWriter::new(File::create(p)?)),
-        None => Box::new(BufWriter::new(stdout())),
+    let now = std::time::Instant::now();
+    match Cli::parse().command {
+        SubCommands::Prog(args) => prog(args)?,
+        SubCommands::Score(args) => score(args)?,
     };
+    println!("took: {:?}", now.elapsed());
+    Ok(())
+}
 
-    rayon::ThreadPoolBuilder::new()
-        .num_threads(args.threads)
-        .build_global()
-        .unwrap();
+struct Hit {
+    psc: usize,
+    asc: Option<usize>,
+}
 
-    let prefilter_db = SplitDb::from_path(args.dir_path.join("prefilterDB"))
-        .context("failed to build prefilter db")?;
+fn hits(idx: usize, pdb: &mut Db, adb: &mut Db, cap: usize) -> anyhow::Result<Vec<Hit>> {
+    let mut map = HashMap::with_capacity(cap);
 
-    let query_map = Db::from_path(args.dir_path.join("queryDB_h"))
-        .context("failed to build query db header")?
-        .into_map();
+    let pdb_records = pdb.get(idx)?;
+    for line in pdb_records.lines() {
+        let mut tokens = line.split_whitespace();
+        let tid: usize = tokens
+            .next()
+            .ok_or_else(|| anyhow::anyhow!("missing tid"))?
+            .parse()?;
+        let psc: usize = tokens
+            .next()
+            .ok_or_else(|| anyhow::anyhow!("missing psc"))?
+            .parse()?;
 
-    let mut queries = query_map.iter().collect::<Vec<_>>();
-    queries.sort_by_key(|x| x.1);
+        map.insert(tid, Hit { psc, asc: None });
+    }
 
-    let queries = queries
-        .into_iter()
-        .map(|(q, _)| q.clone())
-        .collect::<Vec<_>>();
+    let adb_records = adb.get(idx)?;
+    for line in adb_records.lines() {
+        let mut tokens = line.split_whitespace();
+        let tid: usize = tokens
+            .next()
+            .ok_or_else(|| anyhow::anyhow!("missing tid"))?
+            .parse()?;
+        let asc: usize = tokens
+            .next()
+            .ok_or_else(|| anyhow::anyhow!("missing asc"))?
+            .parse()?;
 
-    let target_map = Db::from_path(args.dir_path.join("targetDB_h"))
-        .context("failed to build target db header")?
-        .into_map();
+        map.get_mut(&tid).expect("no tid for align record").asc = Some(asc);
+    }
 
-    // ---
+    Ok(map.into_values().collect())
+}
 
-    let reader = BufReader::new(File::open(args.ga_hits)?);
-    let mut sets = vec![HashSet::new(); query_map.len()];
-    for line in reader.lines() {
-        let line = line?;
+fn score(args: ScoreArgs) -> anyhow::Result<()> {
+    std::fs::create_dir_all(&args.common.out_dir)?;
+    let mut out = BufWriter::new(File::create(args.common.out_dir.join("psc-seeds.txt"))?);
+    let mut pdb = Db::from_path(args.common.pdb_path).context("failed to build prefilter db")?;
+    let mut qdb_h = Db::from_path(args.common.qdb_h_path).context("failed to build qdb_h")?;
+    let mut adb = Db::from_path(args.common.adb_path).context("failed to build adb")?;
 
-        if line.starts_with('#') {
-            continue;
-        }
+    for idx in 0..qdb_h.len() {
+        let mut query = qdb_h.get(idx)?;
+        query = query.trim().to_string();
 
-        let tokens = line.split_whitespace().collect::<Vec<_>>();
+        let mut hits = hits(idx, &mut pdb, &mut adb, args.common.map_cap)?;
 
-        let query = tokens[0];
-        let target = tokens[1];
+        hits.sort_by(|a, b| b.psc.cmp(&a.psc));
 
-        // let ga_sc = tokens[2].parse::<f32>()?;
-        let nail_cloud_sc = tokens[4].parse::<f32>().ok();
-        // let nail_sc = tokens[6].parse::<f32>().ok();
-        // let hmmer_sc = tokens[10].parse::<f32>().ok();
+        if !hits.is_empty() {
+            write!(out, "{query}")?;
 
-        let q_idx = *query_map.get(query).unwrap();
-        let t_idx = *target_map.get(target).unwrap();
+            for chunk in hits.chunk_by(|a, b| a.psc == b.psc) {
+                let psc = chunk[0].psc;
 
-        if nail_cloud_sc.is_some() {
-            sets[q_idx].insert(t_idx);
+                if psc > args.max_psc || chunk.len() < args.min_chunk {
+                    continue;
+                }
+
+                let seed_cnt = chunk.iter().filter(|h| h.asc.is_some()).count();
+                let seed_frac = seed_cnt as f32 / chunk.len() as f32;
+
+                write!(out, ",({},{:.4},{})", psc, seed_frac, seed_cnt)?;
+            }
+
+            writeln!(out)?;
         }
     }
 
-    // ---
+    Ok(())
+}
 
-    let mut pf_distributions = vec![ScoreDistribution::default(); query_map.len()];
-    let mut ga_distributions = vec![ScoreDistribution::default(); query_map.len()];
+fn prog(args: ProgArgs) -> anyhow::Result<()> {
+    std::fs::create_dir_all(&args.common.out_dir)?;
+    let mut out = BufWriter::new(File::create(args.common.out_dir.join("max-seqs.txt"))?);
+    let mut pdb = Db::from_path(args.common.pdb_path).context("failed to build prefilter db")?;
+    let mut qdb_h = Db::from_path(args.common.qdb_h_path).context("failed to build qdb_h")?;
+    let mut adb = Db::from_path(args.common.adb_path).context("failed to build adb")?;
 
-    #[allow(clippy::needless_range_loop)]
-    for q_idx in 0..prefilter_db.len() {
-        let pf_hits = prefilter_db.get(q_idx)?;
+    for idx in 0..qdb_h.len() {
+        let mut query = qdb_h.get(idx)?;
+        query = query.trim().to_string();
 
-        let set = &sets[q_idx];
-        let pf_dist = &mut pf_distributions[q_idx];
-        let ga_dist = &mut ga_distributions[q_idx];
-        for line in pf_hits.lines() {
-            let tokens = line.split_whitespace().collect::<Vec<_>>();
-            let t_idx = tokens[0].parse::<usize>()?;
-            let score = tokens[1].parse::<usize>()?;
-            pf_dist.add(score);
+        let mut hits = hits(idx, &mut pdb, &mut adb, args.common.map_cap)?;
 
-            if set.contains(&t_idx) {
-                ga_dist.add(score);
+        hits.sort_by(|a, b| b.psc.cmp(&a.psc));
+
+        if !hits.is_empty() {
+            write!(out, "{query}")?;
+
+            let mut n = args.prog_n;
+            let g = 1usize;
+            let mut tot_hit_cnt = 0;
+            let mut tot_seed_cnt = 0;
+            let mut bin_start = 0;
+            let mut iter = hits.iter().peekable();
+            while iter.peek().is_some() {
+                let chunk = iter.by_ref().take(n).collect::<Vec<_>>();
+                let bin_seed_cnt = chunk.iter().filter(|h| h.asc.is_some()).count();
+
+                tot_hit_cnt += chunk.len();
+                tot_seed_cnt += bin_seed_cnt;
+
+                let asc_min = chunk.iter().map(|h| h.psc).min().unwrap();
+                let asc_max = chunk.iter().map(|h| h.psc).max().unwrap();
+                let asc_avg =
+                    chunk.iter().map(|h| h.psc).sum::<usize>() as f32 / chunk.len() as f32;
+
+                let bin_end = bin_start + chunk.len();
+
+                let bin_seed_frac = bin_seed_cnt as f32 / chunk.len() as f32;
+                let tot_seed_frac = tot_seed_cnt as f32 / tot_hit_cnt as f32;
+
+                write!(
+                    out,
+                    ",({},{},{},{},{:.1},{:.4},{:.4})",
+                    bin_start, bin_end, asc_min, asc_max, asc_avg, tot_seed_frac, bin_seed_frac
+                )?;
+
+                bin_start = bin_end;
+                n *= g;
             }
-        }
 
-        writeln!(out, ">{}", queries[q_idx])?;
-        pf_dist.dump(&mut out)?;
-        writeln!(out, "//")?;
-        ga_dist.dump(&mut out)?;
-        writeln!(out, "//")?;
+            writeln!(out)?;
+        }
     }
 
     Ok(())

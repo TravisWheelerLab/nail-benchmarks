@@ -28,7 +28,7 @@ small:
 	@mkdir -p $(DIR)
 	@ln -sf $(SRC_HMM) $(DIR)/query.hmm
 	@ln -sf $(SRC_STO) $(DIR)/query.sto
-	@$(FASTA_SAMPLE) $(SRC_FA) -n 50 --seed $(SEED) > $(DIR)/target.fa
+	@$(FASTA_SAMPLE) benchmark-one/target.fa -n 10000 --seed $(SEED) > $(DIR)/target.fa
 	@echo done
 
 benchmark-one:
