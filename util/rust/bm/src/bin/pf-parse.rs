@@ -34,9 +34,6 @@ struct CommonArgs {
 
     #[arg(value_name = "path")]
     out_path: PathBuf,
-
-    #[arg(long, default_value_t = 1_000_000)]
-    map_cap: usize,
 }
 
 #[derive(Args)]
@@ -69,10 +66,11 @@ struct Hit {
     asc: Option<usize>,
 }
 
-fn hits(idx: usize, pdb: &mut Db, adb: &mut Db, cap: usize) -> anyhow::Result<Vec<Hit>> {
-    let mut map = HashMap::with_capacity(cap);
-
+fn hits(idx: usize, pdb: &mut Db, adb: &mut Db) -> anyhow::Result<Vec<Hit>> {
     let pdb_records = pdb.get(idx)?;
+
+    let mut map = HashMap::with_capacity(pdb_records.len() / 10);
+
     for line in pdb_records.lines() {
         let mut tokens = line.split_whitespace();
         let tid: usize = tokens
@@ -118,7 +116,7 @@ fn score(args: ScoreArgs) -> anyhow::Result<()> {
         let mut query = qdb_h.get(idx)?;
         query = query.trim().to_string();
 
-        let mut hits = hits(idx, &mut pdb, &mut adb, args.common.map_cap)?;
+        let mut hits = hits(idx, &mut pdb, &mut adb)?;
 
         hits.sort_by(|a, b| b.psc.cmp(&a.psc));
 
@@ -154,7 +152,7 @@ fn prog(args: ProgArgs) -> anyhow::Result<()> {
         let mut query = qdb_h.get(idx)?;
         query = query.trim().to_string();
 
-        let mut hits = hits(idx, &mut pdb, &mut adb, args.common.map_cap)?;
+        let mut hits = hits(idx, &mut pdb, &mut adb)?;
 
         hits.sort_by(|a, b| b.psc.cmp(&a.psc));
 
