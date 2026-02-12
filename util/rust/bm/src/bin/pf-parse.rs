@@ -126,10 +126,11 @@ fn score(args: ScoreArgs) -> anyhow::Result<()> {
             for chunk in hits.chunk_by(|a, b| a.psc == b.psc) {
                 let psc = chunk[0].psc;
 
+                let hit_cnt = chunk.len();
                 let seed_cnt = chunk.iter().filter(|h| h.asc.is_some()).count();
                 let seed_frac = seed_cnt as f32 / chunk.len() as f32;
 
-                write!(out, ",({},{:.4},{})", psc, seed_frac, seed_cnt)?;
+                write!(out, ",({},{:.4},{},{})", psc, seed_frac, seed_cnt, hit_cnt)?;
             }
 
             writeln!(out)?;
