@@ -32,11 +32,11 @@ struct CommonArgs {
     #[arg(value_name = "alignDB")]
     adb_path: PathBuf,
 
+    #[arg(value_name = "path")]
+    out_path: PathBuf,
+
     #[arg(long, default_value_t = 1_000_000)]
     map_cap: usize,
-
-    #[arg(long, value_name = "dir/", default_value = "./figures-max-seqs")]
-    out_dir: PathBuf,
 }
 
 #[derive(Args)]
@@ -52,12 +52,6 @@ struct ProgArgs {
 struct ScoreArgs {
     #[command(flatten)]
     common: CommonArgs,
-
-    #[arg(long, default_value_t = 100)]
-    max_psc: usize,
-
-    #[arg(long, default_value_t = 10)]
-    min_chunk: usize,
 }
 
 fn main() -> anyhow::Result<()> {
@@ -112,8 +106,10 @@ fn hits(idx: usize, pdb: &mut Db, adb: &mut Db, cap: usize) -> anyhow::Result<Ve
 }
 
 fn score(args: ScoreArgs) -> anyhow::Result<()> {
-    std::fs::create_dir_all(&args.common.out_dir)?;
-    let mut out = BufWriter::new(File::create(args.common.out_dir.join("psc-seeds.txt"))?);
+    if let Some(parent) = args.common.out_path.parent() {
+        std::fs::create_dir_all(parent)?;
+    }
+    let mut out = BufWriter::new(File::create(args.common.out_path)?);
     let mut pdb = Db::from_path(args.common.pdb_path).context("failed to build prefilter db")?;
     let mut qdb_h = Db::from_path(args.common.qdb_h_path).context("failed to build qdb_h")?;
     let mut adb = Db::from_path(args.common.adb_path).context("failed to build adb")?;
@@ -132,10 +128,6 @@ fn score(args: ScoreArgs) -> anyhow::Result<()> {
             for chunk in hits.chunk_by(|a, b| a.psc == b.psc) {
                 let psc = chunk[0].psc;
 
-                if psc > args.max_psc || chunk.len() < args.min_chunk {
-                    continue;
-                }
-
                 let seed_cnt = chunk.iter().filter(|h| h.asc.is_some()).count();
                 let seed_frac = seed_cnt as f32 / chunk.len() as f32;
 
@@ -150,8 +142,10 @@ fn score(args: ScoreArgs) -> anyhow::Result<()> {
 }
 
 fn prog(args: ProgArgs) -> anyhow::Result<()> {
-    std::fs::create_dir_all(&args.common.out_dir)?;
-    let mut out = BufWriter::new(File::create(args.common.out_dir.join("max-seqs.txt"))?);
+    if let Some(parent) = args.common.out_path.parent() {
+        std::fs::create_dir_all(parent)?;
+    }
+    let mut out = BufWriter::new(File::create(args.common.out_path)?);
     let mut pdb = Db::from_path(args.common.pdb_path).context("failed to build prefilter db")?;
     let mut qdb_h = Db::from_path(args.common.qdb_h_path).context("failed to build qdb_h")?;
     let mut adb = Db::from_path(args.common.adb_path).context("failed to build adb")?;
