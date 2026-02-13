@@ -7,7 +7,10 @@ use std::{
 };
 
 use anyhow::Context;
-use bioio::mmseqs::Db;
+use bioio::{
+    mmseqs::Db,
+    tbl::{HitTable, NailTable},
+};
 use clap::{Args, Parser, Subcommand};
 use rayon::{
     iter::{ParallelBridge, ParallelIterator},
@@ -31,11 +34,19 @@ struct CommonArgs {
     #[arg(value_name = "prefilterDB")]
     pdb_path: PathBuf,
 
+    #[arg(value_name = "alignDB")]
+    adb_path: PathBuf,
+
     #[arg(value_name = "queryDB_h")]
     qdb_h_path: PathBuf,
 
-    #[arg(value_name = "alignDB")]
-    adb_path: PathBuf,
+    #[arg(value_name = "targetDB_h")]
+    tdb_h_path: PathBuf,
+
+    // #[arg(value_name = "query.hmm")]
+    // query_path: PathBuf,
+    #[arg(value_name = "results.tbl")]
+    nail_tbl_path: PathBuf,
 
     #[arg(value_name = "path")]
     out_path: PathBuf,
@@ -79,9 +90,15 @@ fn main() -> anyhow::Result<()> {
 struct Hit {
     psc: usize,
     asc: Option<usize>,
+    nsc: Option<f64>,
 }
 
-fn hits(pdb_records: String, adb_records: String) -> anyhow::Result<Vec<Hit>> {
+fn hits(
+    pdb_records: String,
+    adb_records: String,
+    nail_records: Option<&HashMap<String, f64>>,
+    target_names: &[String],
+) -> anyhow::Result<Vec<Hit>> {
     let mut map = HashMap::with_capacity(pdb_records.len() / 10);
 
     for line in pdb_records.lines() {
@@ -95,7 +112,14 @@ fn hits(pdb_records: String, adb_records: String) -> anyhow::Result<Vec<Hit>> {
             .ok_or_else(|| anyhow::anyhow!("missing psc"))?
             .parse()?;
 
-        map.insert(tid, Hit { psc, asc: None });
+        map.insert(
+            tid,
+            Hit {
+                psc,
+                asc: None,
+                nsc: None,
+            },
+        );
     }
 
     for line in adb_records.lines() {
@@ -110,6 +134,13 @@ fn hits(pdb_records: String, adb_records: String) -> anyhow::Result<Vec<Hit>> {
             .parse()?;
 
         map.get_mut(&tid).expect("no tid for align record").asc = Some(asc);
+    }
+
+    if let Some(recs) = nail_records {
+        map.iter_mut().for_each(|(&tid, hit)| {
+            let tname = &target_names[tid];
+            hit.nsc = recs.get(tname).cloned();
+        });
     }
 
     Ok(map.into_values().collect())
@@ -127,8 +158,25 @@ fn score(args: ScoreArgs) -> anyhow::Result<()> {
     )?)));
 
     let mut pdb = Db::from_path(args.common.pdb_path).context("failed to build prefilter db")?;
-    let mut qdb_h = Db::from_path(args.common.qdb_h_path).context("failed to build qdb_h")?;
     let mut adb = Db::from_path(args.common.adb_path).context("failed to build adb")?;
+    let mut qdb_h = Db::from_path(args.common.qdb_h_path).context("failed to build qdb_h")?;
+    let mut tdb_h = Db::from_path(args.common.tdb_h_path).context("failed to build qdb_h")?;
+
+    let mut target_names: Vec<String> = vec![];
+
+    for idx in 0..tdb_h.len() {
+        target_names.push(tdb_h.get(idx)?.trim_end().to_string());
+    }
+
+    let tbl = HitTable::from_path::<_, NailTable>(args.common.nail_tbl_path)?;
+    let mut nail_map: HashMap<String, HashMap<String, f64>> = HashMap::new();
+
+    tbl.hits.into_iter().for_each(|h| {
+        nail_map
+            .entry(h.query)
+            .or_default()
+            .insert(h.target, h.score);
+    });
 
     (0..qdb_h.len())
         .map(|idx| {
@@ -136,11 +184,12 @@ fn score(args: ScoreArgs) -> anyhow::Result<()> {
             q = q.trim().to_string();
             let p = pdb.get(idx).unwrap();
             let a = adb.get(idx).unwrap();
-            (q, p, a, out.clone())
+            let n = nail_map.get(&q);
+            (q, p, a, n, out.clone())
         })
         .par_bridge()
-        .for_each(|(query, pdb_records, adb_records, out)| {
-            let mut hits = hits(pdb_records, adb_records).unwrap();
+        .for_each(|(query, pdb_records, adb_records, nail_records, out)| {
+            let mut hits = hits(pdb_records, adb_records, nail_records, &target_names).unwrap();
 
             hits.sort_by(|a, b| b.psc.cmp(&a.psc));
 
@@ -156,7 +205,15 @@ fn score(args: ScoreArgs) -> anyhow::Result<()> {
                     let seed_cnt = chunk.iter().filter(|h| h.asc.is_some()).count();
                     let seed_frac = seed_cnt as f32 / chunk.len() as f32;
 
-                    write!(buf, ",({},{:.4},{},{})", psc, seed_frac, seed_cnt, hit_cnt).unwrap();
+                    let nail_cnt = chunk.iter().filter(|h| h.nsc.is_some()).count();
+                    let nail_frac = nail_cnt as f32 / chunk.len() as f32;
+
+                    write!(
+                        buf,
+                        ",({},{:.4},{},{:.4},{},{})",
+                        psc, seed_frac, seed_cnt, nail_frac, nail_cnt, hit_cnt
+                    )
+                    .unwrap();
                 }
 
                 writeln!(buf).unwrap();

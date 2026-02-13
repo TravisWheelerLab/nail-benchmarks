@@ -225,7 +225,7 @@ impl HitTable {
         let mut hits = vec![];
         for line in reader.lines() {
             let line = line.unwrap_or_default();
-            if line.starts_with('#') {
+            if line.starts_with('#') || line.is_empty() {
                 continue;
             }
 
