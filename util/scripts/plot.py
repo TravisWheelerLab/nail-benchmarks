@@ -1,14 +1,24 @@
+from collections.abc import Iterable
 import re
 
 
+TOL_ORANGE = "#EE7733"
+TOL_BLUE = "#0077BB"
+TOL_CYAN = "#33BBEE"
+TOL_TEAL = "#009988"
+TOL_RED = "#CC3311"
+TOL_MAGENTA = "#EE3377"
+TOL_GREY = "#BBBBBB"
+
+
 TOL_VIBRANT = [
-    "#EE7733",  # orange
-    "#0077BB",  # blue
-    "#33BBEE",  # cyan
-    "#009988",  # teal
-    "#CC3311",  # red
-    "#EE3377",  # magenta
-    "#BBBBBB",  # grey
+    TOL_ORANGE,
+    TOL_BLUE,
+    TOL_CYAN,
+    TOL_TEAL,
+    TOL_RED,
+    TOL_MAGENTA,
+    TOL_GREY,
 ]
 
 COLORS = TOL_VIBRANT
@@ -25,6 +35,20 @@ TOOL_COLORS = {
 }
 
 FLOAT_RE = r'\s*(-?\d+(?:\.\d+)?)\s*'
+
+
+class Scatter:
+    x: [float]
+    y: [float]
+
+    def __init__(self, lines: Iterable[str]) -> None:
+        point_re = re.compile(rf"{FLOAT_RE},{FLOAT_RE}")
+        self.x = []
+        self.y = []
+        for line in lines:
+            x, y = re.search(point_re, line).groups()
+            self.x.append(float(x))
+            self.y.append(float(y))
 
 
 class CurveND:
@@ -54,11 +78,11 @@ class CurveND:
             else:
                 self.extra.append(tok)
 
-        point_re = r"\({}\)".format(",".join(FLOAT_RE for _ in range(n)))
+        mutli_point_re = rf"\({','.join(FLOAT_RE for _ in range(n))}\)"
 
         self.data = [[] for _ in range(n)]
 
-        for pt in re.findall(point_re, line):
+        for pt in re.findall(mutli_point_re, line):
             for (i, v) in enumerate(pt):
                 self.data[i].append(float(v))
 

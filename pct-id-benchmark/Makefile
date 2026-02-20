@@ -158,7 +158,8 @@ $(PARSE): $(PARSE_SRC)
 	@cd $(RUST) && cargo build --release --bin pid-parse
 
 plot-%: $(PARSE)
-	@$(PARSE) $*/benchmark.tbl $*/results/ figures/
+	@$(PARSE) sparse $*/results/nail-s12.0.prf.tbl $*/query.hmm $*/target.fa figures/
+	@$(PARSE) recall $*/benchmark.tbl $*/results/ figures/
 	@$(PLOT_PID) figures/pid.txt
 	@$(PLOT_ROC) figures/roc.txt
 	@$(PLOT_TIME) figures/time.txt

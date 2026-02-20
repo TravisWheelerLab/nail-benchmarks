@@ -7,6 +7,78 @@ use std::{
 
 use anyhow::Context;
 
+pub mod nail {
+    use std::{
+        fs::File,
+        io::{BufRead, BufReader, Read},
+        path::Path,
+    };
+
+    use anyhow::Context;
+
+    #[derive(Clone)]
+    pub struct NailHit {
+        pub query: String,
+        pub target: String,
+        pub query_start: usize,
+        pub query_end: usize,
+        pub target_start: usize,
+        pub target_end: usize,
+        pub score: f64,
+        pub e_value: f64,
+        pub cell_frac: f64,
+    }
+
+    pub struct NailTable {
+        pub name: String,
+        pub hits: Vec<NailHit>,
+    }
+
+    impl NailTable {
+        pub fn from_path<P: AsRef<Path>>(path: P) -> anyhow::Result<Self> {
+            let path = path.as_ref();
+            let file = File::open(path)?;
+            let name = path
+                .file_stem()
+                .and_then(|s| s.to_str())
+                .context("invalid path")?;
+
+            Self::parse::<File>(file, name)
+        }
+
+        pub fn parse<R: Read>(buf: R, name: &str) -> anyhow::Result<Self> {
+            let reader = BufReader::new(buf);
+
+            let hits = reader
+                .lines()
+                .filter_map(|line| {
+                    let line = line.ok()?;
+                    if line.starts_with('#') {
+                        None
+                    } else {
+                        let tokens = line.split_whitespace().collect::<Vec<_>>();
+                        Some(NailHit {
+                            target: tokens[0].to_string(),
+                            query: tokens[1].to_string(),
+                            target_start: tokens[2].parse::<usize>().ok()?,
+                            target_end: tokens[3].parse::<usize>().ok()?,
+                            query_start: tokens[4].parse::<usize>().ok()?,
+                            query_end: tokens[5].parse::<usize>().ok()?,
+                            score: tokens[6].parse::<f64>().ok()?,
+                            e_value: tokens[8].parse::<f64>().ok()?,
+                            cell_frac: tokens[9].parse::<f64>().ok()?,
+                        })
+                    }
+                })
+                .collect();
+            Ok(Self {
+                name: name.to_string(),
+                hits,
+            })
+        }
+    }
+}
+
 pub mod hmmer {
     use std::{
         collections::HashMap,

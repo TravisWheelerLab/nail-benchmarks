@@ -4,18 +4,18 @@ use std::{
     fs::File,
     io::{BufRead, BufReader, BufWriter, Write},
     path::{Path, PathBuf},
+    process::Command,
 };
 
 use bioio::tbl::{BlastTable, Hit, HitTable, HmmerTable, NailTable};
 
 use anyhow::Context;
-use clap::Parser;
+use clap::{Parser, Subcommand};
 use glob::glob;
 use regex::Regex;
 
 const PRECISION: usize = 4;
 const FIXED_FPR: f32 = 0.01;
-// const FIXED_FPR: f32 = 1_000_000.0;
 
 trait Float: PartialOrd {}
 impl Float for f32 {}
@@ -32,7 +32,7 @@ fn e_value_cmp(a: &Hit2, b: &Hit2) -> std::cmp::Ordering {
 }
 
 #[derive(Parser)]
-struct Args {
+struct RecallArgs {
     #[arg(value_name = "benchmark.tbl")]
     benchmark_tbl: PathBuf,
 
@@ -43,9 +43,117 @@ struct Args {
     out_dir: PathBuf,
 }
 
-fn main() -> anyhow::Result<()> {
-    let args = Args::parse();
+#[derive(Parser)]
+struct SparseArgs {
+    #[arg(value_name = "nail.tbl")]
+    nail_tbl: PathBuf,
 
+    #[arg(value_name = "query.hmm")]
+    query: PathBuf,
+
+    #[arg(value_name = "target.fa")]
+    target: PathBuf,
+
+    #[arg(value_name = "dir", default_value = "./figures")]
+    out_dir: PathBuf,
+}
+
+#[derive(Parser)]
+struct Cli {
+    #[command(subcommand)]
+    cmd: Cmd,
+}
+
+#[derive(Subcommand)]
+enum Cmd {
+    Recall(RecallArgs),
+    Sparse(SparseArgs),
+}
+
+fn main() -> anyhow::Result<()> {
+    match Cli::parse().cmd {
+        Cmd::Recall(args) => {
+            recall(args)?;
+        }
+        Cmd::Sparse(args) => {
+            sparse(args)?;
+        }
+    }
+
+    Ok(())
+}
+
+fn sparse(args: SparseArgs) -> anyhow::Result<()> {
+    let tbl = bioio::tbl::nail::NailTable::parse(File::open(args.nail_tbl)?, "")?;
+
+    let query_lens: HashMap<String, usize> = Command::new("hmmstat")
+        .arg(args.query)
+        .output()?
+        .stdout
+        .lines()
+        .filter_map(|line| {
+            let line = line.ok()?;
+            if line.starts_with('#') {
+                None
+            } else {
+                let tokens: Vec<&str> = line.split_whitespace().collect();
+                Some((tokens[1].to_string(), tokens[5].parse::<usize>().ok()?))
+            }
+        })
+        .collect();
+
+    let target_lens: HashMap<String, usize> = Command::new("esl-seqstat")
+        .arg("-a")
+        .arg(args.target)
+        .output()?
+        .stdout
+        .lines()
+        .filter_map(|line| {
+            let line = line.ok()?;
+            if line.starts_with('=') {
+                let tokens: Vec<&str> = line.split_whitespace().collect();
+                Some((tokens[1].to_string(), tokens[2].parse::<usize>().ok()?))
+            } else {
+                None
+            }
+        })
+        .collect();
+
+    let figures = args.out_dir;
+    std::fs::create_dir_all(&figures)?;
+
+    let mut true_out = BufWriter::new(File::create(figures.join("cells.true.txt"))?);
+    let mut decoy_out = BufWriter::new(File::create(figures.join("cells.decoy.txt"))?);
+
+    tbl.hits.iter().try_for_each(|h| -> anyhow::Result<()> {
+        let intended_query = h
+            .target
+            .split('|')
+            .next()
+            .with_context(|| format!("failed to split query from: {}", h.target))?;
+
+        let qlen = query_lens
+            .get(&h.query)
+            .with_context(|| format!("no query len for: {}", h.query))?;
+
+        let tlen = target_lens
+            .get(&h.target)
+            .with_context(|| format!("no target len for: {}", h.target))?;
+
+        let x = (qlen * tlen) as f64;
+        let y = h.cell_frac;
+
+        if h.target.starts_with("decoy") {
+            writeln!(decoy_out, "{x},{y}")?;
+        } else if h.query == intended_query {
+            writeln!(true_out, "{x},{y}")?;
+        }
+
+        Ok(())
+    })
+}
+
+fn recall(args: RecallArgs) -> anyhow::Result<()> {
     let benchmark = Benchmark::new(args.benchmark_tbl).context("failed to open benchmark.tbl")?;
     let data = PlotData::new(args.results_dir, &benchmark).context("failed to get data")?;
 
@@ -350,7 +458,7 @@ impl PlotData {
         )?
         .filter_map(Result::ok)
         {
-            let file = File::open(&path)?;
+            let file = BufReader::new(File::open(&path)?);
 
             let stem_tokens: Vec<&str> = path
                 .file_stem()

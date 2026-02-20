@@ -8,10 +8,12 @@ from argparse import ArgumentParser
 import matplotlib.pyplot as plt
 import numpy as np
 
-x = 0
-y = 1
-a = 2
-b = 3
+psc = 0
+seed_frac = 1
+seed_cnt = 2
+nail_frac = 3
+nail_cnt = 4
+pf_cnt = 5
 
 
 def parse(filename):
@@ -20,9 +22,9 @@ def parse(filename):
         lines = list(filter(lambda line: not line.startswith("#"), f.readlines()))
 
         for line in lines:
-            curve = CurveND(line, 4)
-            curve.seed_cnt = sum(curve.data[a])
-            curve.pf_cnt = sum(curve.data[b])
+            curve = CurveND(line, 6)
+            curve.seed_cnt = sum(curve.data[seed_cnt])
+            curve.pf_cnt = sum(curve.data[pf_cnt])
             curves.append(curve)
 
     return curves
@@ -71,11 +73,12 @@ def main(args):
         # ax.get_yaxis().set_major_formatter(lambda y, _: f"{y:g}")
 
     bins = np.arange(15, 100, 5)
+    # bins = np.arange(15, 95, 10)
 
     labels = [
-        "prefilter hits | -s 7.5",
-        "prefilter hits | -s 10.0",
         "prefilter hits | -s 12.0",
+        "prefilter hits | -s 10.0",
+        "prefilter hits | -s 7.5",
     ]
     for (s_idx, curves) in enumerate(samples):
         for (q_idx, curve) in enumerate(curves):
@@ -83,7 +86,7 @@ def main(args):
             axes[q_idx].set_xlabel("Prefilter score")
             axes[q_idx].set_ylabel("Number of hits")
 
-            yy, edges = np.histogram(curve.data[x], bins=bins, weights=curve.data[b])
+            yy, edges = np.histogram(curve.data[psc], bins=bins, weights=curve.data[pf_cnt])
 
             ax = axes[q_idx]
             ax.plot(edges[:-1], yy,
@@ -100,21 +103,38 @@ def main(args):
             ax.set_xticklabels(ax_labels, rotation=45, fontsize=5)
 
     labels = [
-        "nail seeds | -s 7.5",
-        "nail seeds | -s 10.0",
         "nail seeds | -s 12.0",
+        "nail seeds | -s 10.0",
+        "nail seeds | -s 7.5",
     ]
     for (s_idx, curves) in enumerate(samples):
         for (q_idx, curve) in enumerate(curves):
-
-            bins = np.arange(15, 100, 5)
-            yy, xx = np.histogram(curve.data[x], bins=bins, weights=curve.data[a])
+            yy, xx = np.histogram(curve.data[psc], bins=bins, weights=curve.data[seed_cnt])
             axes[q_idx].plot(
                 xx[:-1],
                 yy,
                 color=colors[s_idx],
                 linestyle='--',
                 marker='o',
+                ms=4,
+                markerfacecolor='white',
+                label=labels[s_idx],
+            )
+
+    labels = [
+        "nail hits | -s 12.0",
+        "nail hits | -s 10.0",
+        "nail hits | -s 7.5",
+    ]
+    for (s_idx, curves) in enumerate(samples):
+        for (q_idx, curve) in enumerate(curves):
+            yy, xx = np.histogram(curve.data[psc], bins=bins, weights=curve.data[nail_cnt])
+            axes[q_idx].plot(
+                xx[:-1],
+                yy,
+                color=colors[s_idx],
+                linestyle=':',
+                marker='d',
                 ms=4,
                 markerfacecolor='white',
                 label=labels[s_idx],
