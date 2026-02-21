@@ -9,6 +9,7 @@ use anyhow::Context;
 
 pub mod nail {
     use std::{
+        collections::HashMap,
         fs::File,
         io::{BufRead, BufReader, Read},
         path::Path,
@@ -75,6 +76,13 @@ pub mod nail {
                 name: name.to_string(),
                 hits,
             })
+        }
+
+        pub fn to_map(self) -> HashMap<(String, String), NailHit> {
+            self.hits
+                .into_iter()
+                .map(|h| ((h.query.clone(), h.target.clone()), h))
+                .collect()
         }
     }
 }

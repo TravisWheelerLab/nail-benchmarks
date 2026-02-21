@@ -44,7 +44,7 @@ struct RecallArgs {
 }
 
 #[derive(Parser)]
-struct SparseArgs {
+struct CellsArgs {
     #[arg(value_name = "nail.tbl")]
     nail_tbl: PathBuf,
 
@@ -59,6 +59,18 @@ struct SparseArgs {
 }
 
 #[derive(Parser)]
+struct ScoreArgs {
+    #[arg(value_name = "nail.full.tbl")]
+    full_tbl: PathBuf,
+
+    #[arg(value_name = "nail.sparse.tbl")]
+    sparse_tbl: PathBuf,
+
+    #[arg(value_name = "dir", default_value = "./figures")]
+    out_dir: PathBuf,
+}
+
+#[derive(Parser)]
 struct Cli {
     #[command(subcommand)]
     cmd: Cmd,
@@ -67,7 +79,8 @@ struct Cli {
 #[derive(Subcommand)]
 enum Cmd {
     Recall(RecallArgs),
-    Sparse(SparseArgs),
+    Cells(CellsArgs),
+    Score(ScoreArgs),
 }
 
 fn main() -> anyhow::Result<()> {
@@ -75,15 +88,42 @@ fn main() -> anyhow::Result<()> {
         Cmd::Recall(args) => {
             recall(args)?;
         }
-        Cmd::Sparse(args) => {
-            sparse(args)?;
+        Cmd::Cells(args) => {
+            cells(args)?;
+        }
+        Cmd::Score(args) => {
+            score(args)?;
         }
     }
 
     Ok(())
 }
 
-fn sparse(args: SparseArgs) -> anyhow::Result<()> {
+fn score(args: ScoreArgs) -> anyhow::Result<()> {
+    let full_tbl = bioio::tbl::nail::NailTable::parse(File::open(args.full_tbl)?, "")?.to_map();
+    let sparse_tbl = bioio::tbl::nail::NailTable::parse(File::open(args.sparse_tbl)?, "")?.to_map();
+
+    let intersection = full_tbl
+        .keys()
+        .filter(|k| sparse_tbl.contains_key(*k))
+        .collect::<Vec<_>>();
+
+    let figures = args.out_dir;
+    std::fs::create_dir_all(&figures)?;
+
+    let mut out = BufWriter::new(File::create(figures.join("score.txt"))?);
+    for k in intersection {
+        let f = full_tbl.get(k).unwrap();
+        let s = sparse_tbl.get(k).unwrap();
+        let x = f.score;
+        let y = s.score;
+        writeln!(out, "{x:.1},{y:.1}")?;
+    }
+
+    Ok(())
+}
+
+fn cells(args: CellsArgs) -> anyhow::Result<()> {
     let tbl = bioio::tbl::nail::NailTable::parse(File::open(args.nail_tbl)?, "")?;
 
     let query_lens: HashMap<String, usize> = Command::new("hmmstat")

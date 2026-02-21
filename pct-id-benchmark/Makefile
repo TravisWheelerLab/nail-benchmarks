@@ -34,6 +34,8 @@ PLOT_PID    := $(SCRIPTS)/plot_pid.py
 PLOT_ROC    := $(SCRIPTS)/plot_roc.py
 PLOT_TIME   := $(SCRIPTS)/plot_time.py
 PLOT_PARAMS := $(SCRIPTS)/plot_params.py
+PLOT_CELLS  := $(SCRIPTS)/plot_cell_frac.py
+PLOT_SCORE  := $(SCRIPTS)/plot_score.py
 
 # align scripts
 NAIL    := $(SCRIPTS)/run-nail.sh
@@ -164,12 +166,20 @@ run-sparse-%:
 $(PARSE): $(PARSE_SRC)
 	@cd $(RUST) && cargo build --release --bin pid-parse
 
-plot-%: $(PARSE)
-	@$(PARSE) sparse $*/results/nail-s12.0.prf.tbl $*/query.hmm $*/target.fa figures/
+plot-recall-%: $(PARSE)
 	@$(PARSE) recall $*/benchmark.tbl $*/results/ figures/
 	@$(PLOT_PID) figures/pid.txt
 	@$(PLOT_ROC) figures/roc.txt
 	@$(PLOT_TIME) figures/time.txt
+
+plot-score-%: $(PARSE)
+	@$(PARSE) score $*/results-sparse/nail-s12.0-full.prf.tbl $*/results/nail-s12.0.prf.tbl figures/
+	@$(PLOT_SCORE) figures/score.txt
+
+plot-cells-%: $(PARSE)
+	$(eval LONG_SEQ:= $(if $(wildcard ../long-seqs/results/cells.long.txt),--long_hits ../long-seqs/results/cells.long.txt,))
+	@$(PARSE) cells $*/results-sparse/nail-s12.0-cells.prf.tbl $*/query.hmm $*/target.fa figures/
+	@$(PLOT_CELLS) figures/cells.true.txt figures/cells.decoy.txt $(LONG_SEQ)
 
 params-%: $(PARSE)
 	$(eval P := figures-params/)
