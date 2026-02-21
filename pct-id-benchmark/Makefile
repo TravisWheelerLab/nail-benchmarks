@@ -146,13 +146,20 @@ run-%:
 	@echo "benchmarking $*/ with $(THREADS) threads..."
 	$(eval N := $(if $(NUMA_NODE),--numa_node $(NUMA_NODE),))
 	$(eval ARGS := --threads $(THREADS) --e 10.0 --results $*/results/ $(N) $*)
-	@mkdir $*/results/
+	@mkdir -p $*/results/
 	@$(HMMER)   $(ARGS) 
 	@$(NAIL)    $(ARGS) 
 	@$(MMSEQS)  $(ARGS) 
 	@$(LAST)    $(ARGS) 
 	@$(DIAMOND) $(ARGS) 
 	# @$(BLAST)   $(ARGS) 
+
+run-sparse-%:
+	@echo "benchmarking $*/ with $(THREADS) threads..."
+	$(eval N := $(if $(NUMA_NODE),--numa_node $(NUMA_NODE),))
+	$(eval ARGS := --threads $(THREADS) --e 1e9 --results $*/results-sparse/ $(N) $*)
+	@mkdir -p $*/results-sparse/
+	@$(SCRIPTS)/run-sparse.sh $(ARGS) 
 
 $(PARSE): $(PARSE_SRC)
 	@cd $(RUST) && cargo build --release --bin pid-parse
