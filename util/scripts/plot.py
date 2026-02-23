@@ -1,6 +1,8 @@
 from collections.abc import Iterable
 import re
 
+import matplotlib as mpl
+import matplotlib.pyplot as plt
 
 TOL_ORANGE = "#EE7733"
 TOL_BLUE = "#0077BB"
@@ -35,6 +37,28 @@ TOOL_COLORS = {
 }
 
 FLOAT_RE = r'\s*(-?\d+(?:\.\d+)?)\s*'
+
+
+def axes():
+    scale = 1.75
+    mpl.rcParams.update({
+        "font.size": mpl.rcParams["font.size"] * scale,
+    })
+
+    fig, ax = plt.subplots(
+        figsize=(16, 9),
+        # constrained_layout=True
+    )
+
+    P = 0.075
+    fig.subplots_adjust(
+        left=P,
+        right=1.0 - P,
+        bottom=P,
+        top=1.0 - P
+    )
+
+    return fig, ax
 
 
 class Scatter:

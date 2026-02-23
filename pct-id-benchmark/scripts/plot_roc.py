@@ -1,8 +1,9 @@
 #!/usr/bin/env python3
-
-from plot import Curve, TOOL_COLORS
-
+import argparse
 from pathlib import Path
+
+from plot import axes, Curve, TOOL_COLORS
+
 
 import matplotlib.pyplot as plt
 
@@ -14,16 +15,17 @@ X_MAX = 1.0
 AUC_X_MAX = 1.0
 
 
-def main(filename):
+def main(args):
     curves = []
 
-    with open(filename) as f:
+    with open(args.roc) as f:
         lines = list(filter(lambda line: not line.startswith("#"), f.readlines()))
 
         for line in lines:
             curves.append(Curve(line))
 
-    fig, ax = plt.subplots(figsize=(16, 9))
+    fig, ax = axes()
+
     plt.title("Recall by FPR")
 
     ax.set_xlabel("False positives per search (log scale)")
@@ -60,9 +62,12 @@ def main(filename):
             va="center",
         )
 
-    plt.savefig(filename.with_suffix(".pdf"))
+    plt.savefig(args.out)
 
 
 if __name__ == "__main__":
-    import sys
-    main(Path(sys.argv[1]))
+    p = argparse.ArgumentParser()
+    p.add_argument("roc", type=Path)
+    p.add_argument("out", type=Path)
+    args = p.parse_args()
+    main(args)

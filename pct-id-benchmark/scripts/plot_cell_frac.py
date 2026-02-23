@@ -1,9 +1,8 @@
 #!/usr/bin/env python3
 import argparse
-
-from plot import Scatter, TOL_CYAN, TOL_MAGENTA
-
 from pathlib import Path
+
+from plot import axes, Scatter, TOL_CYAN, TOL_MAGENTA
 
 import matplotlib as mpl
 import matplotlib.pyplot as plt
@@ -69,7 +68,8 @@ def heatmap(true_points, decoy_points, ax, long_points=None):
                 yedges,
                 h.T,
                 cmap=cmap,
-                shading='auto'
+                shading='auto',
+                rasterized=True,
             ),
             cmap
         )
@@ -156,7 +156,7 @@ def main(args):
         with open(args.long_hits) as f:
             long_points = Scatter(f.readlines())
 
-    fig, ax = plt.subplots(figsize=(16, 9))
+    fig, ax = axes()
 
     # scatter(true_points, decoy_points, ax)
     heatmap(true_points, decoy_points, ax, long_points)
@@ -172,13 +172,14 @@ def main(args):
     ax.set_yscale("log")
     ax.set_ylim(1e-4, 1)
 
-    plt.savefig(args.true_hits.with_name("cells.pdf"))
+    plt.savefig(args.out)
 
 
 if __name__ == "__main__":
     p = argparse.ArgumentParser()
     p.add_argument("true_hits", type=Path)
     p.add_argument("decoy_hits", type=Path)
+    p.add_argument("out", type=Path)
     p.add_argument("--long_hits", type=Path)
     args = p.parse_args()
     main(args)

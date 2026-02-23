@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 import argparse
 
-from plot import Scatter, TOL_CYAN, TOL_RED, TOL_ORANGE
+from plot import axes, Scatter, TOL_CYAN, TOL_RED, TOL_ORANGE
 
 from pathlib import Path
 
@@ -103,7 +103,7 @@ def main(args):
     ymin = min(points.y)
     ymax = max(points.y)
 
-    fig, ax = plt.subplots(1, 1, figsize=(16, 9))
+    fig, ax = axes()
 
     scatter(points, ax)
     # heatmap(points, ax)
@@ -121,11 +121,12 @@ def main(args):
     ax.set_ylabel("Sequence bitscore from sparse F/B")
     ax.set_ylim(0, 500)
 
-    plt.savefig(args.score.with_name("score.pdf"))
+    plt.savefig(args.out)
 
 
 if __name__ == "__main__":
     p = argparse.ArgumentParser()
     p.add_argument("score", type=Path)
+    p.add_argument("out", type=Path)
     args = p.parse_args()
     main(args)

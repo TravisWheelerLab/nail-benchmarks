@@ -1,16 +1,17 @@
 #!/usr/bin/env python3
-
-from plot import Point, TOOL_COLORS
-
+import argparse
 from pathlib import Path
+
+from plot import axes, Point, TOOL_COLORS
+
 
 import matplotlib.pyplot as plt
 
 
-def plot(filename, ax=None, exclude=[]):
+def plot(args, ax=None, exclude=[]):
     points = []
 
-    with open(filename) as f:
+    with open(args.time) as f:
         lines = list(filter(lambda line: not line.startswith("#"), f.readlines()))
         fpr = float(lines[0].split()[-1])
 
@@ -20,7 +21,7 @@ def plot(filename, ax=None, exclude=[]):
     points.sort(key=lambda c: c.x, reverse=True)
 
     if ax is None:
-        fig, ax = plt.subplots(figsize=(16, 9))
+        fig, ax = axes()
         plt.title("Recall by runtime")
 
         ax.set_xlabel("Runtime (seconds; log scale)")
@@ -31,6 +32,7 @@ def plot(filename, ax=None, exclude=[]):
         ax.set_ylim(0.0, 0.8)
 
         ax.grid(True)
+
 
     for point in points:
         if any(e(point) for e in exclude):
@@ -56,7 +58,9 @@ def plot(filename, ax=None, exclude=[]):
 
 
 if __name__ == "__main__":
-    import sys
-    filename = Path(sys.argv[1])
-    plot(filename)
-    plt.savefig(filename.with_suffix(".pdf"))
+    p = argparse.ArgumentParser()
+    p.add_argument("time", type=Path)
+    p.add_argument("out", type=Path)
+    args = p.parse_args()
+    plot(args)
+    plt.savefig(args.out)

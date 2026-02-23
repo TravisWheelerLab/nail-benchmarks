@@ -1,17 +1,17 @@
 #!/usr/bin/env python3
-
-from plot import Curve, COLORS, TOOL_COLORS
-
+import argparse
 from pathlib import Path
+
+from plot import axes, Curve, COLORS, TOOL_COLORS
 
 import matplotlib.pyplot as plt
 import numpy as np
 
 
-def main(filename):
+def main(args):
     curves = []
 
-    with open(filename) as f:
+    with open(args.pid) as f:
         lines = list(filter(lambda line: not line.startswith("#"), f.readlines()))
 
         fpr = float(lines[0].split()[-1])
@@ -24,17 +24,18 @@ def main(filename):
 
     curves.sort(key=lambda c: c.auc, reverse=True)
 
-    fig, ax_recall = plt.subplots(figsize=(16, 9))
+    fig, ax = axes()
+
     plt.title("Recall by decreasing pairwise %identity")
 
-    ax_recall.set_zorder(2)
-    ax_recall.patch.set_visible(False)
-    ax_recall.set_xlim(25, 10)
-    ax_recall.set_ylim(0.0, 1.0)
-    ax_recall.set_xlabel("Decreasing pairwise %identity")
-    ax_recall.set_ylabel(f"Recall at {fpr} FP per search")
+    ax.set_zorder(2)
+    ax.patch.set_visible(False)
+    ax.set_xlim(25, 10)
+    ax.set_ylim(0.0, 1.0)
+    ax.set_xlabel("Decreasing pairwise %identity")
+    ax.set_ylabel(f"Recall at {fpr} FP per search")
 
-    ax_recall.axhline(0.5, color="black", linestyle="--", linewidth=1)
+    ax.axhline(0.5, color="black", linestyle="--", linewidth=1)
 
     for curve in curves:
         color = TOOL_COLORS[curve.tool]
@@ -46,7 +47,7 @@ def main(filename):
             mfc = 'white'
             label = f"{curve.prefix} prf"
 
-        ax_recall.plot(
+        ax.plot(
             curve.x, curve.y,
             color=color,
             marker='o',
@@ -55,20 +56,20 @@ def main(filename):
             label=label
         )
 
-    ax_bins = ax_recall.twinx()
+    ax_bins = ax.twinx()
     ax_bins.set_zorder(1)
-    ax_bins.set_ylabel("sequence pairs (count)")
+    ax_bins.set_ylabel("Sequence pairs (count)")
 
     ax_bins.bar(bin_cnt.x, bin_cnt.y, color=COLORS[-1], alpha=0.75, label="pair count")
 
-    fig.legend(
-        fontsize=8,
-        markerscale=1.0,
-    )
+    fig.legend()
 
-    plt.savefig(filename.with_suffix(".pdf"))
+    plt.savefig(args.out)
 
 
 if __name__ == "__main__":
-    import sys
-    main(Path(sys.argv[1]))
+    p = argparse.ArgumentParser()
+    p.add_argument("pid", type=Path)
+    p.add_argument("out", type=Path)
+    args = p.parse_args()
+    main(args)

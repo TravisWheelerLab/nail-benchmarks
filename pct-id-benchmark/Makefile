@@ -33,9 +33,19 @@ PARSE_SRC := $(RUST)/bm/src/bin/pid-parse.rs
 PLOT_PID    := $(SCRIPTS)/plot_pid.py
 PLOT_ROC    := $(SCRIPTS)/plot_roc.py
 PLOT_TIME   := $(SCRIPTS)/plot_time.py
-PLOT_PARAMS := $(SCRIPTS)/plot_params.py
 PLOT_CELLS  := $(SCRIPTS)/plot_cell_frac.py
 PLOT_SCORE  := $(SCRIPTS)/plot_score.py
+PLOT_PARAMS := $(SCRIPTS)/plot_params.py
+
+FIGURES ?= figures/
+FIGURE_DATA :=$(FIGURES)/00data/
+
+OUT_PID    := $(FIGURES)/pid.pdf
+OUT_ROC    := $(FIGURES)/roc.pdf
+OUT_TIME   := $(FIGURES)/time.pdf
+OUT_CELLS  := $(FIGURES)/cells.pdf
+OUT_SCORE  := $(FIGURES)/score.pdf
+OUT_PARAMS := $(FIGURES)/params.pdf
 
 # align scripts
 NAIL    := $(SCRIPTS)/run-nail.sh
@@ -167,19 +177,24 @@ $(PARSE): $(PARSE_SRC)
 	@cd $(RUST) && cargo build --release --bin pid-parse
 
 plot-recall-%: $(PARSE)
-	@$(PARSE) recall $*/benchmark.tbl $*/results/ figures/
-	@$(PLOT_PID) figures/pid.txt
-	@$(PLOT_ROC) figures/roc.txt
-	@$(PLOT_TIME) figures/time.txt
+	@$(PARSE) recall $*/benchmark.tbl $*/results/ $(FIGURE_DATA)
+	@$(PLOT_PID)  $(FIGURE_DATA)/pid.txt  $(OUT_PID)
+	@$(PLOT_ROC)  $(FIGURE_DATA)/roc.txt  $(OUT_ROC)
+	@$(PLOT_TIME) $(FIGURE_DATA)/time.txt $(OUT_TIME)
 
 plot-score-%: $(PARSE)
-	@$(PARSE) score $*/results-sparse/nail-s12.0-full.prf.tbl $*/results/nail-s12.0.prf.tbl figures/
-	@$(PLOT_SCORE) figures/score.txt
+	@$(PARSE) score $*/results-sparse/nail-s12.0-full.prf.tbl $*/results/nail-s12.0.prf.tbl $(FIGURE_DATA)
+	@$(PLOT_SCORE) $(FIGURE_DATA)/score.txt $(OUT_SCORE)
 
 plot-cells-%: $(PARSE)
 	$(eval LONG_SEQ:= $(if $(wildcard ../long-seqs/results/cells.long.txt),--long_hits ../long-seqs/results/cells.long.txt,))
-	@$(PARSE) cells $*/results-sparse/nail-s12.0-cells.prf.tbl $*/query.hmm $*/target.fa figures/
-	@$(PLOT_CELLS) figures/cells.true.txt figures/cells.decoy.txt $(LONG_SEQ)
+	@$(PARSE) cells $*/results-sparse/nail-s12.0-cells.prf.tbl $*/query.hmm $*/target.fa $(FIGURE_DATA)
+	@$(PLOT_CELLS) $(FIGURE_DATA)/cells.true.txt $(FIGURE_DATA)/cells.decoy.txt $(OUT_CELLS) $(LONG_SEQ)
+
+plot-all-%:
+	@$(MAKE) plot-recall-$*
+	@$(MAKE) plot-score-$*
+	@$(MAKE) plot-cells-$*
 
 params-%: $(PARSE)
 	$(eval P := figures-params/)
