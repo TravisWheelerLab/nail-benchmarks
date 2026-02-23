@@ -5,8 +5,13 @@ SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 
 ###
 
+set_default E 1e9
+set_default RESULTS "${BM_DIR}/results/"
+
 TMP=./tmp/diamond
+rm -rf $TMP
 mkdir -p $TMP
+mkdir -p $RESULTS
 
 TARGET_DB=$TMP/target_db
 $DIAMOND makedb --in $TARGET --db $TARGET_DB > /dev/null 2>&1
@@ -22,5 +27,5 @@ QUERY=$QUERY_FA
 # run_diamond "diamond-more-sens.seq"  "--more-sensitive"
 # run_diamond "diamond-very-sens.seq"  "--very-sensitive"
 
-run_diamond "diamond-default.seq"
-run_diamond "diamond-ultra-sens.seq" "--ultra-sensitive"
+run_diamond "diamond-default.seq"    "--evalue ${E}"
+run_diamond "diamond-ultra-sens.seq" "--ultra-sensitive --evalue ${E}"

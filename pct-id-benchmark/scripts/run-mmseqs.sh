@@ -5,8 +5,13 @@ SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 
 ###
 
+set_default E 1e9
+set_default RESULTS "${BM_DIR}/results/"
+
 TMP=./tmp/mmseqs/
+rm -rf $TMP
 mkdir -p $TMP
+mkdir -p $RESULTS
 
 ANNOYING=$TMP/annoying
 
@@ -28,14 +33,15 @@ ADB=$TMP/alignDB
 
 ###
 
-ARGS_SENS="-s 7.5"
+ARGS_DEFAULT="-e ${E}"
+ARGS_SENS="-s 7.5 -e ${E}"
 
 QDB=$QDB_PRF
-run_mmseqs "mmseqs-default.prf"
+run_mmseqs "mmseqs-default.prf" "$ARGS_DEFAULT"
 run_mmseqs "mmseqs-sens.prf" "$ARGS_SENS"
 
 QDB=$QDB_SEQ
-run_mmseqs "mmseqs-default.seq"
+run_mmseqs "mmseqs-default.seq" "$ARGS_DEFAULT"
 run_mmseqs "mmseqs-sens.seq" "$ARGS_SENS"
 
 

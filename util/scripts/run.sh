@@ -60,10 +60,18 @@ set_time_cmd() {
 }
 
 set_numa_prefix() {
+    for v in THREADS; do
+        check_defined $v $FUNCNAME
+    done
+
     if [ -n "$NUMA_NODE" ]; then
         if numactl --hardware | grep -q "node $NUMA_NODE "; then
-            echo "using numa node: $NUMA_NODE"
-            NUMA_PREFIX="numactl --cpunodebind=$NUMA_NODE --membind=$NUMA_NODE "
+            echo "using numa node: $NUMA_NODE with ${THREADS} threads"
+            nodes=($(numactl --hardware | awk -v n="${NUMA_NODE}" '$1=="node" && $2==n && $3=="cpus:" {for(i=4;i<=NF;i++) print $i}'))
+            printf -v list "%s," "${nodes[@]:0:$THREADS}"
+            list=${list%,}
+            # NUMA_PREFIX="numactl --cpunodebind=$NUMA_NODE --membind=$NUMA_NODE "
+            NUMA_PREFIX="numactl --physcpubind=${list} --membind=$NUMA_NODE "
         else
             echo "error: numa node $NUMA_NODE invalid"
             exit 1
@@ -96,7 +104,7 @@ set_tool_vars() {
 run_nail() {
     set_time_cmd
 
-    for v in NAIL RESULTS TMP E THREADS QUERY TARGET; do
+    for v in NAIL RESULTS TMP THREADS QUERY TARGET; do
         check_defined $v $FUNCNAME
     done
 
@@ -122,54 +130,48 @@ run_nail() {
         --tmp-dir $TMP \
         --stats-results-path $STATS \
         --tbl-out $TBL \
-        -E $E \
         $S_ARGS \
-        $QUERY $TARGET >> $SUMMARY
+        $QUERY $TARGET > $SUMMARY
 
     mv $TMP/seeds.tsv $SEEDS
 }
 
-run_phmmer() {
-    set_time_cmd
-
-    for v in PHMMER RESULTS E THREADS QUERY TARGET; do
+set_n_splits() {
+    for v in THREADS THREADS_PER; do
         check_defined $v $FUNCNAME
     done
+    
+    if (( THREADS % THREADS_PER != 0 )); then
+        echo "can't split $THREADS threads by $THREADS_PER"
+        exit
+    fi
 
-    local PREFIX=$1
-    local S_ARGS=$2
-
-    local TBL="$RESULTS/$PREFIX.tbl"
-    local DOM="$RESULTS/$PREFIX.domtbl"
-    local OUT="$RESULTS/$PREFIX.out"
-    local TIME="$RESULTS/$PREFIX.time"
-
-    echo "running $PREFIX | $S_ARGS"
-    echo "   query: $QUERY"
-    echo "  target: $TARGET"
-
-    $TIME_CMD -o $TIME \
-        $PHMMER \
-        --cpu $THREADS \
-        -E $E \
-        $S_ARGS \
-        -o /dev/null \
-        --tblout $TBL \
-        $QUERY $TARGET
+    N_SPLITS=$(( THREADS / $THREADS_PER ))
+    echo "running with: $N_SPLITS splits across $THREADS threads"
 }
+
 
 run_phmmer_split() {
     set_time_cmd
 
-    for v in PHMMER FASTABALANCE RESULTS TMP E THREADS QUERY TARGET; do
+    for v in PHMMER FASTABALANCE RESULTS TMP THREADS THREADS_PER QUERY TARGET; do
         check_defined $v $FUNCNAME
     done
 
-    if (( THREADS % 4 != 0 )); then
-        echo "threads: $THREADS"
-        echo "threads must be a multiple of 4 (just trust me)"
-        exit
+    ###
+    
+    if ((THREADS_PER > THREADS)); then
+        run_phmmer $1 $2
+        return 0
     fi
+
+    ###
+    
+    set_n_splits
+    local SPLIT_DIR=$TMP/query-splits
+    $FASTABALANCE $QUERY $N_SPLITS $SPLIT_DIR
+
+    ###
 
     local PREFIX=$1
     local S_ARGS=$2
@@ -178,12 +180,6 @@ run_phmmer_split() {
     local DOM="$RESULTS/$PREFIX.domtbl"
     local OUT="$RESULTS/$PREFIX.out"
     local TIME="$RESULTS/$PREFIX.time"
-
-    local N_SPLITS=$(( THREADS / 4 ))
-    local SPLIT_THREADS=4
-    local SPLIT_DIR=$TMP/query-splits
-
-    $FASTABALANCE $QUERY $N_SPLITS $SPLIT_DIR
 
     echo "running $PREFIX | $S_ARGS"
     echo "   query: $QUERY"
@@ -192,8 +188,7 @@ run_phmmer_split() {
     parallel \
         "${TIME_CMD} -o ${SPLIT_DIR}/{/.}.time \
         $PHMMER \
-        --cpu $SPLIT_THREADS \
-        -E $E \
+        --cpu $THREADS_PER \
         $S_ARGS \
         -o /dev/null \
         --tblout ${SPLIT_DIR}/{/.}.tbl \
@@ -204,10 +199,86 @@ run_phmmer_split() {
     cat $SPLIT_DIR/*.time > $TIME
 }
 
+run_hmmsearch_split() {
+    set_time_cmd
+
+    for v in HMMSEARCH HMMBALANCE RESULTS TMP THREADS THREADS_PER QUERY TARGET; do
+        check_defined $v $FUNCNAME
+    done
+    
+    ###
+    
+    if ((THREADS_PER > THREADS)); then
+        run_hmmsearch $1 $2
+        return 0
+    fi
+
+    ###
+    
+    set_n_splits
+    local SPLIT_DIR=$TMP/query-splits
+    $HMMBALANCE $QUERY $N_SPLITS $SPLIT_DIR
+
+    ###
+
+    local PREFIX=$1
+    local S_ARGS=$2
+
+    local TBL="$RESULTS/$PREFIX.tbl"
+    local DOM="$RESULTS/$PREFIX.domtbl"
+    local OUT="$RESULTS/$PREFIX.out"
+    local TIME="$RESULTS/$PREFIX.time"
+
+    echo "running $PREFIX | $S_ARGS"
+    echo "   query: $QUERY"
+    echo "  target: $TARGET"
+
+    parallel \
+        "${TIME_CMD} -o ${SPLIT_DIR}/{/.}.time \
+        $HMMSEARCH \
+        --cpu $THREADS_PER \
+        $S_ARGS \
+        -o /dev/null \
+        --tblout ${SPLIT_DIR}/{/.}.tbl \
+        {} ${TARGET}" \
+        ::: "${SPLIT_DIR}"/*.hmm
+    
+    cat $SPLIT_DIR/*.tbl > $TBL
+    cat $SPLIT_DIR/*.time > $TIME
+}
+
+run_phmmer() {
+    set_time_cmd
+
+    for v in PHMMER RESULTS THREADS QUERY TARGET; do
+        check_defined $v $FUNCNAME
+    done
+
+    local PREFIX=$1
+    local S_ARGS=$2
+
+    local TBL="$RESULTS/$PREFIX.tbl"
+    local DOM="$RESULTS/$PREFIX.domtbl"
+    local OUT="$RESULTS/$PREFIX.out"
+    local TIME="$RESULTS/$PREFIX.time"
+
+    echo "running $PREFIX | $S_ARGS"
+    echo "   query: $QUERY"
+    echo "  target: $TARGET"
+
+    $TIME_CMD -o $TIME \
+        $PHMMER \
+        --cpu $THREADS \
+        $S_ARGS \
+        -o /dev/null \
+        --tblout $TBL \
+        $QUERY $TARGET
+}
+
 run_hmmsearch() {
     set_time_cmd
 
-    for v in HMMSEARCH RESULTS E THREADS QUERY TARGET; do
+    for v in HMMSEARCH RESULTS THREADS QUERY TARGET; do
         check_defined $v $FUNCNAME
     done
 
@@ -226,68 +297,16 @@ run_hmmsearch() {
     $TIME_CMD -o $TIME \
         $HMMSEARCH \
         --cpu $THREADS \
-        -E $E \
         $S_ARGS \
         -o /dev/null \
         --tblout $TBL \
         $QUERY $TARGET
 }
 
-run_hmmsearch_split() {
-    set_time_cmd
-
-    for v in HMMSEARCH HMMBALANCE RESULTS TMP E THREADS THREADS_PER QUERY TARGET; do
-        check_defined $v $FUNCNAME
-    done
-    
-    if ((THREADS_PER > THREADS)); then
-        run_hmmsearch $1 $2
-        return 0
-    fi
-
-
-    if (( THREADS % THREADS_PER != 0 )); then
-        echo "can't split $THREADS threads by $THREADS_PER"
-        exit
-    fi
-
-    local PREFIX=$1
-    local S_ARGS=$2
-
-    local TBL="$RESULTS/$PREFIX.tbl"
-    local DOM="$RESULTS/$PREFIX.domtbl"
-    local OUT="$RESULTS/$PREFIX.out"
-    local TIME="$RESULTS/$PREFIX.time"
-
-    local N_SPLITS=$(( THREADS / $THREADS_PER ))
-    local SPLIT_THREADS=4
-    local SPLIT_DIR=$TMP/query-splits
-
-    $HMMBALANCE $QUERY $N_SPLITS $SPLIT_DIR
-
-    echo "running $PREFIX | $S_ARGS"
-    echo "   query: $QUERY"
-    echo "  target: $TARGET"
-
-    parallel \
-        "${TIME_CMD} -o ${SPLIT_DIR}/{/.}.time \
-        $HMMSEARCH \
-        --cpu $SPLIT_THREADS \
-        -E $E \
-        $S_ARGS \
-        -o /dev/null \
-        --tblout ${SPLIT_DIR}/{/.}.tbl \
-        {} ${TARGET}" \
-        ::: "${SPLIT_DIR}"/*.hmm
-    
-    cat $SPLIT_DIR/*.tbl > $TBL
-    cat $SPLIT_DIR/*.time > $TIME
-}
-
 run_mmseqs() {
     set_time_cmd
 
-    for v in MMSEQS RESULTS E THREADS QDB TDB ADB ANNOYING; do
+    for v in MMSEQS RESULTS THREADS QDB TDB ADB ANNOYING; do
         check_defined $v $FUNCNAME
     done
 
@@ -311,7 +330,6 @@ run_mmseqs() {
         $MMSEQS search \
         $QDB $TDB $ADB $ANNOYING \
         --threads $THREADS \
-        -e $E \
         $S_ARGS > /dev/null
 
     $MMSEQS convertalis $QDB $TDB $ADB $TBL --format-mode 0 > /dev/null
@@ -320,7 +338,7 @@ run_mmseqs() {
 run_blastp() {
     set_time_cmd
 
-    for v in BLASTP RESULTS E THREADS QUERY_FA TARGET_DB; do
+    for v in BLASTP RESULTS THREADS QUERY_FA TARGET_DB; do
         check_defined $v $FUNCNAME
     done
 
@@ -339,7 +357,6 @@ run_blastp() {
         -db $TARGET_DB \
         -out $TBL \
         -outfmt 6 \
-        -evalue $E \
         -num_threads $THREADS \
         $S_ARGS
 }
@@ -347,7 +364,7 @@ run_blastp() {
 run_psiblast() {
     set_time_cmd
 
-    for v in PSIBLAST RESULTS E THREADS QUERY_AFA TARGET_DB; do
+    for v in PSIBLAST RESULTS THREADS QUERY_AFA TARGET_DB; do
         check_defined $v $FUNCNAME
     done
 
@@ -366,7 +383,6 @@ run_psiblast() {
       $PSIBLAST -in_msa \$q \
         -db $TARGET_DB \
         -outfmt 6 \
-        -evalue $E \
         -num_threads $THREADS \
         -comp_based_stats 1 \
         -num_iterations 1 \
@@ -377,7 +393,7 @@ run_psiblast() {
 run_last() {
     set_time_cmd
 
-    for v in LASTAL RESULTS E THREADS QUERY TARGET_DB; do
+    for v in LASTAL RESULTS THREADS QUERY TARGET_DB; do
         check_defined $v $FUNCNAME
     done
 
@@ -402,7 +418,7 @@ run_last() {
 run_diamond() {
     set_time_cmd
 
-    for v in DIAMOND RESULTS E THREADS QUERY TARGET_DB; do
+    for v in DIAMOND RESULTS THREADS QUERY TARGET_DB; do
         check_defined $v $FUNCNAME
     done
 
@@ -421,7 +437,6 @@ run_diamond() {
         --db $TARGET_DB \
         --out $TBL \
         --outfmt 6 \
-        --evalue $E \
         --threads $THREADS \
         $S_ARGS > /dev/null 2>&1
 }

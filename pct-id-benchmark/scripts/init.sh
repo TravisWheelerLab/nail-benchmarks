@@ -7,6 +7,7 @@ init() {
     local UTIL_DIR="$(realpath $SCRIPT_DIR/../../util)"
     . "$UTIL_DIR/scripts/run.sh"
 
+    set_default THREADS 4
     parse_args "$@"
     set_numa_prefix
     set_tool_vars
