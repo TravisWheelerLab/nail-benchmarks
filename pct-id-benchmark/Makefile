@@ -156,9 +156,11 @@ benchmark: profmark $(PID)
 
 run-%:
 	@echo "benchmarking $*/ with $(THREADS) threads..."
+	$(eval RESULTS := $*/results/)
 	$(eval N := $(if $(NUMA_NODE),--numa_node $(NUMA_NODE),))
-	$(eval ARGS := --threads $(THREADS) --e 1e9 --results $*/results/ $(N) $*)
-	@mkdir -p $*/results/
+	$(eval ARGS := --threads $(THREADS) --results $(RESULTS) $(N) $*)
+	@rm -rf   $(RESULTS)
+	@mkdir -p $(RESULTS)
 	@$(HMMER)   $(ARGS) 
 	@$(NAIL)    $(ARGS) 
 	@$(MMSEQS)  $(ARGS) 

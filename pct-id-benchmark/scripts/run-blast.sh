@@ -18,5 +18,11 @@ $MAKEBLASTDB -in $TARGET -dbtype prot -out $TARGET_DB > /dev/null
 
 ###
 
-run_blastp   "blast.seq" "-evalue ${E}"
-run_psiblast "blast.prf" "-evalue ${E}"
+# NOTE: 
+#   for some reason, blast takes a LOT
+#   longer to run with a higher E-value?
+# run_blastp   "blast.seq" "-evalue ${E}"
+# run_psiblast "blast.prf" "-evalue ${E}"
+
+run_blastp   "blast.seq"
+run_psiblast "blast.prf" 
