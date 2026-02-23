@@ -5,9 +5,11 @@ from plot import Scatter, TOL_CYAN, TOL_MAGENTA
 
 from pathlib import Path
 
+import matplotlib as mpl
 import matplotlib.pyplot as plt
 import matplotlib.cm as cm
 from matplotlib.colors import ListedColormap
+from matplotlib.legend_handler import HandlerBase
 
 
 import numpy as np
@@ -16,6 +18,30 @@ xmin = None
 xmax = None
 ymin = None
 ymax = None
+
+
+class HandlerColormap(HandlerBase):
+    def __init__(self, cmap, norm, n=256):
+        self.cmap = cmap
+        self.norm = norm
+        self.n = n
+        super().__init__()
+
+    def create_artists(self, legend, orig_handle,
+                       x0, y0, w, h, fontsize, trans):
+        artists = []
+        for i in range(self.n):
+            xi = x0 + w * i / self.n
+            wi = w / self.n
+            color = self.cmap(i / self.n)
+            r = mpl.patches.Rectangle(
+                (xi, y0), wi, h,
+                transform=trans,
+                facecolor=color,
+                edgecolor='none'
+            )
+            artists.append(r)
+        return artists
 
 
 def heatmap(true_points, decoy_points, ax, long_points=None):
@@ -37,24 +63,53 @@ def heatmap(true_points, decoy_points, ax, long_points=None):
 
         h[h == 0] = np.nan
 
-        ax.pcolormesh(
-            xedges,
-            yedges,
-            h.T,
-            cmap=cmap,
-            shading='auto'
+        return (
+            ax.pcolormesh(
+                xedges,
+                yedges,
+                h.T,
+                cmap=cmap,
+                shading='auto'
+            ),
+            cmap
         )
 
-    plot(decoy_points, cm.Reds)
-    plot(true_points, cm.Blues)
+    dh, dc = plot(decoy_points, cm.Reds)
+    th, tc = plot(true_points, cm.Blues)
+
+    # set norms (linear example)
+    dh.set_norm(mpl.colors.Normalize(
+        vmin=np.nanmin(dh.get_array()),
+        vmax=np.nanmax(dh.get_array()),
+    ))
+    th.set_norm(mpl.colors.Normalize(
+        vmin=np.nanmin(th.get_array()),
+        vmax=np.nanmax(th.get_array()),
+    ))
+
+    decoy_sm = plt.cm.ScalarMappable(norm=dh.norm, cmap=dc)
+    true_sm = plt.cm.ScalarMappable(norm=th.norm, cmap=tc)
+
+    handles = [decoy_sm, true_sm]
+    labels = ["Decoys", "True positives"]
 
     if long_points:
-        ax.scatter(
+        long = ax.scatter(
             long_points.x, long_points.y,
-            label="Long sequences",
-            color=TOL_CYAN,
-            marker='*',
+            color=TOL_MAGENTA,
+            marker='^',
         )
+        handles.append(long)
+        labels.append("Long sequences")
+
+    ax.legend(
+        handles=handles,
+        labels=labels,
+        handler_map={
+            decoy_sm: HandlerColormap(dc, dh.norm),
+            true_sm: HandlerColormap(tc, th.norm),
+        },
+    )
 
 
 def scatter(true_points, decoy_points, ax):
