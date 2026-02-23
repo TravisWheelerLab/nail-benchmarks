@@ -60,7 +60,11 @@ def main(args):
     ax_bins.set_zorder(1)
     ax_bins.set_ylabel("Sequence pairs (count)")
 
-    ax_bins.bar(bin_cnt.x, bin_cnt.y, color=COLORS[-1], alpha=0.75, label="pair count")
+    ax_bins.bar(
+        bin_cnt.x, bin_cnt.y,
+        color=COLORS[-1],
+        alpha=0.75,
+        label="pair count")
 
     fig.legend()
 

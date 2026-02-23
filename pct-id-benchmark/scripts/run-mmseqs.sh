@@ -29,21 +29,13 @@ ADB=$TMP/alignDB
 ###
 
 ARGS_SENS="-s 7.5"
-ARGS_NAIL="-s 12.0 --max-seqs 2000"
 
 QDB=$QDB_PRF
 run_mmseqs "mmseqs-default.prf"
 run_mmseqs "mmseqs-sens.prf" "$ARGS_SENS"
-run_mmseqs "mmseqs-nail.prf" "$ARGS_NAIL"
 
 QDB=$QDB_SEQ
 run_mmseqs "mmseqs-default.seq"
 run_mmseqs "mmseqs-sens.seq" "$ARGS_SENS"
-run_mmseqs "mmseqs-nail.seq" "$ARGS_NAIL"
 
-# if [ -e $P7_QDB ]; then
-#     QDB=$QDB_P7
-#     run_mmseqs "mmseqs-default-p7.prf"
-#     run_mmseqs "mmseqs-sens-p7.prf" "$ARGS_SENS"
-#     run_mmseqs "mmseqs-nail-p7.prf" "$ARGS_NAIL"
-# fi
+

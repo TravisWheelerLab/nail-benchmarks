@@ -17,11 +17,10 @@ QUERY=$QUERY_FA
 
 # run_diamond "diamond-faster.seq"     "--faster"
 # run_diamond "diamond-fast.seq"       "--fast"
-
-run_diamond "diamond-default.seq"
-
 # run_diamond "diamond-mid-sens.seq"   "--mid-sensitive"
 # run_diamond "diamond-sens.seq"       "--sensitive"
 # run_diamond "diamond-more-sens.seq"  "--more-sensitive"
 # run_diamond "diamond-very-sens.seq"  "--very-sensitive"
+
+run_diamond "diamond-default.seq"
 run_diamond "diamond-ultra-sens.seq" "--ultra-sensitive"
