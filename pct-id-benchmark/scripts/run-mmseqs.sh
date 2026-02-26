@@ -5,7 +5,7 @@ SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 
 ###
 
-set_default E 1e9
+set_default E 1e3
 set_default RESULTS "${BM_DIR}/results/"
 
 TMP=./tmp/mmseqs/
@@ -33,15 +33,20 @@ ADB=$TMP/alignDB
 
 ###
 
-ARGS_DEFAULT="-e ${E}"
-ARGS_SENS="-s 7.5 -e ${E}"
+ARGS_1="-s 5.7  --max-seqs 2000 -e ${E}"
+ARGS_2="-s 7.5  --max-seqs 2000 -e ${E}"
+ARGS_3="-s 10.0 --max-seqs 2000 -e ${E}"
+ARGS_4="-s 12.0 --max-seqs 2000 -e ${E}"
 
 QDB=$QDB_PRF
-run_mmseqs "mmseqs-default.prf" "$ARGS_DEFAULT"
-run_mmseqs "mmseqs-sens.prf" "$ARGS_SENS"
+run_mmseqs "mmseqs-s5.7.prf"  "$ARGS_1"
+run_mmseqs "mmseqs-s7.5.prf"  "$ARGS_2"
+run_mmseqs "mmseqs-s10.0.prf" "$ARGS_3"
+run_mmseqs "mmseqs-s12.0.prf" "$ARGS_4"
 
-QDB=$QDB_SEQ
-run_mmseqs "mmseqs-default.seq" "$ARGS_DEFAULT"
-run_mmseqs "mmseqs-sens.seq" "$ARGS_SENS"
-
+# QDB=$QDB_SEQ
+# run_mmseqs "mmseqs-s5.7.seq"  "$ARGS_1"
+# run_mmseqs "mmseqs-s7.5.seq"  "$ARGS_2"
+# run_mmseqs "mmseqs-s10.0.seq" "$ARGS_3"
+# run_mmseqs "mmseqs-s12.0.seq" "$ARGS_4"
 
