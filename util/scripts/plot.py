@@ -38,6 +38,22 @@ TOOL_COLORS = {
 
 FLOAT_RE = r'\s*(-?\d+(?:\.\d+)?)\s*'
 
+PREFIXES = {
+    "blast.prf" : ("psiblast", "default"),
+    "blast.seq" : ("blastp", "default"),
+    "hmmer.seq" : ("phmmer", "default"),
+    "hmmer.prf" : ("hmmsearch", "default"),
+    "nail-ms2000.prf" : ("nail", "--mmseqs-max-seqs 2000"),
+    "mmseqs-s5.7.prf" : ("mmseqs (prf)", "-s 5.7 (default)"),
+    "mmseqs-s7.5.prf" : ("mmseqs (prf)", "-s 7.5 (sensitive)"),
+    "mmseqs-s10.0.prf" : ("mmseqs (prf)", "-s 10.0"),
+    "mmseqs-s12.0.prf" : ("mmseqs (prf)", "-s 12.0"),
+    "mmseqs-s5.7.seq" : ("mmseqs (seq)", "-s 5.7 (default)"),
+    "mmseqs-s7.5.seq" : ("mmseqs (seq)", "-s 7.5 (sensitive)"),
+    "mmseqs-s10.0.seq" : ("mmseqs (seq)", "-s 10.0"),
+    "mmseqs-s12.0.seq" : ("mmseqs (seq)", "-s 12.0"),
+}
+
 
 def axes():
     scale = 1.75
@@ -156,16 +172,16 @@ class Point:
     extra: [str]
 
     def __init__(self, line: str):
-        self.prefix, search_type, point = line.split(",", 2)
+        self.prefix, point = line.split(",", 1)
 
         x, y = map(float, re.match(r'\(\s*([-+]?\d*\.?\d+)\s*,\s*([-+]?\d*\.?\d+)\s*\)', point).groups())
         self.x = float(x)
         self.y = float(y)
 
-        prefix_tokens = self.prefix.split('-')
+        prefix_tokens = self.prefix.split(".")[0].split('-')
 
         self.params = {}
-        self.extra = [search_type]
+        self.extra = []
         self.tool = prefix_tokens[0]
 
         for tok in prefix_tokens[1:]:

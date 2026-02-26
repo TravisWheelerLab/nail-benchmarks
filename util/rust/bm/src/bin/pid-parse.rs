@@ -194,8 +194,11 @@ fn cells(args: CellsArgs) -> anyhow::Result<()> {
 }
 
 fn recall(args: RecallArgs) -> anyhow::Result<()> {
+    let start = std::time::Instant::now();
+
     let benchmark = Benchmark::new(args.benchmark_tbl).context("failed to open benchmark.tbl")?;
-    let data = PlotData::new(args.results_dir, &benchmark).context("failed to get data")?;
+
+    let data = RecallData::new(args.results_dir, &benchmark).context("failed to get data")?;
 
     let figures = args.out_dir;
     std::fs::create_dir_all(&figures)?;
@@ -208,6 +211,7 @@ fn recall(args: RecallArgs) -> anyhow::Result<()> {
     data.write_pid(&mut pid_path)?;
     data.write_runtime(&mut runtime_path)?;
 
+    println!("recall data took: {:?}", start.elapsed());
     Ok(())
 }
 
@@ -467,14 +471,14 @@ impl HitTable2 {
     }
 }
 
-struct PlotData {
+struct RecallData {
     tables: Vec<HitTable2>,
     times: Vec<f32>,
     bin_sizes: Vec<usize>,
     positive_cnt: usize,
 }
 
-impl PlotData {
+impl RecallData {
     fn new<P: AsRef<Path>>(results_dir: P, bm: &Benchmark) -> anyhow::Result<Self> {
         let results_dir = PathBuf::from(results_dir.as_ref());
         let mut times = vec![];
@@ -517,7 +521,7 @@ impl PlotData {
                 _ => panic!("unknown search type"),
             };
 
-            let name = format!("{prefix},{search_type}");
+            let name = format!("{prefix}.{search_type}");
 
             let tbl = match prefix {
                 s if s.starts_with("hmmer") => HitTable::parse::<_, HmmerTable>(file, &name),

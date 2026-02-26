@@ -1,35 +1,29 @@
+MAKEFILE_DIR := $(dir $(abspath $(lastword $(MAKEFILE_LIST))))
+include $(MAKEFILE_DIR)../vars.mk
+
+# configurable args
 THREADS   ?= 8
 NUMA_NODE ?=
+FIGURES   ?= figures/
+
 # profmark args
 SEED          ?= 67779
 TRAIN_TEST_ID ?= 0.30
 MIN_TEST      ?= 10
 MAX_TEST      ?= 30
 
-MAKEFILE_DIR := $(dir $(abspath $(lastword $(MAKEFILE_LIST))))
-TOOLS    := $(realpath $(MAKEFILE_DIR)../tools)
-UTIL     := $(realpath $(MAKEFILE_DIR)../util)
-DATA     := $(realpath $(MAKEFILE_DIR)../data)
+#############
+# BIN SETUP #
+#############
+
+CREATE := $(PID)
+PARSE  := $(PID_PARSE)
+
+#############
+
 SCRIPTS  := $(MAKEFILE_DIR)/scripts
 
-# hmmer util
-PROFMARK   := $(TOOLS)/bin/create-profmark
-HMMBUILD   := $(TOOLS)/bin/hmmbuild
-HMMEMIT    := $(TOOLS)/bin/hmmemit
-HMMBALANCE := $(UTIL)/scripts/hmmbalance
-
-# rust util
-RUST     := $(UTIL)/rust
-RUST_BIN := $(RUST)/target/release
-
-# benchmark creation
-PID       := $(RUST_BIN)/pid
-PID_SRC   := $(RUST)/bm/src/bin/pid.rs
-
 # plotting
-PARSE     := $(RUST_BIN)/pid-parse
-PARSE_SRC := $(RUST)/bm/src/bin/pid-parse.rs
-
 PLOT_PID    := $(SCRIPTS)/plot_pid.py
 PLOT_ROC    := $(SCRIPTS)/plot_roc.py
 PLOT_TIME   := $(SCRIPTS)/plot_time.py
@@ -37,7 +31,6 @@ PLOT_CELLS  := $(SCRIPTS)/plot_cell_frac.py
 PLOT_SCORE  := $(SCRIPTS)/plot_score.py
 PLOT_PARAMS := $(SCRIPTS)/plot_params.py
 
-FIGURES ?= figures/
 FIGURE_DATA :=$(FIGURES)/00data/
 
 OUT_PID    := $(FIGURES)/pid.pdf
@@ -72,17 +65,6 @@ PM_OUT     := $(QUERY_STO) $(TARGET_STO)
 ##########################################
 ##########################################
 ##########################################
- 
-CHECK_PATHS := $(MAKEFILE_DIR) $(TOOLS) $(DATA) $(SRC_FA) $(SRC_STO) $(SPLIT_SRC) $(PID_SRC) $(PARSE_SRC)
-.PHONY: $(CHECK_PATHS)
-$(CHECK_PATHS):
-	@if [ -e "$@" ]; then \
-		echo "\"$@\" OK"; \
-	else \
-		exit 1; \
-	fi
-
-check: $(CHECK_PATHS)
 
 $(PM_OUT):
 	@echo running profmark...
@@ -102,53 +84,37 @@ $(PM_OUT):
 		
 profmark: $(PM_OUT)
 
-pmark:
-	@echo running profmark...
-	@mkdir -p $(PM_DIR)
-	$(PROFMARK) \
-		-S $(SEED) \
-		-N $(N_DECOYS) \
-		-1 $(TRAIN_TEST_ID) \
-		--cluster \
-		--onlysplit \
-		--mintest $(MIN_TEST) \
-		--maxtest $(MAX_TEST) \
-		$(PM_NAME) $(SRC_STO)
-	
-$(PID): $(PID_SRC)
-	@cd $(RUST) && cargo build --release --bin pid
-
-small: profmark $(PID)
+small: profmark $(CREATE)
 	@echo building benchmark...
 	@mkdir -p benchmark-sm/
-	@$(PID) benchmark-sm/ $(QUERY_STO) $(TARGET_STO) $(SRC_STO) $(SRC_FA) 100
+	@$(CREATE) benchmark-sm/ $(QUERY_STO) $(TARGET_STO) $(SRC_STO) $(SRC_FA) 100
 	@echo building query.hmm...
 	@$(HMMBUILD) --cpu $(THREADS) benchmark-sm/query.hmm benchmark-sm/query.sto > /dev/null
 	@$(HMMEMIT) -c benchmark-sm/query.hmm > benchmark-sm/query.cons.fa
 	@echo done
 
-medium: profmark $(PID)
+medium: profmark $(CREATE)
 	@echo building benchmark...
 	@mkdir -p benchmark-med/
-	@$(PID) benchmark-med/ $(QUERY_STO) $(TARGET_STO) $(SRC_STO) $(SRC_FA) 500
+	@$(CREATE) benchmark-med/ $(QUERY_STO) $(TARGET_STO) $(SRC_STO) $(SRC_FA) 500
 	@echo building query.hmm...
 	@$(HMMBUILD) --cpu $(THREADS) benchmark-med/query.hmm benchmark-med/query.sto > /dev/null
 	@$(HMMEMIT) -c benchmark-med/query.hmm > benchmark-med/query.cons.fa
 	@echo done
 
-large: profmark $(PID)
+large: profmark $(CREATE)
 	@echo building benchmark...
 	@mkdir -p benchmark-lg/
-	@$(PID) benchmark-lg/ $(QUERY_STO) $(TARGET_STO) $(SRC_STO) $(SRC_FA) 1000
+	@$(CREATE) benchmark-lg/ $(QUERY_STO) $(TARGET_STO) $(SRC_STO) $(SRC_FA) 1000
 	@echo building query.hmm...
 	@$(HMMBUILD) --cpu $(THREADS) benchmark-lg/query.hmm benchmark-lg/query.sto > /dev/null
 	@$(HMMEMIT) -c benchmark-lg/query.hmm > benchmark-lg/query.cons.fa
 	@echo done
 
-benchmark: profmark $(PID)
+benchmark: profmark $(CREATE)
 	@echo building benchmark...
 	@mkdir -p benchmark/
-	@$(PID) benchmark/ $(QUERY_STO) $(TARGET_STO) $(SRC_STO) $(SRC_FA)
+	@$(CREATE) benchmark/ $(QUERY_STO) $(TARGET_STO) $(SRC_STO) $(SRC_FA)
 	@echo building query.hmm...
 	@$(HMMBUILD) --cpu $(THREADS) benchmark/query.hmm benchmark/query.sto > /dev/null
 	@$(HMMEMIT) -c benchmark/query.hmm > benchmark/query.cons.fa
@@ -172,9 +138,6 @@ run-sparse-%:
 	$(eval ARGS := --threads $(THREADS) --e 1e9 --results $*/results-sparse/ $(N) $*)
 	@mkdir -p $*/results-sparse/
 	@$(SCRIPTS)/run-sparse.sh $(ARGS) 
-
-$(PARSE): $(PARSE_SRC)
-	@cd $(RUST) && cargo build --release --bin pid-parse
 
 plot-recall-%: $(PARSE)
 	@$(PARSE) recall $*/benchmark.tbl $*/results/ $(FIGURE_DATA)

@@ -1,9 +1,8 @@
 #!/usr/bin/env python3
 import argparse
+from pathlib import Path
 
 from plot import axes, Scatter, TOL_CYAN, TOL_RED, TOL_ORANGE
-
-from pathlib import Path
 
 import matplotlib.pyplot as plt
 import matplotlib.cm as cm
