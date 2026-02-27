@@ -22,13 +22,6 @@ $(BINS): %: $(RUST_BIN)/% $(BIOIO_SRC)
 $(RUST_BIN)/%: $(RUST)/bm/src/bin/%.rs
 	@cd $(RUST) && cargo build --release --bin $*
 
-RUN_BINS := $(addprefix bin-,$(BINS))
-
-.PHONY: $(RUN_BINS)
-
-$(RUN_BINS):
-	@$(RUST_BIN)/$(@:bin-%=%)
-
 FASTA_BALANCE := $(UTIL)/scripts/fastabalance.py
 FASTA_BIN     := $(UTIL)/scripts/fastabin.py
 FASTA_SAMPLE  := $(UTIL)/scripts/fastasample.py

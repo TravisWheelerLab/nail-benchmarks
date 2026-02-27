@@ -14,6 +14,12 @@ pub struct FastaRecord {
     pub seq: String,
 }
 
+impl FastaRecord {
+    pub fn reverse(&mut self) {
+        self.seq = self.seq.chars().rev().collect::<String>();
+    }
+}
+
 impl Display for FastaRecord {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         writeln!(f, ">{} {}", self.name, self.extra)?;
@@ -141,6 +147,29 @@ where
             reader,
             blocks,
             size: total_record_cnt,
+        })
+    }
+
+    pub fn get_record(&mut self, index: usize) -> anyhow::Result<FastaRecord> {
+        let s = self.get(index)?;
+        let lines: Vec<&str> = s.lines().collect();
+
+        let header = lines[0];
+        let seq = lines
+            .iter()
+            .skip(1)
+            .copied()
+            .collect::<Vec<&str>>()
+            .join("");
+
+        let (name, extra) = header
+            .split_once(char::is_whitespace)
+            .unwrap_or((header, ""));
+
+        Ok(FastaRecord {
+            name: name[1..].to_string(),
+            extra: extra.to_string(),
+            seq,
         })
     }
 
