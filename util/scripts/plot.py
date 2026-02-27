@@ -43,7 +43,10 @@ PREFIXES = {
     "blast.seq" : ("blastp", "default"),
     "hmmer.seq" : ("phmmer", "default"),
     "hmmer.prf" : ("hmmsearch", "default"),
-    "nail-ms2000.prf" : ("nail", "--mmseqs-max-seqs 2000"),
+    "nail-s5.7-ms2000.prf" : ("nail (prf)", "-s 5.7"),
+    "nail-s7.5-ms2000.prf" : ("nail (prf)", "-s 7.5"),
+    "nail-s10.0-ms2000.prf" : ("nail (prf)", "-s 10.0 (default)"),
+    "nail-s12.0-ms2000.prf" : ("nail (prf)", "-s 12.0"),
     "mmseqs-s5.7.prf" : ("mmseqs (prf)", "-s 5.7 (default)"),
     "mmseqs-s7.5.prf" : ("mmseqs (prf)", "-s 7.5 (sensitive)"),
     "mmseqs-s10.0.prf" : ("mmseqs (prf)", "-s 10.0"),
@@ -136,15 +139,12 @@ class Curve:
     extra: [str]
 
     def __init__(self, line):
-        info, _ = line.split(",(", 1)
+        self.prefix, points = line.split(",", 1)
 
-        info_tokens = info.split(',')
-        self.prefix = info_tokens[0]
+        prefix_tokens = self.prefix.split(".")[0].split('-')
 
         self.params = {}
-        self.extra = info_tokens[1:]
-
-        prefix_tokens = self.prefix.split('-')
+        self.extra = []
         self.tool = prefix_tokens[0]
 
         for tok in prefix_tokens[1:]:
@@ -157,7 +157,7 @@ class Curve:
 
         points = [
             (float(a), float(b)) for a, b in re.findall(
-                r'\(\s*(-?\d+(?:\.\d+)?)\s*,\s*(-?\d+(?:\.\d+)?)\s*\)', line
+                r'\(\s*(-?\d+(?:\.\d+)?)\s*,\s*(-?\d+(?:\.\d+)?)\s*\)', points
             )]
 
         self.x, self.y = map(list, zip(*points))

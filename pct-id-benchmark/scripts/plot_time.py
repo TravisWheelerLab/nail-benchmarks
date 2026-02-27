@@ -21,8 +21,11 @@ MMSEQS_PRF = [
     "mmseqs-s12.0.prf",
 ]
 
-NAIL = [
-    "nail-ms2000.prf",
+NAIL_PRF = [
+    # "nail-s5.7-ms2000.prf",
+    "nail-s7.5-ms2000.prf",
+    "nail-s10.0-ms2000.prf",
+    "nail-s12.0-ms2000.prf",
 ]
 
 OTHER = [
@@ -34,10 +37,80 @@ OTHER = [
 
 PLOTTED = [
     *OTHER,
-    *NAIL,
+    *NAIL_PRF,
     *MMSEQS_SEQ,
     *MMSEQS_PRF,
 ]
+
+ax = None
+
+
+def nail_plot(pts, label):
+    global ax
+
+    color = TOOL_COLORS['nail']
+    x = [p.x for p in pts]
+    y = [p.y for p in pts]
+
+    ax.plot(
+        x, y,
+        color=color,
+        linestyle='--'
+    )
+
+    plt.text(
+        pts[-1].x, pts[-1].y - 0.01,
+        label,
+        color=color,
+        fontweight="bold",
+        ha="center",
+        va="top",
+    )
+
+    for p in pts:
+        (_, args) = PREFIXES[p.prefix]
+        plt.text(
+            p.x, p.y + 0.005,
+            f"{args}",
+            color=color,
+            fontsize=10,
+            ha="right",
+            va="bottom",
+        )
+
+
+def mmseqs_plot(pts, label):
+    global ax
+    x = [p.x for p in pts]
+    y = [p.y for p in pts]
+
+    color = TOOL_COLORS['mmseqs']
+
+    ax.plot(
+        x, y,
+        color=color,
+        linestyle='--'
+    )
+
+    plt.text(
+        pts[-1].x, pts[-1].y - 0.01,
+        label,
+        color=color,
+        fontweight="bold",
+        ha="center",
+        va="top",
+    )
+
+    for p in pts:
+        (_, args) = PREFIXES[p.prefix]
+        plt.text(
+            p.x, p.y + 0.005,
+            f"{args}",
+            color=color,
+            fontsize=10,
+            ha="right",
+            va="bottom",
+        )
 
 
 def plot(args):
@@ -54,11 +127,13 @@ def plot(args):
 
     points.sort(key=lambda c: c.x, reverse=True)
 
+    nail_prf = list(filter(lambda p: p.prefix in NAIL_PRF, points))
     mmseqs_seq = list(filter(lambda p: p.prefix in MMSEQS_SEQ, points))
     mmseqs_prf = list(filter(lambda p: p.prefix in MMSEQS_PRF, points))
 
     ###
 
+    global ax
     fig, ax = axes()
     plt.title("Recall by runtime")
 
@@ -91,45 +166,12 @@ def plot(args):
                 label,
                 color=color,
                 fontweight="bold",
-                ha="left",
+                ha="center",
                 va="top",
             )
     ###
 
-    ##########################################
-
-    def mmseqs_plot(pts, label):
-        x = [p.x for p in pts]
-        y = [p.y for p in pts]
-
-        ax.plot(
-            x, y,
-            color=TOOL_COLORS['mmseqs'],
-            linestyle='--'
-        )
-
-        plt.text(
-            pts[-1].x, pts[-1].y - 0.01,
-            label,
-            color=TOOL_COLORS['mmseqs'],
-            fontweight="bold",
-            ha="center",
-            va="top",
-        )
-
-        for p in pts:
-            (_, args) = PREFIXES[p.prefix]
-            plt.text(
-                p.x, p.y + 0.01,
-                f"{args}",
-                color=TOOL_COLORS['mmseqs'],
-                fontsize=10,
-                ha="right",
-                va="bottom",
-            )
-
-    ##########################################
-
+    nail_plot(nail_prf, "nail (prf)")
     mmseqs_plot(mmseqs_seq, "mmseqs (seq)")
     mmseqs_plot(mmseqs_prf, "mmseqs (prf)")
 

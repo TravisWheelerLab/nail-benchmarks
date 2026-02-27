@@ -11,7 +11,7 @@ BIOIO_SRC := $(wildcard $(RUST)/bioio/src/*.rs)
 # find all the <bin>.rs files
 BINS := $(patsubst %.rs,%,$(notdir $(wildcard $(RUST)/bm/src/bin/*.rs)))
 
-# create make vars for each binary
+# create uppercase make vars for each binary
 $(foreach b,$(BINS),$(eval $(shell echo $(b) | tr a-z- A-Z_) := $(RUST_BIN)/$(b)))
 
 # create a target for every binary
@@ -22,6 +22,12 @@ $(BINS): %: $(RUST_BIN)/% $(BIOIO_SRC)
 $(RUST_BIN)/%: $(RUST)/bm/src/bin/%.rs
 	@cd $(RUST) && cargo build --release --bin $*
 
+RUN_BINS := $(addprefix bin-,$(BINS))
+
+.PHONY: $(RUN_BINS)
+
+$(RUN_BINS):
+	@$(RUST_BIN)/$(@:bin-%=%)
 
 FASTA_BALANCE := $(UTIL)/scripts/fastabalance.py
 FASTA_BIN     := $(UTIL)/scripts/fastabin.py

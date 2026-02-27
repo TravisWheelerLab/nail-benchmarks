@@ -2,10 +2,46 @@
 import argparse
 from pathlib import Path
 
-from plot import axes, Curve, COLORS, TOOL_COLORS
+from plot import axes, Curve, COLORS, TOOL_COLORS, PREFIXES
 
 import matplotlib.pyplot as plt
 import numpy as np
+
+
+MMSEQS_SEQ = [
+    # "mmseqs-s5.7.seq",
+    # "mmseqs-s7.5.seq",
+    # "mmseqs-s10.0.seq",
+    "mmseqs-s12.0.seq",
+]
+
+MMSEQS_PRF = [
+    # "mmseqs-s5.7.prf",
+    # "mmseqs-s7.5.prf",
+    # "mmseqs-s10.0.prf",
+    "mmseqs-s12.0.prf",
+]
+
+NAIL_PRF = [
+    # "nail-s5.7-ms2000.prf",
+    # "nail-s7.5-ms2000.prf",
+    # "nail-s10.0-ms2000.prf",
+    "nail-s12.0-ms2000.prf",
+]
+
+OTHER = [
+    "blast.prf",
+    "blast.seq",
+    "hmmer.prf",
+    "hmmer.seq",
+]
+
+PLOTTED = [
+    *OTHER,
+    *NAIL_PRF,
+    *MMSEQS_SEQ,
+    *MMSEQS_PRF,
+]
 
 
 def main(args):
@@ -19,8 +55,9 @@ def main(args):
 
         for line in lines[2:]:
             curve = Curve(line)
-            curve.auc = np.trapezoid(curve.y, curve.x)
-            curves.append(curve)
+            if curve.prefix in PLOTTED:
+                curve.auc = np.trapezoid(curve.y, curve.x)
+                curves.append(curve)
 
     curves.sort(key=lambda c: c.auc, reverse=True)
 
@@ -46,6 +83,9 @@ def main(args):
         elif "prf" in curve.extra:
             mfc = 'white'
             label = f"{curve.prefix} prf"
+        else:
+            mfc = 'white'
+            label = f"{curve.prefix} prf"
 
         ax.plot(
             curve.x, curve.y,
@@ -56,17 +96,17 @@ def main(args):
             label=label
         )
 
-    ax_bins = ax.twinx()
-    ax_bins.set_zorder(1)
-    ax_bins.set_ylabel("Sequence pairs (count)")
+    # ax_bins = ax.twinx()
+    # ax_bins.set_zorder(1)
+    # ax_bins.set_ylabel("Sequence pairs (count)")
 
-    ax_bins.bar(
-        bin_cnt.x, bin_cnt.y,
-        color=COLORS[-1],
-        alpha=0.75,
-        label="pair count")
+    # ax_bins.bar(
+    #     bin_cnt.x, bin_cnt.y,
+    #     color=COLORS[-1],
+    #     alpha=0.75,
+    #     label="pair count")
 
-    fig.legend()
+    # fig.legend()
 
     plt.savefig(args.out)
 
