@@ -1,4 +1,5 @@
 use std::{
+    collections::HashMap,
     fmt::Display,
     fs::File,
     io::{BufRead, BufReader, Read},
@@ -327,5 +328,12 @@ impl HitTable {
             name: name.to_string(),
             hits,
         })
+    }
+
+    pub fn to_map(self) -> HashMap<(String, String), Hit> {
+        self.hits
+            .into_iter()
+            .map(|h| ((h.query.clone(), h.target.clone()), h))
+            .collect()
     }
 }

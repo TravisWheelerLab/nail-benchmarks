@@ -70,7 +70,6 @@ set_numa_prefix() {
             nodes=($(numactl --hardware | awk -v n="${NUMA_NODE}" '$1=="node" && $2==n && $3=="cpus:" {for(i=4;i<=NF;i++) print $i}'))
             printf -v list "%s," "${nodes[@]:0:$THREADS}"
             list=${list%,}
-            # NUMA_PREFIX="numactl --cpunodebind=$NUMA_NODE --membind=$NUMA_NODE "
             NUMA_PREFIX="numactl --physcpubind=${list} --membind=$NUMA_NODE "
         else
             echo "error: numa node $NUMA_NODE invalid"

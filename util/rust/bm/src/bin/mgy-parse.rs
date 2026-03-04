@@ -24,6 +24,10 @@ fn float_cmp<F: Float>(a: &F, b: &F) -> std::cmp::Ordering {
     a.partial_cmp(b).expect("NaN encountered in float cmp")
 }
 
+fn hit_cmp(a: &bioio::tbl::Hit, b: &bioio::tbl::Hit) -> std::cmp::Ordering {
+    float_cmp(&a.e_value, &b.e_value)
+}
+
 fn set_threads(num_threads: usize) -> anyhow::Result<()> {
     ThreadPoolBuilder::new()
         .num_threads(num_threads)
@@ -103,7 +107,7 @@ fn hmms(hmm_path: impl AsRef<Path>) -> anyhow::Result<HashMap<String, HmmGumbel>
         .into_iter()
         .enumerate()
         .map(|(i, n)| {
-            let ga_sc = gathering_thresholds[1].0;
+            let ga_sc = gathering_thresholds[i].0;
             let tau = gumbels[i].0;
             let lambda = gumbels[i].1;
             let ga_p = (-lambda * (ga_sc - tau)).exp();
@@ -165,7 +169,7 @@ const HEADER: [&str; 3] = [
     "| GA |    GA     |  nail  |    nail   |  nail  |   nail    | mmseqs |  mmseqs   | hmmer |  hmmer    | dom | dom | sig |",
     "| sc |  P-value  | cld sc |cld P-value|   sc   |  P-value  |   sc   |  P-value  |  sc   |  P-value  | sum | max | dom | dom scores",
     " ---- ----------- -------- ----------- -------- ----------- -------- ----------- ------- ----------- ----- ----- ----- ------------",
-    ];
+];
 
 fn write_header(out: &mut impl Write, recs: &[Record]) -> anyhow::Result<()> {
     let q_max = recs.iter().map(|r| r.query.len()).max().unwrap();
@@ -243,6 +247,7 @@ fn write_records(out: &mut impl Write, recs: &[Record], w: &[usize]) -> anyhow::
 #[derive(Subcommand)]
 enum SubCommands {
     Standard(StandardArgs),
+    Rev(RevArgs),
     Params(ParamsArgs),
 }
 
@@ -303,11 +308,317 @@ struct ParamsArgs {
     out_path: PathBuf,
 }
 
+#[derive(Parser)]
+struct RevArgs {
+    #[arg(value_name = "nail.tbl")]
+    nail_dir: PathBuf,
+
+    #[arg(value_name = "mmseqs.tbl")]
+    mmseqs_dir: PathBuf,
+
+    #[arg(value_name = "query.hmm")]
+    query_path: PathBuf,
+
+    #[arg(value_name = "out/")]
+    out_dir: PathBuf,
+
+    #[arg(short = 't', default_value_t = 4usize, value_name = "N")]
+    num_threads: usize,
+}
+
 fn main() -> anyhow::Result<()> {
     match Cli::parse().command {
         SubCommands::Standard(args) => standard(args),
         SubCommands::Params(args) => params(args),
+        SubCommands::Rev(args) => rev(args),
     }
+}
+
+fn rev(args: RevArgs) -> anyhow::Result<()> {
+    let start = std::time::Instant::now();
+
+    let figures = args.out_dir;
+    std::fs::create_dir_all(&figures)?;
+
+    set_threads(args.num_threads)?;
+
+    // ---
+
+    let hmms =
+        hmms(&args.query_path).with_context(|| format!("failed to open: {:?}", args.query_path))?;
+
+    let mut queries = hmms.keys().collect::<Vec<_>>();
+    queries.sort();
+
+    // ---
+
+    let mut pieces = glob(
+        args.nail_dir
+            .join("*.tbl")
+            .to_str()
+            .context("invalid *.tbl glob")?,
+    )?
+    .filter_map(Result::ok)
+    .filter_map(|p| {
+        p.file_name()
+            .and_then(|n| n.to_str())
+            .and_then(|s| s.split('.').nth(1))
+            .and_then(|i| i.parse::<usize>().ok())
+    })
+    .collect::<Vec<_>>();
+
+    pieces.sort();
+    pieces.dedup();
+
+    // ---
+
+    type DecoyMap = HashMap<String, Vec<bioio::tbl::Hit>>;
+
+    struct RevTables {
+        nail: bioio::tbl::HitTable,
+        nail_rev: bioio::tbl::HitTable,
+        mmseqs: bioio::tbl::HitTable,
+        mmseqs_rev: bioio::tbl::HitTable,
+    }
+
+    impl RevTables {
+        fn new(nail_dir: impl AsRef<Path>, mmseqs_dir: impl AsRef<Path>, idx: usize) -> Self {
+            let nail_dir = nail_dir.as_ref();
+            let mmseqs_dir = mmseqs_dir.as_ref();
+
+            let path = nail_dir.join(format!("nail.{idx}.prf.tbl"));
+            let nail = HitTable::from_path::<_, NailTable>(&path).expect("failed to open {path:?}");
+
+            let path = nail_dir.join(format!("nail.{idx}.rev.prf.tbl"));
+            let nail_rev =
+                HitTable::from_path::<_, NailTable>(&path).expect("failed to open {path:?}");
+
+            let path = mmseqs_dir.join(format!("mmseqs.{idx}.prf.tbl"));
+            let mmseqs =
+                HitTable::from_path::<_, BlastTable>(&path).expect("failed to open {path:?}");
+
+            let path = mmseqs_dir.join(format!("mmseqs.{idx}.rev.prf.tbl"));
+            let mmseqs_rev =
+                HitTable::from_path::<_, BlastTable>(&path).expect("failed to open {path:?}");
+
+            Self {
+                nail,
+                nail_rev,
+                mmseqs,
+                mmseqs_rev,
+            }
+        }
+    }
+
+    // type ScoreMap = HashMap<String, f64>;
+    // #[derive(Default)]
+    // struct DecoyScoreDistData {
+    //     nail_min: ScoreMap,
+    //     nail_max: ScoreMap,
+    //     mmseqs_min: ScoreMap,
+    //     mmseqs_max: ScoreMap,
+    // }
+
+    // impl DecoyScoreDistData {
+    //     fn update(&mut self, tables: RevTables) {
+    //         let mut nail_map = tables.nail.to_map();
+    //         let mut nail_rev_map = tables.nail_rev.to_map();
+    //         let mut mmseqs_map = tables.mmseqs.to_map();
+    //         let mut mmseqs_rev_map = tables.mmseqs_rev.to_map();
+
+    //         nail_map.values().for_each(|h| {
+    //             self.nail_min
+    //                 .entry(h.query.clone())
+    //                 .and_modify(|s| *s = s.min(h.score))
+    //                 .or_insert(h.score);
+
+    //             self.nail_max
+    //                 .entry(h.query.clone())
+    //                 .and_modify(|s| *s = s.max(h.score))
+    //                 .or_insert(h.score);
+    //         });
+
+    //         mmseqs_map.values().for_each(|h| {
+    //             self.mmseqs_min
+    //                 .entry(h.query.clone())
+    //                 .and_modify(|s| *s = s.min(h.score))
+    //                 .or_insert(h.score);
+
+    //             self.mmseqs_max
+    //                 .entry(h.query.clone())
+    //                 .and_modify(|s| *s = s.max(h.score))
+    //                 .or_insert(h.score);
+    //         });
+    //     }
+
+    //     fn merge(&mut self, other: Self) {
+    //         for (k, v) in other.nail_min {
+    //             self.nail_min
+    //                 .entry(k)
+    //                 .and_modify(|min| *min = min.min(v))
+    //                 .or_insert(v);
+    //         }
+
+    //         for (k, v) in other.nail_max {
+    //             self.nail_max
+    //                 .entry(k)
+    //                 .and_modify(|max| *max = max.max(v))
+    //                 .or_insert(v);
+    //         }
+
+    //         for (k, v) in other.mmseqs_min {
+    //             self.mmseqs_min
+    //                 .entry(k)
+    //                 .and_modify(|min| *min = min.min(v))
+    //                 .or_insert(v);
+    //         }
+
+    //         for (k, v) in other.mmseqs_max {
+    //             self.mmseqs_max
+    //                 .entry(k)
+    //                 .and_modify(|max| *max = max.max(v))
+    //                 .or_insert(v);
+    //         }
+    //     }
+    // }
+
+    #[derive(Default)]
+    struct DecoyCutoffData {
+        nail_decoys: DecoyMap,
+        mmseqs_decoys: DecoyMap,
+    }
+
+    impl DecoyCutoffData {
+        fn update(&mut self, mut tables: RevTables) {
+            // ---
+            // filter the real hits by E-value
+
+            tables.nail.hits.retain(|h| h.e_value <= E);
+            tables.mmseqs.hits.retain(|h| h.e_value <= E);
+
+            // ---
+            // convert to (query, target)-keyed maps for easier comparison
+
+            let nail_map = tables.nail.to_map();
+            let mut nail_rev_map = tables.nail_rev.to_map();
+            let mmseqs_map = tables.mmseqs.to_map();
+            let mut mmseqs_rev_map = tables.mmseqs_rev.to_map();
+
+            // ---
+            // retain only reverse hits for pairs that don't
+            // remain in the real hits after filtering
+
+            nail_rev_map.retain(|k, _| !nail_map.contains_key(k));
+            mmseqs_rev_map.retain(|k, _| !mmseqs_map.contains_key(k));
+
+            // ---
+
+            nail_rev_map
+                .into_values()
+                .for_each(|h| self.nail_decoys.entry(h.query.clone()).or_default().push(h));
+
+            mmseqs_rev_map.into_values().for_each(|h| {
+                self.mmseqs_decoys
+                    .entry(h.query.clone())
+                    .or_default()
+                    .push(h)
+            });
+        }
+
+        fn merge(&mut self, other: Self) {
+            for (k, mut v) in other.nail_decoys {
+                self.nail_decoys.entry(k).or_default().append(&mut v);
+            }
+
+            for (k, mut v) in other.mmseqs_decoys {
+                self.mmseqs_decoys.entry(k).or_default().append(&mut v);
+            }
+        }
+    }
+
+    const E: f64 = 1e-3;
+    let mut data = pieces
+        .par_iter()
+        .fold(DecoyCutoffData::default, |mut data, &idx| {
+            let tables = RevTables::new(&args.nail_dir, &args.mmseqs_dir, idx);
+            data.update(tables);
+            data
+        })
+        .reduce(DecoyCutoffData::default, |mut d1, d2| {
+            d1.merge(d2);
+            d1
+        });
+
+    // ---
+
+    queries.iter().for_each(|q| {
+        data.nail_decoys.entry(q.to_string()).or_default();
+        data.mmseqs_decoys.entry(q.to_string()).or_default();
+    });
+
+    data.nail_decoys
+        .values_mut()
+        .for_each(|v| v.sort_by(hit_cmp));
+    data.mmseqs_decoys
+        .values_mut()
+        .for_each(|v| v.sort_by(hit_cmp));
+
+    // ---
+
+    let mut out_cutoffs = BufWriter::new(File::create(figures.join("cutoffs.txt"))?);
+
+    let mut out_dist = BufWriter::new(File::create(figures.join("dist.txt"))?);
+    let mut out_ga = BufWriter::new(File::create(figures.join("ga.txt"))?);
+    let mut out_cnt = BufWriter::new(File::create(figures.join("count.txt"))?);
+
+    const N_CUTOFF: usize = 5;
+    for (q, nail_hits) in data.nail_decoys.iter() {
+        let hmm = hmms.get(q).unwrap();
+        let mmseqs_hits = data.mmseqs_decoys.get(q).unwrap();
+
+        let nail_scores = nail_hits
+            .iter()
+            .map(|t| t.score)
+            .chain(std::iter::repeat(0.0))
+            .take(N_CUTOFF)
+            .collect::<Vec<_>>();
+
+        let mmseqs_scores = mmseqs_hits
+            .iter()
+            .map(|t| t.score)
+            .chain(std::iter::repeat(0.0))
+            .take(N_CUTOFF)
+            .collect::<Vec<_>>();
+
+        writeln!(
+            out_cutoffs,
+            "{q},(nail,{}),(mmseqs,{})",
+            nail_scores
+                .iter()
+                .map(|s| format!("{s:.1}"))
+                .collect::<Vec<_>>()
+                .join(","),
+            mmseqs_scores
+                .iter()
+                .map(|s| format!("{s:.1}"))
+                .collect::<Vec<_>>()
+                .join(","),
+        )?;
+
+        // ---
+
+        writeln!(out_dist, "{q},({},{})", nail_hits.len(), mmseqs_hits.len())?;
+
+        writeln!(out_ga, "{:.1},{:.1}", nail_scores[0], hmm.ga_sc)?;
+
+        let diff = hmm.ga_sc - nail_scores[0];
+        writeln!(out_cnt, "{},{diff:.1}", nail_hits.len())?;
+    }
+
+    // ---
+
+    println!("took {:?}", start.elapsed());
+    Ok(())
 }
 
 fn params(args: ParamsArgs) -> anyhow::Result<()> {
