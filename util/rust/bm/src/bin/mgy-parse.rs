@@ -67,7 +67,7 @@ fn target_db_size(target_path: impl AsRef<Path>) -> anyhow::Result<f64> {
     Ok(z)
 }
 
-fn hmms(hmm_path: impl AsRef<Path>) -> anyhow::Result<HashMap<String, HmmGumbel>> {
+fn parse_hmms(hmm_path: impl AsRef<Path>) -> anyhow::Result<HashMap<String, HmmGumbel>> {
     let reader = BufReader::new(File::open(hmm_path.as_ref())?);
 
     let mut names = vec![];
@@ -124,130 +124,45 @@ fn hmms(hmm_path: impl AsRef<Path>) -> anyhow::Result<HashMap<String, HmmGumbel>
         .collect())
 }
 
-#[derive(Default)]
-pub struct Record {
-    query: String,
-    target: String,
-    ga_score: f32,
-    ga_p_value: f64,
-    nail_cloud_score: Option<f32>,
-    nail_cloud_p_value: Option<f64>,
-    nail_score: Option<f32>,
-    nail_p_value: Option<f64>,
-    mmseqs_score: Option<f32>,
-    mmseqs_p_value: Option<f64>,
-    hmmer_score: Option<f32>,
-    hmmer_p_value: Option<f64>,
-    dom_score_sum: Option<f32>,
-    dom_score_max: Option<f32>,
-    dom_sig_cnt: Option<usize>,
-    dom_scores: Option<Vec<f32>>,
-}
+type Cutoffs = HashMap<String, Vec<f32>>;
+fn parse_cutoffs(cutoffs_path: impl AsRef<Path>) -> anyhow::Result<(Cutoffs, Cutoffs)> {
+    let reader = BufReader::new(File::open(cutoffs_path.as_ref())?);
 
-fn score_fmt(f: Option<f32>, w: usize) -> String {
-    match f {
-        Some(s) => format!("{s:^W$.1}", W = w),
-        None => format!("{:^W$}", "-", W = w),
+    let mut nail_cutoffs = Cutoffs::new();
+    let mut mmseqs_cutoffs = Cutoffs::new();
+
+    for line in reader.lines() {
+        let line = line?;
+
+        let (query, rest) = line.split_once(',').unwrap();
+
+        let groups = rest
+            .split("),(")
+            .map(|g| g.trim_matches(|c| c == '(' || c == ')'))
+            .map(|g| {
+                let mut it = g.split(',');
+                let name = it.next().unwrap();
+                let nums: Vec<f32> = it.map(|x| x.parse().unwrap()).collect();
+                (name, nums)
+            })
+            .collect::<Vec<_>>();
+
+        assert_eq!(groups[0].0, "nail");
+        assert_eq!(groups[1].0, "mmseqs");
+
+        nail_cutoffs.insert(query.to_string(), groups[0].1.clone());
+        mmseqs_cutoffs.insert(query.to_string(), groups[1].1.clone());
     }
-}
 
-fn p_value_fmt(f: Option<f64>, w: usize) -> String {
-    match f {
-        Some(s) => format!("{s:^W$.2e}", W = w),
-        None => format!("{:^W$}", "-", W = w),
-    }
-}
-
-fn int_fmt(f: Option<usize>, w: usize) -> String {
-    match f {
-        Some(s) => format!("{s:^W$}", W = w),
-        None => format!("{:^W$}", "-", W = w),
-    }
-}
-
-const HEADER: [&str; 3] = [
-    "| GA |    GA     |  nail  |    nail   |  nail  |   nail    | mmseqs |  mmseqs   | hmmer |  hmmer    | dom | dom | sig |",
-    "| sc |  P-value  | cld sc |cld P-value|   sc   |  P-value  |   sc   |  P-value  |  sc   |  P-value  | sum | max | dom | dom scores",
-    " ---- ----------- -------- ----------- -------- ----------- -------- ----------- ------- ----------- ----- ----- ----- ------------",
-];
-
-fn write_header(out: &mut impl Write, recs: &[Record]) -> anyhow::Result<()> {
-    let q_max = recs.iter().map(|r| r.query.len()).max().unwrap();
-    let t_max = recs.iter().map(|r| r.target.len()).max().unwrap();
-
-    writeln!(
-        out,
-        "#{:W1$} {:W2$}{}",
-        " ",
-        " ",
-        HEADER[0],
-        W1 = q_max - 1,
-        W2 = t_max
-    )?;
-    writeln!(
-        out,
-        "#{:^W1$} {:^W2$}{}",
-        "query",
-        "target",
-        HEADER[1],
-        W1 = q_max - 1,
-        W2 = t_max,
-    )?;
-    writeln!(
-        out,
-        "#{:W1$} {:W2$}{}",
-        "-".repeat(q_max - 1),
-        "-".repeat(t_max),
-        HEADER[2],
-        W1 = q_max - 1,
-        W2 = t_max,
-    )?;
-
-    Ok(())
-}
-
-fn write_records(out: &mut impl Write, recs: &[Record], w: &[usize]) -> anyhow::Result<()> {
-    let q_max = recs.iter().map(|r| r.query.len()).max().unwrap();
-    let t_max = recs.iter().map(|r| r.target.len()).max().unwrap();
-
-    for r in recs.iter() {
-        writeln!(
-            out,
-            "{:W1$} {:W2$} {} {} {} {} {} {} {} {} {} {} {} {} {} {}",
-            r.query,
-            r.target,
-            score_fmt(Some(r.ga_score), w[0]),
-            p_value_fmt(Some(r.ga_p_value), w[1]),
-            score_fmt(r.nail_cloud_score, w[2]),
-            p_value_fmt(r.nail_cloud_p_value, w[3]),
-            score_fmt(r.nail_score, w[4]),
-            p_value_fmt(r.nail_p_value, w[5]),
-            score_fmt(r.mmseqs_score, w[6]),
-            p_value_fmt(r.mmseqs_p_value, w[7]),
-            score_fmt(r.hmmer_score, w[8]),
-            p_value_fmt(r.hmmer_p_value, w[9]),
-            score_fmt(r.dom_score_sum, w[10]),
-            score_fmt(r.dom_score_max, w[11]),
-            int_fmt(r.dom_sig_cnt, w[12]),
-            match r.dom_scores {
-                Some(ref v) => v
-                    .iter()
-                    .map(|f| format!("{f:.1}"))
-                    .collect::<Vec<_>>()
-                    .join(","),
-                None => "-".to_string(),
-            },
-            W1 = q_max,
-            W2 = t_max
-        )?;
-    }
-    Ok(())
+    Ok((nail_cutoffs, mmseqs_cutoffs))
 }
 
 #[derive(Subcommand)]
 enum SubCommands {
     Standard(StandardArgs),
-    Rev(RevArgs),
+    Other(OtherArgs),
+    Cutoffs(CutoffsArgs),
+    CutoffsSweep(CutoffsSweepArgs),
     Params(ParamsArgs),
 }
 
@@ -308,44 +223,254 @@ struct ParamsArgs {
     out_path: PathBuf,
 }
 
+fn main() -> anyhow::Result<()> {
+    match Cli::parse().command {
+        SubCommands::Standard(args) => standard(args),
+        SubCommands::Other(args) => other(args),
+        SubCommands::Params(args) => params(args),
+        SubCommands::Cutoffs(args) => cutoffs(args),
+        SubCommands::CutoffsSweep(args) => cutoffs_sweep(args),
+    }
+}
+
 #[derive(Parser)]
-struct RevArgs {
+struct CutoffsSweepArgs {
     #[arg(value_name = "nail.tbl")]
+    nail_tbl: PathBuf,
+
+    #[arg(value_name = "nail/")]
     nail_dir: PathBuf,
 
     #[arg(value_name = "mmseqs.tbl")]
+    mmseqs_tbl: PathBuf,
+
+    #[arg(value_name = "mmseqs/")]
     mmseqs_dir: PathBuf,
 
     #[arg(value_name = "query.hmm")]
     query_path: PathBuf,
 
-    #[arg(value_name = "out/")]
-    out_dir: PathBuf,
+    #[arg(value_name = "cutoffs.txt")]
+    out_path: PathBuf,
+
+    #[arg(long, value_name = "figures/")]
+    figures_dir: Option<PathBuf>,
+
+    #[arg(short = 'e', default_value_t = 1e-3, value_name = "F")]
+    reverse_e_cutoff: f64,
 
     #[arg(short = 't', default_value_t = 4usize, value_name = "N")]
     num_threads: usize,
 }
 
-fn main() -> anyhow::Result<()> {
-    match Cli::parse().command {
-        SubCommands::Standard(args) => standard(args),
-        SubCommands::Params(args) => params(args),
-        SubCommands::Rev(args) => rev(args),
-    }
-}
-
-fn rev(args: RevArgs) -> anyhow::Result<()> {
+fn cutoffs_sweep(args: CutoffsSweepArgs) -> anyhow::Result<()> {
     let start = std::time::Instant::now();
-
-    let figures = args.out_dir;
-    std::fs::create_dir_all(&figures)?;
 
     set_threads(args.num_threads)?;
 
     // ---
 
-    let hmms =
-        hmms(&args.query_path).with_context(|| format!("failed to open: {:?}", args.query_path))?;
+    let hmms = parse_hmms(&args.query_path)
+        .with_context(|| format!("failed to open: {:?}", args.query_path))?;
+
+    let mut queries = hmms.keys().collect::<Vec<_>>();
+    queries.sort();
+
+    // ---
+
+    let time_pattern = Regex::new(r"Elapsed.*\): (?P<time>.*)").unwrap();
+
+    type DecoyMap = HashMap<String, Vec<bioio::tbl::Hit>>;
+
+    struct Data {
+        name: String,
+        decoys: DecoyMap,
+        saturation: f32,
+        time: f32,
+    }
+
+    let mut nail_tbl = HitTable::from_path::<_, NailTable>(args.nail_tbl)?;
+    nail_tbl.hits.retain(|h| h.e_value <= args.reverse_e_cutoff);
+    let nail_map = nail_tbl.to_map();
+
+    let mut nail_data = glob(
+        args.nail_dir
+            .join("*.tbl")
+            .to_str()
+            .context("invalid *.tbl glob")?,
+    )?
+    .filter_map(Result::ok)
+    .map(|path| {
+        let mut tbl = HitTable::from_path::<_, NailTable>(&path)
+            .unwrap_or_else(|_| panic!("failed to open: {path:?}"));
+
+        let time_path = path.with_extension("time");
+        let time: f32 = std::fs::read_to_string(time_path)
+            .expect("failed to open .time")
+            .lines()
+            .filter_map(|l| time_pattern.captures(l))
+            .map(|c| {
+                c.name("time")
+                    .unwrap()
+                    .as_str()
+                    .split(':')
+                    .map(|t| t.parse::<f32>().unwrap())
+                    .rev()
+                    .enumerate()
+                    .map(|(i, t)| t * 60.0_f32.powf(i as f32))
+                    .sum()
+            })
+            .max_by(float_cmp)
+            .expect("no times found");
+
+        let name = tbl
+            .name
+            .strip_suffix(".rev.prf")
+            .expect("weird suffix")
+            .to_string();
+
+        tbl.hits.retain(|h| h.e_value <= 1.0);
+
+        let mut rev_map = tbl.to_map();
+        rev_map.retain(|k, _| !nail_map.contains_key(k));
+
+        let mut decoys = DecoyMap::new();
+
+        rev_map
+            .into_values()
+            .for_each(|h| decoys.entry(h.query.clone()).or_default().push(h));
+
+        let saturation = decoys.len() as f32 / queries.len() as f32;
+
+        Data {
+            name,
+            decoys,
+            saturation,
+            time,
+        }
+    })
+    .collect::<Vec<_>>();
+
+    nail_data.sort_by(|a, b| a.saturation.partial_cmp(&b.saturation).unwrap());
+    let w = nail_data.iter().map(|d| d.name.len()).max().unwrap();
+    nail_data
+        .iter()
+        .for_each(|d| println!("{:W$} {:5.1}s {:5.3}", d.name, d.time, d.saturation, W = w));
+
+    // ---
+
+    let mut mmseqs_tbl = HitTable::from_path::<_, BlastTable>(args.mmseqs_tbl)?;
+    mmseqs_tbl
+        .hits
+        .retain(|h| h.e_value <= args.reverse_e_cutoff);
+    let mmseqs_map = mmseqs_tbl.to_map();
+
+    let mut mmseqs_data = glob(
+        args.mmseqs_dir
+            .join("*.tbl")
+            .to_str()
+            .context("invalid *.tbl glob")?,
+    )?
+    .filter_map(Result::ok)
+    .map(|path| {
+        let mut tbl = HitTable::from_path::<_, BlastTable>(&path)
+            .unwrap_or_else(|_| panic!("failed to open: {path:?}"));
+
+        let time_path = path.with_extension("time");
+        let time: f32 = std::fs::read_to_string(time_path)
+            .expect("failed to open .time")
+            .lines()
+            .filter_map(|l| time_pattern.captures(l))
+            .map(|c| {
+                c.name("time")
+                    .unwrap()
+                    .as_str()
+                    .split(':')
+                    .map(|t| t.parse::<f32>().unwrap())
+                    .rev()
+                    .enumerate()
+                    .map(|(i, t)| t * 60.0_f32.powf(i as f32))
+                    .sum()
+            })
+            .max_by(float_cmp)
+            .expect("no times found");
+
+        let name = tbl
+            .name
+            .strip_suffix(".rev.prf")
+            .expect("weird suffix")
+            .to_string();
+
+        // tbl.hits.retain(|h| h.e_value <= 1.0);
+
+        let mut rev_map = tbl.to_map();
+        rev_map.retain(|k, _| !mmseqs_map.contains_key(k));
+
+        let mut decoys = DecoyMap::new();
+
+        rev_map
+            .into_values()
+            .for_each(|h| decoys.entry(h.query.clone()).or_default().push(h));
+
+        let saturation = decoys.len() as f32 / queries.len() as f32;
+
+        Data {
+            name,
+            decoys,
+            saturation,
+            time,
+        }
+    })
+    .collect::<Vec<_>>();
+
+    mmseqs_data.sort_by(|a, b| a.saturation.partial_cmp(&b.saturation).unwrap());
+    let w = mmseqs_data.iter().map(|d| d.name.len()).max().unwrap();
+    mmseqs_data
+        .iter()
+        .for_each(|d| println!("{:W$} {:5.1}s {:5.3}", d.name, d.time, d.saturation, W = w));
+
+    println!(
+        "{} took {:.2}s",
+        args.out_path.to_string_lossy(),
+        start.elapsed().as_secs_f32()
+    );
+
+    Ok(())
+}
+
+#[derive(Parser)]
+struct CutoffsArgs {
+    #[arg(value_name = "nail/")]
+    nail_dir: PathBuf,
+
+    #[arg(value_name = "mmseqs/")]
+    mmseqs_dir: PathBuf,
+
+    #[arg(value_name = "query.hmm")]
+    query_path: PathBuf,
+
+    #[arg(value_name = "cutoffs.txt")]
+    out_path: PathBuf,
+
+    #[arg(long, value_name = "figures/")]
+    figures_dir: Option<PathBuf>,
+
+    #[arg(short = 'e', default_value_t = 1e-3, value_name = "F")]
+    reverse_e_cutoff: f64,
+
+    #[arg(short = 't', default_value_t = 4usize, value_name = "N")]
+    num_threads: usize,
+}
+
+fn cutoffs(args: CutoffsArgs) -> anyhow::Result<()> {
+    let start = std::time::Instant::now();
+
+    set_threads(args.num_threads)?;
+
+    // ---
+
+    let hmms = parse_hmms(&args.query_path)
+        .with_context(|| format!("failed to open: {:?}", args.query_path))?;
 
     let mut queries = hmms.keys().collect::<Vec<_>>();
     queries.sort();
@@ -374,14 +499,14 @@ fn rev(args: RevArgs) -> anyhow::Result<()> {
 
     type DecoyMap = HashMap<String, Vec<bioio::tbl::Hit>>;
 
-    struct RevTables {
+    struct Tables {
         nail: bioio::tbl::HitTable,
         nail_rev: bioio::tbl::HitTable,
         mmseqs: bioio::tbl::HitTable,
         mmseqs_rev: bioio::tbl::HitTable,
     }
 
-    impl RevTables {
+    impl Tables {
         fn new(nail_dir: impl AsRef<Path>, mmseqs_dir: impl AsRef<Path>, idx: usize) -> Self {
             let nail_dir = nail_dir.as_ref();
             let mmseqs_dir = mmseqs_dir.as_ref();
@@ -410,91 +535,19 @@ fn rev(args: RevArgs) -> anyhow::Result<()> {
         }
     }
 
-    // type ScoreMap = HashMap<String, f64>;
-    // #[derive(Default)]
-    // struct DecoyScoreDistData {
-    //     nail_min: ScoreMap,
-    //     nail_max: ScoreMap,
-    //     mmseqs_min: ScoreMap,
-    //     mmseqs_max: ScoreMap,
-    // }
-
-    // impl DecoyScoreDistData {
-    //     fn update(&mut self, tables: RevTables) {
-    //         let mut nail_map = tables.nail.to_map();
-    //         let mut nail_rev_map = tables.nail_rev.to_map();
-    //         let mut mmseqs_map = tables.mmseqs.to_map();
-    //         let mut mmseqs_rev_map = tables.mmseqs_rev.to_map();
-
-    //         nail_map.values().for_each(|h| {
-    //             self.nail_min
-    //                 .entry(h.query.clone())
-    //                 .and_modify(|s| *s = s.min(h.score))
-    //                 .or_insert(h.score);
-
-    //             self.nail_max
-    //                 .entry(h.query.clone())
-    //                 .and_modify(|s| *s = s.max(h.score))
-    //                 .or_insert(h.score);
-    //         });
-
-    //         mmseqs_map.values().for_each(|h| {
-    //             self.mmseqs_min
-    //                 .entry(h.query.clone())
-    //                 .and_modify(|s| *s = s.min(h.score))
-    //                 .or_insert(h.score);
-
-    //             self.mmseqs_max
-    //                 .entry(h.query.clone())
-    //                 .and_modify(|s| *s = s.max(h.score))
-    //                 .or_insert(h.score);
-    //         });
-    //     }
-
-    //     fn merge(&mut self, other: Self) {
-    //         for (k, v) in other.nail_min {
-    //             self.nail_min
-    //                 .entry(k)
-    //                 .and_modify(|min| *min = min.min(v))
-    //                 .or_insert(v);
-    //         }
-
-    //         for (k, v) in other.nail_max {
-    //             self.nail_max
-    //                 .entry(k)
-    //                 .and_modify(|max| *max = max.max(v))
-    //                 .or_insert(v);
-    //         }
-
-    //         for (k, v) in other.mmseqs_min {
-    //             self.mmseqs_min
-    //                 .entry(k)
-    //                 .and_modify(|min| *min = min.min(v))
-    //                 .or_insert(v);
-    //         }
-
-    //         for (k, v) in other.mmseqs_max {
-    //             self.mmseqs_max
-    //                 .entry(k)
-    //                 .and_modify(|max| *max = max.max(v))
-    //                 .or_insert(v);
-    //         }
-    //     }
-    // }
-
     #[derive(Default)]
-    struct DecoyCutoffData {
+    struct Data {
         nail_decoys: DecoyMap,
         mmseqs_decoys: DecoyMap,
     }
 
-    impl DecoyCutoffData {
-        fn update(&mut self, mut tables: RevTables) {
+    impl Data {
+        fn update(&mut self, mut tables: Tables, reverse_e_cutoff: f64) {
             // ---
             // filter the real hits by E-value
 
-            tables.nail.hits.retain(|h| h.e_value <= E);
-            tables.mmseqs.hits.retain(|h| h.e_value <= E);
+            tables.nail.hits.retain(|h| h.e_value <= reverse_e_cutoff);
+            tables.mmseqs.hits.retain(|h| h.e_value <= reverse_e_cutoff);
 
             // ---
             // convert to (query, target)-keyed maps for easier comparison
@@ -536,15 +589,14 @@ fn rev(args: RevArgs) -> anyhow::Result<()> {
         }
     }
 
-    const E: f64 = 1e-3;
     let mut data = pieces
         .par_iter()
-        .fold(DecoyCutoffData::default, |mut data, &idx| {
-            let tables = RevTables::new(&args.nail_dir, &args.mmseqs_dir, idx);
-            data.update(tables);
+        .fold(Data::default, |mut data, &idx| {
+            let tables = Tables::new(&args.nail_dir, &args.mmseqs_dir, idx);
+            data.update(tables, args.reverse_e_cutoff);
             data
         })
-        .reduce(DecoyCutoffData::default, |mut d1, d2| {
+        .reduce(Data::default, |mut d1, d2| {
             d1.merge(d2);
             d1
         });
@@ -565,11 +617,23 @@ fn rev(args: RevArgs) -> anyhow::Result<()> {
 
     // ---
 
-    let mut out_cutoffs = BufWriter::new(File::create(figures.join("cutoffs.txt"))?);
+    let mut out = BufWriter::new(File::create(args.out_path)?);
 
-    let mut out_dist = BufWriter::new(File::create(figures.join("dist.txt"))?);
-    let mut out_ga = BufWriter::new(File::create(figures.join("ga.txt"))?);
-    let mut out_cnt = BufWriter::new(File::create(figures.join("count.txt"))?);
+    struct FiguresOut {
+        dist: BufWriter<File>,
+        ga: BufWriter<File>,
+        cnt: BufWriter<File>,
+    }
+    let mut figures_out = if let Some(figures) = args.figures_dir {
+        std::fs::create_dir_all(&figures)?;
+        Some(FiguresOut {
+            dist: BufWriter::new(File::create(figures.join("dist.txt"))?),
+            ga: BufWriter::new(File::create(figures.join("ga.txt"))?),
+            cnt: BufWriter::new(File::create(figures.join("count.txt"))?),
+        })
+    } else {
+        None
+    };
 
     const N_CUTOFF: usize = 5;
     for (q, nail_hits) in data.nail_decoys.iter() {
@@ -591,7 +655,7 @@ fn rev(args: RevArgs) -> anyhow::Result<()> {
             .collect::<Vec<_>>();
 
         writeln!(
-            out_cutoffs,
+            out,
             "{q},(nail,{}),(mmseqs,{})",
             nail_scores
                 .iter()
@@ -607,12 +671,14 @@ fn rev(args: RevArgs) -> anyhow::Result<()> {
 
         // ---
 
-        writeln!(out_dist, "{q},({},{})", nail_hits.len(), mmseqs_hits.len())?;
+        if let Some(out) = figures_out.as_mut() {
+            writeln!(out.dist, "{q},({},{})", nail_hits.len(), mmseqs_hits.len())?;
 
-        writeln!(out_ga, "{:.1},{:.1}", nail_scores[0], hmm.ga_sc)?;
+            writeln!(out.ga, "{:.1},{:.1}", nail_scores[0], hmm.ga_sc)?;
 
-        let diff = hmm.ga_sc - nail_scores[0];
-        writeln!(out_cnt, "{},{diff:.1}", nail_hits.len())?;
+            let diff = hmm.ga_sc - nail_scores[0];
+            writeln!(out.cnt, "{},{diff:.1}", nail_hits.len())?;
+        }
     }
 
     // ---
@@ -626,7 +692,7 @@ fn params(args: ParamsArgs) -> anyhow::Result<()> {
 
     let z = target_db_size(args.target_path)?;
 
-    let hmms = hmms(args.query_path)?;
+    let hmms = parse_hmms(args.query_path)?;
 
     let hmmer_tbl = HitTable::from_path::<_, HmmerTable>(args.hmmer_tbl_path)?;
 
@@ -759,6 +825,154 @@ fn params(args: ParamsArgs) -> anyhow::Result<()> {
     Ok(())
 }
 
+fn score_fmt(f: Option<f32>, w: usize) -> String {
+    match f {
+        Some(s) => format!("{s:^W$.1}", W = w),
+        None => format!("{:^W$}", "-", W = w),
+    }
+}
+
+fn p_value_fmt(f: Option<f64>, w: usize) -> String {
+    match f {
+        Some(s) => format!("{s:^W$.2e}", W = w),
+        None => format!("{:^W$}", "-", W = w),
+    }
+}
+
+fn int_fmt(f: Option<usize>, w: usize) -> String {
+    match f {
+        Some(s) => format!("{s:^W$}", W = w),
+        None => format!("{:^W$}", "-", W = w),
+    }
+}
+
+#[derive(Parser)]
+struct OtherArgs {
+    #[arg(value_name = "cutoffs.txt")]
+    cutoffs_path: PathBuf,
+
+    #[arg(value_name = "nail.tbl")]
+    nail_tbl_path: PathBuf,
+
+    #[arg(value_name = "mmseqs.tbl")]
+    mmseqs_tbl_path: PathBuf,
+
+    #[arg(value_name = "hmmer.tbl")]
+    hmmer_tbl_path: PathBuf,
+
+    #[arg(value_name = "out.tbl")]
+    out_tbl_path: PathBuf,
+
+    #[arg(short = 'c', default_value_t = 2usize, value_name = "N")]
+    c: usize,
+}
+
+fn other(args: OtherArgs) -> anyhow::Result<()> {
+    let start = std::time::Instant::now();
+
+    let (nail_cutoffs, mmseqs_cutoffs) = parse_cutoffs(args.cutoffs_path)?;
+
+    let nail_map = HitTable::from_path::<_, NailTable>(args.nail_tbl_path)?.to_map();
+    let mmseqs_map = HitTable::from_path::<_, BlastTable>(args.mmseqs_tbl_path)?.to_map();
+    let hmmer_map = HitTable::from_path::<_, HmmerTable>(args.hmmer_tbl_path)?.to_map();
+
+    let mut nail_passed = nail_map
+        .iter()
+        .filter(|((q, _), h)| {
+            let cutoff = nail_cutoffs.get(q).expect("no nail cutoff for query");
+            h.score > cutoff[args.c] as f64
+        })
+        .map(|(k, _)| k)
+        .collect::<HashSet<_>>();
+
+    let mmseqs_passed = mmseqs_map
+        .iter()
+        .filter(|((q, _), h)| {
+            let cutoff = mmseqs_cutoffs.get(q).expect("no mmseqs cutoff for query");
+            h.score > cutoff[args.c] as f64
+        })
+        .map(|(k, _)| k)
+        .collect::<HashSet<_>>();
+
+    let hmmer_passed = hmmer_map
+        .iter()
+        .filter(|((q, _), h)| {
+            let cutoff = nail_cutoffs.get(q).expect("no nail cutoff for query");
+            h.score > cutoff[args.c] as f64
+        })
+        .map(|(k, _)| k)
+        .collect::<HashSet<_>>();
+
+    println!(
+        "nail: {:.2}",
+        nail_passed.len() as f32 / hmmer_passed.len() as f32
+    );
+
+    println!(
+        "mmseqs: {:.2}",
+        mmseqs_passed.len() as f32 / hmmer_passed.len() as f32
+    );
+
+    nail_passed.extend(mmseqs_passed);
+    nail_passed.extend(hmmer_passed);
+    let mut passed = nail_passed.into_iter().collect::<Vec<_>>();
+    passed.sort_by_key(|k| &k.0);
+
+    // ---
+
+    let mut out = BufWriter::new(File::create(&args.out_tbl_path)?);
+
+    let (q1, t1) = passed[0];
+    writeln!(
+        out,
+        "{:^W1$}|{:^W2$}|{:^5}|{:^8}|{:^5}|{:^5}|{:^8}|{:^5}|{:^5}|{:^8}",
+        "query",
+        "target",
+        "n sc",
+        "n Eval",
+        "n cut",
+        "m sc",
+        "m Eval",
+        "m cut",
+        "h sc",
+        "h Eval",
+        W1 = q1.len(),
+        W2 = t1.len(),
+    )?;
+
+    for k in passed {
+        let nc = nail_cutoffs.get(&k.0).expect("no nail cutoff for query")[args.c];
+        let mc = mmseqs_cutoffs.get(&k.0).expect("no nail cutoff for query")[args.c];
+
+        const MISSING: &str = "  -      -    ";
+
+        let n = nail_map
+            .get(k)
+            .map(|h| format!("{:5.1} {:8.1e}", h.score, h.e_value))
+            .unwrap_or(MISSING.to_string());
+
+        let m = mmseqs_map
+            .get(k)
+            .map(|h| format!("{:5.1} {:8.1e}", h.score, h.e_value))
+            .unwrap_or(MISSING.to_string());
+
+        let h = hmmer_map
+            .get(k)
+            .map(|h| format!("{:5.1} {:8.1e}", h.score, h.e_value))
+            .unwrap_or(MISSING.to_string());
+
+        writeln!(out, "{} {} {n} {nc:5.1} {m} {mc:5.1} {h}", k.0, k.1)?;
+    }
+
+    println!(
+        "{} took {:.2}s",
+        args.out_tbl_path.to_string_lossy(),
+        start.elapsed().as_secs_f32()
+    );
+
+    Ok(())
+}
+
 fn standard(args: StandardArgs) -> anyhow::Result<()> {
     let start = std::time::Instant::now();
 
@@ -766,13 +980,13 @@ fn standard(args: StandardArgs) -> anyhow::Result<()> {
 
     let z = target_db_size(args.target_path)?;
 
-    let hmms = hmms(args.query_path)?;
+    let hmms = parse_hmms(args.query_path)?;
 
     let nail_tbl = HitTable::from_path::<_, NailTable>(args.nail_tbl_path)?;
     let hmmer_tbl = HitTable::from_path::<_, HmmerTable>(args.hmmer_tbl_path)?;
     let mmseqs_tbl = HitTable::from_path::<_, BlastTable>(args.mmseqs_tbl_path)?;
 
-    let mut ga_any: HashSet<(&str, &str)> = HashSet::new();
+    let mut cutoff_any: HashSet<(&str, &str)> = HashSet::new();
 
     // ---
 
@@ -780,7 +994,7 @@ fn standard(args: StandardArgs) -> anyhow::Result<()> {
         let hmm = hmms.get(&h.query).unwrap();
 
         if h.score >= hmm.ga_sc {
-            ga_any.insert((&h.query, &h.target));
+            cutoff_any.insert((&h.query, &h.target));
         }
     }
 
@@ -788,7 +1002,7 @@ fn standard(args: StandardArgs) -> anyhow::Result<()> {
         let hmm = hmms.get(&h.query).unwrap();
 
         if h.score >= hmm.ga_sc {
-            ga_any.insert((&h.query, &h.target));
+            cutoff_any.insert((&h.query, &h.target));
         }
     }
 
@@ -796,13 +1010,33 @@ fn standard(args: StandardArgs) -> anyhow::Result<()> {
         let hmm = hmms.get(&h.query).unwrap();
 
         if h.e_value / z <= hmm.ga_p {
-            ga_any.insert((&h.query, &h.target));
+            cutoff_any.insert((&h.query, &h.target));
         }
     }
 
     // ---
 
-    let mut records_by_pair = ga_any
+    #[derive(Default)]
+    struct Record {
+        query: String,
+        target: String,
+        ga_score: f32,
+        ga_p_value: f64,
+        nail_cloud_score: Option<f32>,
+        nail_cloud_p_value: Option<f64>,
+        nail_score: Option<f32>,
+        nail_p_value: Option<f64>,
+        mmseqs_score: Option<f32>,
+        mmseqs_p_value: Option<f64>,
+        hmmer_score: Option<f32>,
+        hmmer_p_value: Option<f64>,
+        dom_score_sum: Option<f32>,
+        dom_score_max: Option<f32>,
+        dom_sig_cnt: Option<usize>,
+        dom_scores: Option<Vec<f32>>,
+    }
+
+    let mut records_by_pair = cutoff_any
         .iter()
         .map(|(q, t)| {
             let hmm = hmms.get(*q).unwrap();
@@ -820,7 +1054,7 @@ fn standard(args: StandardArgs) -> anyhow::Result<()> {
         })
         .collect::<HashMap<(String, String), Record>>();
 
-    let test: HashSet<_> = ga_any
+    let test: HashSet<_> = cutoff_any
         .iter()
         .map(|(q, t)| (q.to_string(), t.to_string()))
         .collect();
@@ -937,6 +1171,85 @@ fn standard(args: StandardArgs) -> anyhow::Result<()> {
             _ => std::cmp::Ordering::Equal,
         })
     });
+
+    const HEADER: [&str; 3] = [
+        "| GA |    GA     |  nail  |    nail   |  nail  |   nail    | mmseqs |  mmseqs   | hmmer |  hmmer    | dom | dom | sig |",
+        "| sc |  P-value  | cld sc |cld P-value|   sc   |  P-value  |   sc   |  P-value  |  sc   |  P-value  | sum | max | dom | dom scores",
+        " ---- ----------- -------- ----------- -------- ----------- -------- ----------- ------- ----------- ----- ----- ----- ------------",
+    ];
+
+    fn write_header(out: &mut impl Write, recs: &[Record]) -> anyhow::Result<()> {
+        let q_max = recs.iter().map(|r| r.query.len()).max().unwrap();
+        let t_max = recs.iter().map(|r| r.target.len()).max().unwrap();
+
+        writeln!(
+            out,
+            "#{:W1$} {:W2$}{}",
+            " ",
+            " ",
+            HEADER[0],
+            W1 = q_max - 1,
+            W2 = t_max
+        )?;
+        writeln!(
+            out,
+            "#{:^W1$} {:^W2$}{}",
+            "query",
+            "target",
+            HEADER[1],
+            W1 = q_max - 1,
+            W2 = t_max,
+        )?;
+        writeln!(
+            out,
+            "#{:W1$} {:W2$}{}",
+            "-".repeat(q_max - 1),
+            "-".repeat(t_max),
+            HEADER[2],
+            W1 = q_max - 1,
+            W2 = t_max,
+        )?;
+
+        Ok(())
+    }
+
+    fn write_records(out: &mut impl Write, recs: &[Record], w: &[usize]) -> anyhow::Result<()> {
+        let q_max = recs.iter().map(|r| r.query.len()).max().unwrap();
+        let t_max = recs.iter().map(|r| r.target.len()).max().unwrap();
+
+        for r in recs.iter() {
+            writeln!(
+                out,
+                "{:W1$} {:W2$} {} {} {} {} {} {} {} {} {} {} {} {} {} {}",
+                r.query,
+                r.target,
+                score_fmt(Some(r.ga_score), w[0]),
+                p_value_fmt(Some(r.ga_p_value), w[1]),
+                score_fmt(r.nail_cloud_score, w[2]),
+                p_value_fmt(r.nail_cloud_p_value, w[3]),
+                score_fmt(r.nail_score, w[4]),
+                p_value_fmt(r.nail_p_value, w[5]),
+                score_fmt(r.mmseqs_score, w[6]),
+                p_value_fmt(r.mmseqs_p_value, w[7]),
+                score_fmt(r.hmmer_score, w[8]),
+                p_value_fmt(r.hmmer_p_value, w[9]),
+                score_fmt(r.dom_score_sum, w[10]),
+                score_fmt(r.dom_score_max, w[11]),
+                int_fmt(r.dom_sig_cnt, w[12]),
+                match r.dom_scores {
+                    Some(ref v) => v
+                        .iter()
+                        .map(|f| format!("{f:.1}"))
+                        .collect::<Vec<_>>()
+                        .join(","),
+                    None => "-".to_string(),
+                },
+                W1 = q_max,
+                W2 = t_max
+            )?;
+        }
+        Ok(())
+    }
 
     let mut out = BufWriter::new(File::create_new(&args.out_tbl_path)?);
 
