@@ -172,57 +172,6 @@ struct Cli {
     pub command: SubCommands,
 }
 
-#[derive(Parser)]
-struct StandardArgs {
-    #[arg(value_name = "query.hmm")]
-    query_path: PathBuf,
-
-    #[arg(value_name = "target.fa")]
-    target_path: PathBuf,
-
-    #[arg(value_name = "hmmer.tbl")]
-    hmmer_tbl_path: PathBuf,
-
-    #[arg(value_name = "hmmer.domtbl")]
-    hmmer_domtbl_path: PathBuf,
-
-    #[arg(value_name = "nail.tbl")]
-    nail_tbl_path: PathBuf,
-
-    #[arg(long, value_name = "nail.stats")]
-    nail_stats_path: Option<PathBuf>,
-
-    #[arg(value_name = "mmseqs.tbl")]
-    mmseqs_tbl_path: PathBuf,
-
-    #[arg(value_name = "out.tbl")]
-    out_tbl_path: PathBuf,
-
-    #[arg(short = 't', default_value_t = 4usize, value_name = "N")]
-    num_threads: usize,
-}
-
-#[derive(Parser)]
-struct ParamsArgs {
-    #[arg(value_name = "query.hmm")]
-    query_path: PathBuf,
-
-    #[arg(value_name = "target.fa")]
-    target_path: PathBuf,
-
-    #[arg(value_name = "hmmer.tbl")]
-    hmmer_tbl_path: PathBuf,
-
-    #[arg(value_name = "nail/")]
-    nail_dir: PathBuf,
-
-    #[arg(value_name = "mmseqs/")]
-    mmseqs_dir: PathBuf,
-
-    #[arg(value_name = "out.txt")]
-    out_path: PathBuf,
-}
-
 fn main() -> anyhow::Result<()> {
     match Cli::parse().command {
         SubCommands::Standard(args) => standard(args),
@@ -249,9 +198,6 @@ struct CutoffsSweepArgs {
 
     #[arg(value_name = "query.hmm")]
     query_path: PathBuf,
-
-    #[arg(value_name = "cutoffs.txt")]
-    out_path: PathBuf,
 
     #[arg(long, value_name = "figures/")]
     figures_dir: Option<PathBuf>,
@@ -429,11 +375,7 @@ fn cutoffs_sweep(args: CutoffsSweepArgs) -> anyhow::Result<()> {
         .iter()
         .for_each(|d| println!("{:W$} {:5.1}s {:5.3}", d.name, d.time, d.saturation, W = w));
 
-    println!(
-        "{} took {:.2}s",
-        args.out_path.to_string_lossy(),
-        start.elapsed().as_secs_f32()
-    );
+    println!("took {:.2}s", start.elapsed().as_secs_f32());
 
     Ok(())
 }
@@ -685,6 +627,27 @@ fn cutoffs(args: CutoffsArgs) -> anyhow::Result<()> {
 
     println!("took {:?}", start.elapsed());
     Ok(())
+}
+
+#[derive(Parser)]
+struct ParamsArgs {
+    #[arg(value_name = "query.hmm")]
+    query_path: PathBuf,
+
+    #[arg(value_name = "target.fa")]
+    target_path: PathBuf,
+
+    #[arg(value_name = "hmmer.tbl")]
+    hmmer_tbl_path: PathBuf,
+
+    #[arg(value_name = "nail/")]
+    nail_dir: PathBuf,
+
+    #[arg(value_name = "mmseqs/")]
+    mmseqs_dir: PathBuf,
+
+    #[arg(value_name = "out.txt")]
+    out_path: PathBuf,
 }
 
 fn params(args: ParamsArgs) -> anyhow::Result<()> {
@@ -971,6 +934,36 @@ fn other(args: OtherArgs) -> anyhow::Result<()> {
     );
 
     Ok(())
+}
+
+#[derive(Parser)]
+struct StandardArgs {
+    #[arg(value_name = "query.hmm")]
+    query_path: PathBuf,
+
+    #[arg(value_name = "target.fa")]
+    target_path: PathBuf,
+
+    #[arg(value_name = "hmmer.tbl")]
+    hmmer_tbl_path: PathBuf,
+
+    #[arg(value_name = "hmmer.domtbl")]
+    hmmer_domtbl_path: PathBuf,
+
+    #[arg(value_name = "nail.tbl")]
+    nail_tbl_path: PathBuf,
+
+    #[arg(long, value_name = "nail.stats")]
+    nail_stats_path: Option<PathBuf>,
+
+    #[arg(value_name = "mmseqs.tbl")]
+    mmseqs_tbl_path: PathBuf,
+
+    #[arg(value_name = "out.tbl")]
+    out_tbl_path: PathBuf,
+
+    #[arg(short = 't', default_value_t = 4usize, value_name = "N")]
+    num_threads: usize,
 }
 
 fn standard(args: StandardArgs) -> anyhow::Result<()> {
