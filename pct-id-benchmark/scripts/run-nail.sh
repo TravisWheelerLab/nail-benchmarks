@@ -15,13 +15,24 @@ mkdir -p $RESULTS
 
 ###
 
-ARGS_1="--allow-overwrite --mmseqs-s 10.0 --prog-seed            -E ${E}"
-ARGS_2="--allow-overwrite --mmseqs-s 10.0 --mmseqs-max-seqs 2000 -E ${E}"
+PREFIX_1="nail-s5.7-ms2000"
+PREFIX_2="nail-s7.5-ms2000"
+PREFIX_3="nail-s10.0-ms2000"
+PREFIX_4="nail-s12.0-ms2000"
+
+ARGS_1="--allow-overwrite --mmseqs-s 5.7  --mmseqs-max-seqs 2000 -E ${E}"
+ARGS_2="--allow-overwrite --mmseqs-s 7.5  --mmseqs-max-seqs 2000 -E ${E}"
+ARGS_3="--allow-overwrite --mmseqs-s 10.0 --mmseqs-max-seqs 2000 -E ${E}"
+ARGS_4="--allow-overwrite --mmseqs-s 12.0 --mmseqs-max-seqs 2000 -E ${E}"
 
 QUERY=$QUERY_HMM
-run_nail "nail-prog.prf" "$ARGS_1"
-run_nail "nail-ms2000.prf" "$ARGS_2"
+run_nail "${PREFIX_1}.prf" "$ARGS_1"
+run_nail "${PREFIX_2}.prf" "$ARGS_2"
+run_nail "${PREFIX_3}.prf" "$ARGS_3"
+run_nail "${PREFIX_4}.prf" "$ARGS_4"
 
-#QUERY=$QUERY_FA
-#run_nail "nail-s12.0.seq" "$ARGS_1"
-#run_nail "nail-s10.0.seq" "$ARGS_2"
+# QUERY=$QUERY_FA
+# run_nail "${PREFIX_1}.seq" "$ARGS_1"
+# run_nail "${PREFIX_2}.seq" "$ARGS_2"
+# run_nail "${PREFIX_3}.seq" "$ARGS_3"
+# run_nail "${PREFIX_4}.seq" "$ARGS_4"

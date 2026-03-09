@@ -291,7 +291,8 @@ pub struct HitTable {
 impl HitTable {
     pub fn from_path<P: AsRef<Path>, C: HitColumns>(path: P) -> anyhow::Result<Self> {
         let path = path.as_ref();
-        let file = File::open(path)?;
+        let file =
+            File::open(path).with_context(|| format!("failed to open hit table: {path:?}"))?;
         let name = path
             .file_stem()
             .and_then(|s| s.to_str())

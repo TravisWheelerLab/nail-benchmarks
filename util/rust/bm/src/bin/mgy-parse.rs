@@ -449,31 +449,32 @@ fn cutoffs(args: CutoffsArgs) -> anyhow::Result<()> {
     }
 
     impl Tables {
-        fn new(nail_dir: impl AsRef<Path>, mmseqs_dir: impl AsRef<Path>, idx: usize) -> Self {
+        fn new(
+            nail_dir: impl AsRef<Path>,
+            mmseqs_dir: impl AsRef<Path>,
+            idx: usize,
+        ) -> anyhow::Result<Self> {
             let nail_dir = nail_dir.as_ref();
             let mmseqs_dir = mmseqs_dir.as_ref();
 
             let path = nail_dir.join(format!("nail.{idx}.prf.tbl"));
-            let nail = HitTable::from_path::<_, NailTable>(&path).expect("failed to open {path:?}");
+            let nail = HitTable::from_path::<_, NailTable>(&path)?;
 
             let path = nail_dir.join(format!("nail.{idx}.rev.prf.tbl"));
-            let nail_rev =
-                HitTable::from_path::<_, NailTable>(&path).expect("failed to open {path:?}");
+            let nail_rev = HitTable::from_path::<_, NailTable>(&path)?;
 
             let path = mmseqs_dir.join(format!("mmseqs.{idx}.prf.tbl"));
-            let mmseqs =
-                HitTable::from_path::<_, BlastTable>(&path).expect("failed to open {path:?}");
+            let mmseqs = HitTable::from_path::<_, BlastTable>(&path)?;
 
             let path = mmseqs_dir.join(format!("mmseqs.{idx}.rev.prf.tbl"));
-            let mmseqs_rev =
-                HitTable::from_path::<_, BlastTable>(&path).expect("failed to open {path:?}");
+            let mmseqs_rev = HitTable::from_path::<_, BlastTable>(&path)?;
 
-            Self {
+            Ok(Self {
                 nail,
                 nail_rev,
                 mmseqs,
                 mmseqs_rev,
-            }
+            })
         }
     }
 
@@ -533,15 +534,16 @@ fn cutoffs(args: CutoffsArgs) -> anyhow::Result<()> {
 
     let mut data = pieces
         .par_iter()
-        .fold(Data::default, |mut data, &idx| {
-            let tables = Tables::new(&args.nail_dir, &args.mmseqs_dir, idx);
+        .panic_fuse()
+        .try_fold(Data::default, |mut data, &idx| -> anyhow::Result<_> {
+            let tables = Tables::new(&args.nail_dir, &args.mmseqs_dir, idx)?;
             data.update(tables, args.reverse_e_cutoff);
-            data
+            Ok(data)
         })
-        .reduce(Data::default, |mut d1, d2| {
+        .try_reduce(Data::default, |mut d1, d2| {
             d1.merge(d2);
-            d1
-        });
+            Ok(d1)
+        })?;
 
     // ---
 

@@ -20,6 +20,7 @@ SRC_STO ?= $(DATA)/pfam.sto
 SRC_HMM ?= $(DATA)/pfam.hmm 
 MGY_FA  ?= $(DATA)/mgnify.fa
 MGY_DIR ?= $(DATA)/mgy
+MGY_REV_DIR ?= $(DATA)/mgy-rev
 
 # ~1M alignments
 small:
@@ -47,6 +48,7 @@ benchmark-all:
 	@ln -sf $(SRC_HMM) $(DIR)/query.hmm
 	@ln -sf $(SRC_STO) $(DIR)/query.sto
 	@ln -sf $(MGY_DIR) $(DIR)/mgy
+	@ln -sf $(MGY_DIR) $(DIR)/mgy-rev
 	@echo done
 
 run-nail-0:
@@ -69,6 +71,42 @@ run-nail-1:
 		--results /data/results-mgy/nail/ \
 		benchmark-all/
 
+run-rev-0:
+	@./scripts/run-rev.sh \
+		--numa_node 0 \
+		--threads 48 \
+		--a 1 \
+		--b 500 \
+		--tmp /data/results-mgy/tmp/rev-0/ \
+		--results /data/results-mgy/rev/ \
+		benchmark-all/
+
+run-rev-1:
+	@./scripts/run-rev.sh \
+		--numa_node 1 \
+		--threads 48 \
+		--a 501 \
+		--b 1000 \
+		--tmp /data/results-mgy/tmp/rev-1/ \
+		--results /data/results-mgy/rev/ \
+		benchmark-all/
+
+run-rev-params:
+	@./scripts/params-rev.sh \
+		--numa_node 1 \
+		--threads 48 \
+		--tmp ./tmp-rev/ \
+		--results ./results-rev/ \
+		benchmark-all/
+
+learn-cutoffs: mgy-parse
+	@$(MGY_PARSE) cutoffs \
+		/data/results-mgy/rev/nail/ \
+		/data/results-mgy/rev/mmseqs/ \
+		$(SRC_HMM) \
+		cutoffs.txt \
+		--figures-dir ./figures \
+		-t 48
 
 $(PARSE): $(PARSE_SRC) $(BIOIO_SRC)
 	@cd $(RUST) && cargo build --release --bin mgy-parse
