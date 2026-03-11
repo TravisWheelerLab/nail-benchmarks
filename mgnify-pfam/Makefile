@@ -5,15 +5,17 @@ SEED      ?= 67779
 MAKEFILE_DIR := $(dir $(abspath $(lastword $(MAKEFILE_LIST))))
 include $(MAKEFILE_DIR)../vars.mk
 
-PARSE_SRC := $(RUST)/bm/src/bin/mgy-parse.rs
-PARSE     := $(RUST_BIN)/mgy-parse
+#############
+# BIN SETUP #
+#############
 
-PLOT_SRC := $(RUST)/bm/src/bin/mgy-plot.rs
-PLOT     := $(RUST_BIN)/mgy-plot
+PARSE  := $(MGY_PARSE)
+SPLIT  := $(FAB)
 
-SPLIT_SRC := $(RUST)/fab/src/
-SPLIT     := $(RUST_BIN)/fab
-N_SPLIT   := 1000
+#############
+
+N_SPLIT := 1000
+CUTOFFS := ./cutoffs.txt
 
 # source data
 SRC_STO ?= $(DATA)/pfam.sto
@@ -22,7 +24,8 @@ MGY_FA  ?= $(DATA)/mgnify.fa
 MGY_DIR ?= $(DATA)/mgy
 MGY_REV_DIR ?= $(DATA)/mgy-rev
 
-# ~1M alignments
+#############
+
 small:
 	@echo building benchmark...
 	$(eval DIR:= benchmark-sm)
@@ -51,10 +54,12 @@ benchmark-all:
 	@ln -sf $(MGY_DIR) $(DIR)/mgy-rev
 	@echo done
 
+#############
+
 run-nail-0:
 	@./scripts/run-nail.sh \
 		--numa_node 0 \
-		--threads 96 \
+		--threads 48 \
 		--a 1 \
 		--b 500 \
 		--tmp /data/results-mgy/tmp/nail-0/ \
@@ -64,7 +69,7 @@ run-nail-0:
 run-nail-1:
 	@./scripts/run-nail.sh \
 		--numa_node 1 \
-		--threads 96 \
+		--threads 48 \
 		--a 501 \
 		--b 1000 \
 		--tmp /data/results-mgy/tmp/nail-1/ \
@@ -99,43 +104,63 @@ run-rev-params:
 		--results ./results-rev/ \
 		benchmark-all/
 
+#############
+
 learn-cutoffs: mgy-parse
-	@$(MGY_PARSE) cutoffs \
+	@$(PARSE) cutoffs \
 		/data/results-mgy/rev/nail/ \
 		/data/results-mgy/rev/mmseqs/ \
 		$(SRC_HMM) \
-		cutoffs.txt \
-		--figures-dir ./figures \
+		$(CUTOFFS) \
 		-t 48
 
-$(PARSE): $(PARSE_SRC) $(BIOIO_SRC)
-	@cd $(RUST) && cargo build --release --bin mgy-parse
-
-parse-all: $(PARSE)
-	@echo parsing benchmark-all...
+parse-10: mgy-parse
+	@echo "parsing benchmark-all (10)..."
 	$(eval DIR:= benchmark-all)
+	$(eval RESULTS:= $(DIR)/results/10)
+	$(eval ANALYSIS:= $(DIR)/analysis)
+	@numactl --cpunodebind=1 --membind=1 $(PARSE) other \
+ 		--dir \
+		-t 10 \
+		--print-times \
+		$(SRC_HMM) \
+		$(CUTOFFS) \
+		$(RESULTS)/nail/ \
+		$(RESULTS)/mmseqs/ \
+		$(RESULTS)/hmmer/ \
+		$(ANALYSIS)
+
+parse-100: mgy-parse
+	@echo "parsing benchmark-all (100)..."
+	$(eval DIR:= benchmark-all)
+	$(eval RESULTS:= $(DIR)/results/100)
+	$(eval ANALYSIS:= $(DIR)/analysis)
+	@numactl --cpunodebind=1 --membind=1 $(PARSE) other \
+ 		--dir \
+		-t 48 \
+		--print-times \
+		$(SRC_HMM) \
+		$(CUTOFFS) \
+		$(RESULTS)/nail/ \
+		$(RESULTS)/mmseqs/ \
+		$(RESULTS)/hmmer/ \
+		$(ANALYSIS)
+
+parse-one: mgy-parse
+	@echo parsing benchmark-one...
+	$(eval DIR:= benchmark-one)
 	$(eval RESULTS:= $(DIR)/results)
-	$(eval HMMER:= $(RESULTS)/hmmer)
-	$(eval NAIL:= $(RESULTS)/nail)
-	$(eval MMSEQS:= $(RESULTS)/mmseqs)
-	$(eval ANALYSIS:= $(RESULTS)/analysis)
+	$(eval ANALYSIS:= $(DIR)/analysis)
 	@mkdir -p $(ANALYSIS)
-	@seq 1 1000 | parallel -j$(THREADS) $(PARSE) \
-		$(DIR)/query.hmm \
-		$(DIR)/mgy/{}.fa \
-		$(HMMER)/hmmer.{}.prf.tbl \
-		$(HMMER)/hmmer.{}.prf.domtbl \
-		$(NAIL)/nail.{}.prf.tbl \
-		$(NAIL)/nail.{}.prf.stats \
-		$(MMSEQS)/mmseqs.{}.prf.tbl \
-		$(ANALYSIS)/ga_hits.{}.tbl
-
-$(PLOT): $(PLOT_SRC) $(BIOIO_SRC)
-	@cd $(RUST) && cargo build --release --bin mgy-plot
-
-plot-all: $(PLOT)
-	@echo plotting benchmark-all...
-	@$(PLOT) -t $(THREADS) -o dist.tbl benchmark-all/results/analysis
+	@numactl --cpunodebind=1 --membind=1 $(PARSE) other \
+		$(SRC_HMM) \
+		$(CUTOFFS) \
+		$(RESULTS)/nail.prf.tbl \
+		$(RESULTS)/mmseqs.prf.tbl \
+		$(RESULTS)/hmmer.prf.tbl \
+		$(ANALYSIS)
+		
+#############
 
 run-params-nail: 
 	./scripts/params-nail.sh benchmark-one/ --numa_node 1
@@ -143,7 +168,7 @@ run-params-nail:
 run-params-mmseqs: 
 	./scripts/params-mmseqs.sh benchmark-one/ --numa_node 0
 
-params-%: $(PARSE)
+params-%: mgy-parse
 	$(eval DIR:= $*)
 	$(eval P := figures-params/)
 	@$(PARSE) params \

@@ -1,8 +1,10 @@
 use std::{
     collections::{HashMap, HashSet},
-    fs::File,
+    fs::{File, OpenOptions},
     io::{BufRead, BufReader, BufWriter, Write},
     path::{Path, PathBuf},
+    sync::{atomic::AtomicUsize, Arc, Mutex},
+    time::Instant,
 };
 
 use anyhow::Context;
@@ -10,151 +12,202 @@ use bioio::tbl::{hmmer::HmmerDomainTable, BlastTable, HitTable, HmmerTable, Nail
 
 use clap::{Parser, Subcommand};
 use glob::glob;
-use rayon::{
-    iter::{IntoParallelRefIterator, ParallelIterator},
-    ThreadPoolBuilder,
-};
+use rayon::iter::{IntoParallelRefIterator, ParallelIterator};
 use regex::Regex;
 
-trait Float: PartialOrd {}
-impl Float for f32 {}
-impl Float for f64 {}
+mod util {
+    use std::{
+        collections::HashMap,
+        fs::File,
+        io::{BufRead, BufReader},
+        path::Path,
+    };
 
-fn float_cmp<F: Float>(a: &F, b: &F) -> std::cmp::Ordering {
-    a.partial_cmp(b).expect("NaN encountered in float cmp")
-}
+    use anyhow::Context;
+    use glob::glob;
+    use rayon::ThreadPoolBuilder;
 
-fn hit_cmp(a: &bioio::tbl::Hit, b: &bioio::tbl::Hit) -> std::cmp::Ordering {
-    float_cmp(&a.e_value, &b.e_value)
-}
+    pub trait Float: PartialOrd {}
+    impl Float for f32 {}
+    impl Float for f64 {}
 
-fn set_threads(num_threads: usize) -> anyhow::Result<()> {
-    ThreadPoolBuilder::new()
-        .num_threads(num_threads)
-        .build_global()
-        .context("failed to build rayon global threadpool")
-}
-
-fn p_value(score: f64, lambda: f64, tau: f64) -> f64 {
-    (-lambda * (score - tau)).exp()
-}
-
-struct HmmGumbel {
-    ga_sc: f64,
-    ga_p: f64,
-    tau: f64,
-    lambda: f64,
-}
-
-impl HmmGumbel {
-    fn p_value(&self, score: f64) -> f64 {
-        (-self.lambda * (score - self.tau)).exp()
+    pub fn float_cmp<F: Float>(a: &F, b: &F) -> std::cmp::Ordering {
+        a.partial_cmp(b).expect("NaN encountered in float cmp")
     }
-}
 
-fn target_db_size(target_path: impl AsRef<Path>) -> anyhow::Result<f64> {
-    let reader = BufReader::new(File::open(target_path.as_ref())?);
-    let mut z = 0.0;
+    pub fn hit_cmp(a: &bioio::tbl::Hit, b: &bioio::tbl::Hit) -> std::cmp::Ordering {
+        float_cmp(&a.e_value, &b.e_value)
+    }
 
-    for line in reader.lines() {
-        let line = line?;
+    pub fn set_threads(num_threads: usize) -> anyhow::Result<()> {
+        ThreadPoolBuilder::new()
+            .num_threads(num_threads)
+            .build_global()
+            .context("failed to build rayon global threadpool")
+    }
 
-        if line.starts_with('>') {
-            z += 1.0;
+    pub fn score_fmt(f: Option<f32>, w: usize) -> String {
+        match f {
+            Some(s) => format!("{s:^W$.1}", W = w),
+            None => format!("{:^W$}", "-", W = w),
         }
     }
 
-    Ok(z)
-}
+    pub fn p_value_fmt(f: Option<f64>, w: usize) -> String {
+        match f {
+            Some(s) => format!("{s:^W$.2e}", W = w),
+            None => format!("{:^W$}", "-", W = w),
+        }
+    }
 
-fn parse_hmms(hmm_path: impl AsRef<Path>) -> anyhow::Result<HashMap<String, HmmGumbel>> {
-    let reader = BufReader::new(File::open(hmm_path.as_ref())?);
+    pub fn int_fmt(f: Option<usize>, w: usize) -> String {
+        match f {
+            Some(s) => format!("{s:^W$}", W = w),
+            None => format!("{:^W$}", "-", W = w),
+        }
+    }
 
-    let mut names = vec![];
-    let mut gathering_thresholds = vec![];
-    let mut gumbels = vec![];
+    pub fn p_value(score: f64, lambda: f64, tau: f64) -> f64 {
+        (-lambda * (score - tau)).exp()
+    }
 
-    for line in reader.lines() {
-        let line = line?;
+    pub struct HmmGumbel {
+        pub ga_sc: f32,
+        pub ga_p: f64,
+        pub tau: f64,
+        pub lambda: f64,
+    }
 
-        if let Some(rest) = line.strip_prefix("NAME") {
-            names.push(rest.split_whitespace().collect::<String>());
+    impl HmmGumbel {
+        pub fn p_value(&self, score: f64) -> f64 {
+            (-self.lambda * (score - self.tau)).exp()
+        }
+    }
+
+    pub fn target_db_size(target_path: impl AsRef<Path>) -> anyhow::Result<f64> {
+        let reader = BufReader::new(File::open(target_path.as_ref())?);
+        let mut z = 0.0;
+
+        for line in reader.lines() {
+            let line = line?;
+
+            if line.starts_with('>') {
+                z += 1.0;
+            }
         }
 
-        if let Some(rest) = line.strip_prefix("GA") {
-            let x = rest
-                .split_whitespace()
-                .map(|s| s.parse::<f64>().unwrap())
+        Ok(z)
+    }
+
+    pub fn parse_hmms(hmm_path: impl AsRef<Path>) -> anyhow::Result<HashMap<String, HmmGumbel>> {
+        let reader = BufReader::new(File::open(hmm_path.as_ref())?);
+
+        let mut names = vec![];
+        let mut gathering_thresholds = vec![];
+        let mut gumbels = vec![];
+
+        for line in reader.lines() {
+            let line = line?;
+
+            if let Some(rest) = line.strip_prefix("NAME") {
+                names.push(rest.split_whitespace().collect::<String>());
+            }
+
+            if let Some(rest) = line.strip_prefix("GA") {
+                let x = rest
+                    .split_whitespace()
+                    .map(|s| s.parse::<f32>().unwrap())
+                    .collect::<Vec<_>>();
+
+                gathering_thresholds.push((x[0], x[1]));
+            }
+
+            if let Some(rest) = line.strip_prefix("STATS LOCAL FORWARD") {
+                let x = rest
+                    .split_whitespace()
+                    .map(|s| s.parse::<f64>().unwrap())
+                    .collect::<Vec<_>>();
+
+                gumbels.push((x[0], x[1]))
+            }
+        }
+
+        assert_eq!(names.len(), gathering_thresholds.len());
+        assert_eq!(names.len(), gumbels.len());
+
+        Ok(names
+            .into_iter()
+            .enumerate()
+            .map(|(i, n)| {
+                let ga_sc = gathering_thresholds[i].0;
+                let tau = gumbels[i].0;
+                let lambda = gumbels[i].1;
+                let ga_p = (-lambda * (ga_sc as f64 - tau)).exp();
+                (
+                    n,
+                    HmmGumbel {
+                        ga_sc,
+                        ga_p,
+                        tau,
+                        lambda,
+                    },
+                )
+            })
+            .collect())
+    }
+
+    pub type Cutoffs = HashMap<String, Vec<f32>>;
+    pub fn parse_cutoffs(cutoffs_path: impl AsRef<Path>) -> anyhow::Result<(Cutoffs, Cutoffs)> {
+        let reader = BufReader::new(File::open(cutoffs_path.as_ref())?);
+
+        let mut nail_cutoffs = Cutoffs::new();
+        let mut mmseqs_cutoffs = Cutoffs::new();
+
+        for line in reader.lines() {
+            let line = line?;
+
+            let (query, rest) = line.split_once(',').unwrap();
+
+            let groups = rest
+                .split("),(")
+                .map(|g| g.trim_matches(|c| c == '(' || c == ')'))
+                .map(|g| {
+                    let mut it = g.split(',');
+                    let name = it.next().unwrap();
+                    let nums: Vec<f32> = it.map(|x| x.parse().unwrap()).collect();
+                    (name, nums)
+                })
                 .collect::<Vec<_>>();
 
-            gathering_thresholds.push((x[0], x[1]));
+            assert_eq!(groups[0].0, "nail");
+            assert_eq!(groups[1].0, "mmseqs");
+
+            nail_cutoffs.insert(query.to_string(), groups[0].1.clone());
+            mmseqs_cutoffs.insert(query.to_string(), groups[1].1.clone());
         }
 
-        if let Some(rest) = line.strip_prefix("STATS LOCAL FORWARD") {
-            let x = rest
-                .split_whitespace()
-                .map(|s| s.parse::<f64>().unwrap())
-                .collect::<Vec<_>>();
-
-            gumbels.push((x[0], x[1]))
-        }
+        Ok((nail_cutoffs, mmseqs_cutoffs))
     }
 
-    assert_eq!(names.len(), gathering_thresholds.len());
-    assert_eq!(names.len(), gumbels.len());
-
-    Ok(names
-        .into_iter()
-        .enumerate()
-        .map(|(i, n)| {
-            let ga_sc = gathering_thresholds[i].0;
-            let tau = gumbels[i].0;
-            let lambda = gumbels[i].1;
-            let ga_p = (-lambda * (ga_sc - tau)).exp();
-            (
-                n,
-                HmmGumbel {
-                    ga_sc,
-                    ga_p,
-                    tau,
-                    lambda,
-                },
-            )
-        })
-        .collect())
-}
-
-type Cutoffs = HashMap<String, Vec<f32>>;
-fn parse_cutoffs(cutoffs_path: impl AsRef<Path>) -> anyhow::Result<(Cutoffs, Cutoffs)> {
-    let reader = BufReader::new(File::open(cutoffs_path.as_ref())?);
-
-    let mut nail_cutoffs = Cutoffs::new();
-    let mut mmseqs_cutoffs = Cutoffs::new();
-
-    for line in reader.lines() {
-        let line = line?;
-
-        let (query, rest) = line.split_once(',').unwrap();
-
-        let groups = rest
-            .split("),(")
-            .map(|g| g.trim_matches(|c| c == '(' || c == ')'))
-            .map(|g| {
-                let mut it = g.split(',');
-                let name = it.next().unwrap();
-                let nums: Vec<f32> = it.map(|x| x.parse().unwrap()).collect();
-                (name, nums)
+    pub fn parse_table_indices(dir: impl AsRef<Path>) -> anyhow::Result<Vec<usize>> {
+        let dir = dir.as_ref();
+        let mut indices = glob(dir.join("*.tbl").to_str().context("invalid *.tbl glob")?)?
+            .filter_map(Result::ok)
+            .filter_map(|p| {
+                p.file_name()
+                    .and_then(|n| n.to_str())
+                    // NOTE: this assumes the prefixes are of the form
+                    //       <tool>.<index>.<blah...>.tbl
+                    .and_then(|s| s.split('.').nth(1))
+                    .and_then(|i| i.parse::<usize>().ok())
             })
             .collect::<Vec<_>>();
 
-        assert_eq!(groups[0].0, "nail");
-        assert_eq!(groups[1].0, "mmseqs");
+        indices.sort();
+        indices.dedup();
 
-        nail_cutoffs.insert(query.to_string(), groups[0].1.clone());
-        mmseqs_cutoffs.insert(query.to_string(), groups[1].1.clone());
+        Ok(indices)
     }
-
-    Ok((nail_cutoffs, mmseqs_cutoffs))
 }
 
 #[derive(Subcommand)]
@@ -210,13 +263,13 @@ struct CutoffsSweepArgs {
 }
 
 fn cutoffs_sweep(args: CutoffsSweepArgs) -> anyhow::Result<()> {
-    let start = std::time::Instant::now();
+    let start = Instant::now();
 
-    set_threads(args.num_threads)?;
+    util::set_threads(args.num_threads)?;
 
     // ---
 
-    let hmms = parse_hmms(&args.query_path)
+    let hmms = util::parse_hmms(&args.query_path)
         .with_context(|| format!("failed to open: {:?}", args.query_path))?;
 
     let mut queries = hmms.keys().collect::<Vec<_>>();
@@ -266,7 +319,7 @@ fn cutoffs_sweep(args: CutoffsSweepArgs) -> anyhow::Result<()> {
                     .map(|(i, t)| t * 60.0_f32.powf(i as f32))
                     .sum()
             })
-            .max_by(float_cmp)
+            .max_by(util::float_cmp)
             .expect("no times found");
 
         let name = tbl
@@ -319,7 +372,7 @@ fn cutoffs_sweep(args: CutoffsSweepArgs) -> anyhow::Result<()> {
     )?
     .filter_map(Result::ok)
     .map(|path| {
-        let mut tbl = HitTable::from_path::<_, BlastTable>(&path)
+        let tbl = HitTable::from_path::<_, BlastTable>(&path)
             .unwrap_or_else(|_| panic!("failed to open: {path:?}"));
 
         let time_path = path.with_extension("time");
@@ -338,7 +391,7 @@ fn cutoffs_sweep(args: CutoffsSweepArgs) -> anyhow::Result<()> {
                     .map(|(i, t)| t * 60.0_f32.powf(i as f32))
                     .sum()
             })
-            .max_by(float_cmp)
+            .max_by(util::float_cmp)
             .expect("no times found");
 
         let name = tbl
@@ -405,37 +458,20 @@ struct CutoffsArgs {
 }
 
 fn cutoffs(args: CutoffsArgs) -> anyhow::Result<()> {
-    let start = std::time::Instant::now();
+    let start = Instant::now();
 
-    set_threads(args.num_threads)?;
+    util::set_threads(args.num_threads)?;
 
     // ---
 
-    let hmms = parse_hmms(&args.query_path)
+    let hmms = util::parse_hmms(&args.query_path)
         .with_context(|| format!("failed to open: {:?}", args.query_path))?;
 
     let mut queries = hmms.keys().collect::<Vec<_>>();
     queries.sort();
 
-    // ---
-
-    let mut pieces = glob(
-        args.nail_dir
-            .join("*.tbl")
-            .to_str()
-            .context("invalid *.tbl glob")?,
-    )?
-    .filter_map(Result::ok)
-    .filter_map(|p| {
-        p.file_name()
-            .and_then(|n| n.to_str())
-            .and_then(|s| s.split('.').nth(1))
-            .and_then(|i| i.parse::<usize>().ok())
-    })
-    .collect::<Vec<_>>();
-
-    pieces.sort();
-    pieces.dedup();
+    let tbl_indices =
+        util::parse_table_indices(&args.nail_dir).context("failed to parse table indices")?;
 
     // ---
 
@@ -532,7 +568,7 @@ fn cutoffs(args: CutoffsArgs) -> anyhow::Result<()> {
         }
     }
 
-    let mut data = pieces
+    let mut data = tbl_indices
         .par_iter()
         .panic_fuse()
         .try_fold(Data::default, |mut data, &idx| -> anyhow::Result<_> {
@@ -554,10 +590,10 @@ fn cutoffs(args: CutoffsArgs) -> anyhow::Result<()> {
 
     data.nail_decoys
         .values_mut()
-        .for_each(|v| v.sort_by(hit_cmp));
+        .for_each(|v| v.sort_by(util::hit_cmp));
     data.mmseqs_decoys
         .values_mut()
-        .for_each(|v| v.sort_by(hit_cmp));
+        .for_each(|v| v.sort_by(util::hit_cmp));
 
     // ---
 
@@ -653,11 +689,11 @@ struct ParamsArgs {
 }
 
 fn params(args: ParamsArgs) -> anyhow::Result<()> {
-    let start = std::time::Instant::now();
+    let start = Instant::now();
 
-    let z = target_db_size(args.target_path)?;
+    let z = util::target_db_size(args.target_path)?;
 
-    let hmms = parse_hmms(args.query_path)?;
+    let hmms = util::parse_hmms(args.query_path)?;
 
     let hmmer_tbl = HitTable::from_path::<_, HmmerTable>(args.hmmer_tbl_path)?;
 
@@ -723,7 +759,7 @@ fn params(args: ParamsArgs) -> anyhow::Result<()> {
                     .map(|(i, t)| t * 60.0_f32.powf(i as f32))
                     .sum()
             })
-            .max_by(float_cmp)
+            .max_by(util::float_cmp)
             .expect("no times found");
 
         writeln!(out, "{prefix},{search_type},({time:.4},{frac:.4})")?;
@@ -775,7 +811,7 @@ fn params(args: ParamsArgs) -> anyhow::Result<()> {
                     .map(|(i, t)| t * 60.0_f32.powf(i as f32))
                     .sum()
             })
-            .max_by(float_cmp)
+            .max_by(util::float_cmp)
             .expect("no times found");
 
         writeln!(out, "{prefix},{search_type},({time:.4},{frac:.4})")?;
@@ -790,150 +826,404 @@ fn params(args: ParamsArgs) -> anyhow::Result<()> {
     Ok(())
 }
 
-fn score_fmt(f: Option<f32>, w: usize) -> String {
-    match f {
-        Some(s) => format!("{s:^W$.1}", W = w),
-        None => format!("{:^W$}", "-", W = w),
-    }
-}
-
-fn p_value_fmt(f: Option<f64>, w: usize) -> String {
-    match f {
-        Some(s) => format!("{s:^W$.2e}", W = w),
-        None => format!("{:^W$}", "-", W = w),
-    }
-}
-
-fn int_fmt(f: Option<usize>, w: usize) -> String {
-    match f {
-        Some(s) => format!("{s:^W$}", W = w),
-        None => format!("{:^W$}", "-", W = w),
-    }
-}
-
 #[derive(Parser)]
 struct OtherArgs {
+    #[arg(value_name = "query.hmm")]
+    query_path: PathBuf,
+
     #[arg(value_name = "cutoffs.txt")]
     cutoffs_path: PathBuf,
 
     #[arg(value_name = "nail.tbl")]
-    nail_tbl_path: PathBuf,
+    nail_path: PathBuf,
 
     #[arg(value_name = "mmseqs.tbl")]
-    mmseqs_tbl_path: PathBuf,
+    mmseqs_path: PathBuf,
 
     #[arg(value_name = "hmmer.tbl")]
-    hmmer_tbl_path: PathBuf,
+    hmmer_path: PathBuf,
 
-    #[arg(value_name = "out.tbl")]
-    out_tbl_path: PathBuf,
+    #[arg(value_name = "out/")]
+    out_path: PathBuf,
 
     #[arg(short = 'c', default_value_t = 2usize, value_name = "N")]
     c: usize,
+
+    #[arg(short = 't', default_value_t = 4usize, value_name = "N")]
+    num_threads: usize,
+
+    #[arg(long)]
+    dir: bool,
+
+    #[arg(long)]
+    print_times: bool,
 }
 
 fn other(args: OtherArgs) -> anyhow::Result<()> {
-    let start = std::time::Instant::now();
+    let start = Instant::now();
 
-    let (nail_cutoffs, mmseqs_cutoffs) = parse_cutoffs(args.cutoffs_path)?;
-
-    let nail_map = HitTable::from_path::<_, NailTable>(args.nail_tbl_path)?.to_map();
-    let mmseqs_map = HitTable::from_path::<_, BlastTable>(args.mmseqs_tbl_path)?.to_map();
-    let hmmer_map = HitTable::from_path::<_, HmmerTable>(args.hmmer_tbl_path)?.to_map();
-
-    let mut nail_passed = nail_map
-        .iter()
-        .filter(|((q, _), h)| {
-            let cutoff = nail_cutoffs.get(q).expect("no nail cutoff for query");
-            h.score > cutoff[args.c] as f64
-        })
-        .map(|(k, _)| k)
-        .collect::<HashSet<_>>();
-
-    let mmseqs_passed = mmseqs_map
-        .iter()
-        .filter(|((q, _), h)| {
-            let cutoff = mmseqs_cutoffs.get(q).expect("no mmseqs cutoff for query");
-            h.score > cutoff[args.c] as f64
-        })
-        .map(|(k, _)| k)
-        .collect::<HashSet<_>>();
-
-    let hmmer_passed = hmmer_map
-        .iter()
-        .filter(|((q, _), h)| {
-            let cutoff = nail_cutoffs.get(q).expect("no nail cutoff for query");
-            h.score > cutoff[args.c] as f64
-        })
-        .map(|(k, _)| k)
-        .collect::<HashSet<_>>();
-
-    println!(
-        "nail: {:.2}",
-        nail_passed.len() as f32 / hmmer_passed.len() as f32
-    );
-
-    println!(
-        "mmseqs: {:.2}",
-        mmseqs_passed.len() as f32 / hmmer_passed.len() as f32
-    );
-
-    nail_passed.extend(mmseqs_passed);
-    nail_passed.extend(hmmer_passed);
-    let mut passed = nail_passed.into_iter().collect::<Vec<_>>();
-    passed.sort_by_key(|k| &k.0);
+    util::set_threads(args.num_threads)?;
 
     // ---
 
-    let mut out = BufWriter::new(File::create(&args.out_tbl_path)?);
+    let (nail_cutoffs, mmseqs_cutoffs) = util::parse_cutoffs(&args.cutoffs_path)?;
 
-    let (q1, t1) = passed[0];
-    writeln!(
-        out,
-        "{:^W1$}|{:^W2$}|{:^5}|{:^8}|{:^5}|{:^5}|{:^8}|{:^5}|{:^5}|{:^8}",
-        "query",
-        "target",
-        "n sc",
-        "n Eval",
-        "n cut",
-        "m sc",
-        "m Eval",
-        "m cut",
-        "h sc",
-        "h Eval",
-        W1 = q1.len(),
-        W2 = t1.len(),
-    )?;
+    let hmms = util::parse_hmms(&args.query_path)
+        .with_context(|| format!("failed to open: {:?}", args.query_path))?;
 
-    for k in passed {
-        let nc = nail_cutoffs.get(&k.0).expect("no nail cutoff for query")[args.c];
-        let mc = mmseqs_cutoffs.get(&k.0).expect("no nail cutoff for query")[args.c];
+    let mut queries = hmms.keys().collect::<Vec<_>>();
+    queries.sort();
 
-        const MISSING: &str = "  -      -    ";
+    // ---
 
-        let n = nail_map
-            .get(k)
-            .map(|h| format!("{:5.1} {:8.1e}", h.score, h.e_value))
-            .unwrap_or(MISSING.to_string());
+    #[derive(Default)]
+    struct Times {
+        total: AtomicUsize,
+        filter: AtomicUsize,
+        union: AtomicUsize,
+        list: AtomicUsize,
+        records: AtomicUsize,
+        sort: AtomicUsize,
+        read: AtomicUsize,
+        write: AtomicUsize,
+    }
 
-        let m = mmseqs_map
-            .get(k)
-            .map(|h| format!("{:5.1} {:8.1e}", h.score, h.e_value))
-            .unwrap_or(MISSING.to_string());
+    impl Times {
+        fn print(&self) {
+            fn convert(atomic: &AtomicUsize) -> f32 {
+                std::time::Duration::from_millis(
+                    atomic.load(std::sync::atomic::Ordering::Relaxed) as u64
+                )
+                .as_secs_f32()
+            }
 
-        let h = hmmer_map
-            .get(k)
-            .map(|h| format!("{:5.1} {:8.1e}", h.score, h.e_value))
-            .unwrap_or(MISSING.to_string());
+            let total = convert(&self.total);
+            let filter = convert(&self.filter);
+            let union = convert(&self.union);
+            let list = convert(&self.list);
+            let records = convert(&self.records);
+            let sort = convert(&self.sort);
+            let read = convert(&self.read);
+            let write = convert(&self.write);
+            let misc = total - (filter + union + list + records + sort + read + write);
 
-        writeln!(out, "{} {} {n} {nc:5.1} {m} {mc:5.1} {h}", k.0, k.1)?;
+            println!("filter:  {:5.2}%", filter / total * 100.0);
+            println!("union:   {:5.2}%", union / total * 100.0);
+            println!("list:    {:5.2}%", list / total * 100.0);
+            println!("records: {:5.2}%", records / total * 100.0);
+            println!("sort:    {:5.2}%", sort / total * 100.0);
+            println!("read:    {:5.2}%", read / total * 100.0);
+            println!("write:   {:5.2}%", write / total * 100.0);
+            println!("misc:    {:5.2}%", misc / total * 100.0);
+        }
+    }
+
+    let times: Arc<Times> = Arc::default();
+
+    type Handles = Arc<HashMap<String, Mutex<PathBuf>>>;
+    let handles: Handles = Arc::new(
+        queries
+            .into_iter()
+            .map(|query| {
+                let path = args.out_path.join(format!("{query}.tbl"));
+                let mut file = File::create(&path)
+                    .unwrap_or_else(|e| panic!("failed to create file: {path:?}\n\terror: {e:?}"));
+
+                let header = format!(
+                    "{:^10}|{:^19}|{:^5}|{:^5}|{:^8}|{:^5}|{:^5}|{:^8}|{:^5}|{:^8}",
+                    "query",
+                    "target",
+                    "n cut",
+                    "n sc",
+                    "n Eval",
+                    "m cut",
+                    "m sc",
+                    "m Eval",
+                    "h sc",
+                    "h Eval",
+                );
+
+                writeln!(file, "{header}").unwrap();
+                writeln!(file, "{}", "-".repeat(header.len())).unwrap();
+
+                (query.clone(), Mutex::new(path))
+            })
+            .collect(),
+    );
+
+    // ---
+
+    #[derive(Default)]
+    struct Record {
+        query: String,
+        target: String,
+        nail_cutoff: f32,
+        nail_score: Option<f32>,
+        nail_e_value: Option<f64>,
+        mmseqs_cutoff: f32,
+        mmseqs_score: Option<f32>,
+        mmseqs_e_value: Option<f64>,
+        hmmer_score: Option<f32>,
+        hmmer_e_value: Option<f64>,
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn process(
+        nail_path: impl AsRef<Path>,
+        mmseqs_path: impl AsRef<Path>,
+        hmmer_path: impl AsRef<Path>,
+        nail_cutoffs: &util::Cutoffs,
+        mmseqs_cutoffs: &util::Cutoffs,
+        c: usize,
+        handles: Handles,
+        times: Arc<Times>,
+    ) -> anyhow::Result<()> {
+        let start = Instant::now();
+
+        // ---
+        let now = Instant::now();
+
+        let nail_map = HitTable::from_path::<_, NailTable>(nail_path)?.to_map();
+        let mmseqs_map = HitTable::from_path::<_, BlastTable>(mmseqs_path)?.to_map();
+        let hmmer_map = HitTable::from_path::<_, HmmerTable>(hmmer_path)?.to_map();
+
+        times.read.fetch_add(
+            now.elapsed().as_millis() as usize,
+            std::sync::atomic::Ordering::Relaxed,
+        );
+
+        // ---
+        let now = Instant::now();
+
+        let mut nail_passed = nail_map
+            .iter()
+            .filter(|((q, _), h)| {
+                let cutoff = nail_cutoffs.get(q).expect("no nail cutoff for query");
+                h.score > cutoff[c]
+            })
+            .map(|(k, _)| k)
+            .collect::<HashSet<_>>();
+
+        let mmseqs_passed = mmseqs_map
+            .iter()
+            .filter(|((q, _), h)| {
+                let cutoff = mmseqs_cutoffs.get(q).expect("no mmseqs cutoff for query");
+                h.score > cutoff[c]
+            })
+            .map(|(k, _)| k)
+            .collect::<HashSet<_>>();
+
+        let hmmer_passed = hmmer_map
+            .iter()
+            .filter(|((q, _), h)| {
+                let cutoff = nail_cutoffs.get(q).expect("no nail cutoff for query");
+                h.score > cutoff[c]
+            })
+            .map(|(k, _)| k)
+            .collect::<HashSet<_>>();
+
+        times.filter.fetch_add(
+            now.elapsed().as_millis() as usize,
+            std::sync::atomic::Ordering::Relaxed,
+        );
+
+        // ---
+        let now = Instant::now();
+
+        nail_passed.extend(mmseqs_passed);
+        nail_passed.extend(hmmer_passed);
+        let passed = nail_passed.into_iter().collect::<Vec<_>>();
+
+        times.union.fetch_add(
+            now.elapsed().as_millis() as usize,
+            std::sync::atomic::Ordering::Relaxed,
+        );
+
+        // ---
+        let now = Instant::now();
+
+        let mut records_by_query: HashMap<String, Vec<Record>> = HashMap::new();
+        for k in passed.into_iter() {
+            let query = &k.0;
+            let target = &k.1;
+            let mut rec = Record {
+                query: query.clone(),
+                target: target.clone(),
+                nail_cutoff: nail_cutoffs.get(query).expect("no nail cutoff for query")[c],
+                mmseqs_cutoff: mmseqs_cutoffs
+                    .get(query)
+                    .expect("no mmseqs cutoff for query")[c],
+                ..Default::default()
+            };
+
+            if let Some(h) = nail_map.get(k) {
+                rec.nail_score = Some(h.score);
+                rec.nail_e_value = Some(h.e_value);
+            }
+
+            if let Some(h) = mmseqs_map.get(k) {
+                rec.mmseqs_score = Some(h.score);
+                rec.mmseqs_e_value = Some(h.e_value);
+            }
+
+            if let Some(h) = hmmer_map.get(k) {
+                rec.hmmer_score = Some(h.score);
+                rec.hmmer_e_value = Some(h.e_value);
+            }
+
+            records_by_query.entry(query.clone()).or_default().push(rec);
+        }
+
+        times.records.fetch_add(
+            now.elapsed().as_millis() as usize,
+            std::sync::atomic::Ordering::Relaxed,
+        );
+
+        // ---
+        let now = Instant::now();
+
+        records_by_query.values_mut().for_each(|recs| {
+            recs.sort_by(|a, b| {
+                if let (Some(sa), Some(sb)) = (a.hmmer_score, b.hmmer_score) {
+                    sa.partial_cmp(&sb).unwrap()
+                } else if let (Some(_), None) = (a.hmmer_score, b.hmmer_score) {
+                    std::cmp::Ordering::Less
+                } else if let (None, Some(_)) = (a.hmmer_score, b.hmmer_score) {
+                    std::cmp::Ordering::Greater
+                } else if let (Some(sa), Some(sb)) = (a.nail_score, b.nail_score) {
+                    sa.partial_cmp(&sb).unwrap()
+                } else if let (Some(_), None) = (a.nail_score, b.nail_score) {
+                    std::cmp::Ordering::Less
+                } else if let (None, Some(_)) = (a.nail_score, b.nail_score) {
+                    std::cmp::Ordering::Greater
+                } else if let (Some(sa), Some(sb)) = (a.mmseqs_score, b.mmseqs_score) {
+                    sa.partial_cmp(&sb).unwrap()
+                } else if let (Some(_), None) = (a.mmseqs_score, b.mmseqs_score) {
+                    std::cmp::Ordering::Less
+                } else if let (None, Some(_)) = (a.mmseqs_score, b.mmseqs_score) {
+                    std::cmp::Ordering::Greater
+                } else {
+                    std::cmp::Ordering::Less
+                }
+            })
+        });
+
+        times.sort.fetch_add(
+            now.elapsed().as_millis() as usize,
+            std::sync::atomic::Ordering::Relaxed,
+        );
+
+        let mut buf: Vec<u8> = vec![];
+        let mut remove: Vec<String> = vec![];
+        while !records_by_query.is_empty() {
+            remove.clear();
+            for (query, records) in records_by_query.iter() {
+                buf.clear();
+                match handles
+                    .get(query)
+                    .unwrap_or_else(|| panic!("failed to retrive file handle for query: {query}"))
+                    .try_lock()
+                {
+                    Ok(guard) => {
+                        let now = Instant::now();
+
+                        let mut file = OpenOptions::new()
+                            .create(true)
+                            .append(true)
+                            .open(guard.clone())?;
+
+                        for rec in records {
+                            writeln!(
+                                buf,
+                                "{:10} {:19} {} {} {} {} {} {} {} {}",
+                                rec.query,
+                                rec.target,
+                                util::score_fmt(Some(rec.nail_cutoff), 5),
+                                util::score_fmt(rec.nail_score, 5),
+                                util::p_value_fmt(rec.nail_e_value, 8),
+                                util::score_fmt(Some(rec.mmseqs_cutoff), 5),
+                                util::score_fmt(rec.mmseqs_score, 5),
+                                util::p_value_fmt(rec.mmseqs_e_value, 8),
+                                util::score_fmt(rec.hmmer_score, 5),
+                                util::p_value_fmt(rec.hmmer_e_value, 8),
+                            )
+                            .expect("failed to write record");
+                        }
+
+                        file.write_all(&buf)
+                            .context("failed to write record buffer to file")?;
+
+                        times.write.fetch_add(
+                            now.elapsed().as_millis() as usize,
+                            std::sync::atomic::Ordering::Relaxed,
+                        );
+
+                        remove.push(query.clone());
+                    }
+                    Err(_) => continue,
+                }
+            }
+
+            remove.iter().try_for_each(|q| -> anyhow::Result<()> {
+                records_by_query
+                    .remove(q)
+                    .context("tried to remove a query twice")?;
+                Ok(())
+            })?;
+        }
+
+        times.total.fetch_add(
+            start.elapsed().as_millis() as usize,
+            std::sync::atomic::Ordering::Relaxed,
+        );
+
+        Ok(())
+    }
+
+    // ---
+
+    if args.dir {
+        let tbl_indices =
+            util::parse_table_indices(&args.nail_path).context("failed to parse table indices")?;
+
+        tbl_indices
+            .par_iter()
+            .panic_fuse()
+            .try_for_each(|idx| -> anyhow::Result<()> {
+                process(
+                    args.nail_path.join(format!("nail.{idx}.prf.tbl")),
+                    args.mmseqs_path.join(format!("mmseqs.{idx}.prf.tbl")),
+                    args.hmmer_path.join(format!("hmmer.{idx}.prf.tbl")),
+                    &nail_cutoffs,
+                    &mmseqs_cutoffs,
+                    args.c,
+                    handles.clone(),
+                    times.clone(),
+                )?;
+                Ok(())
+            })?;
+    } else {
+        process(
+            args.nail_path,
+            args.mmseqs_path,
+            args.hmmer_path,
+            &nail_cutoffs,
+            &mmseqs_cutoffs,
+            args.c,
+            handles,
+            times.clone(),
+        )?;
     }
 
     println!(
         "{} took {:.2}s",
-        args.out_tbl_path.to_string_lossy(),
+        args.out_path.to_string_lossy(),
         start.elapsed().as_secs_f32()
     );
+
+    if args.print_times {
+        times.print();
+    }
 
     Ok(())
 }
@@ -969,13 +1259,13 @@ struct StandardArgs {
 }
 
 fn standard(args: StandardArgs) -> anyhow::Result<()> {
-    let start = std::time::Instant::now();
+    let start = Instant::now();
 
-    set_threads(args.num_threads)?;
+    util::set_threads(args.num_threads)?;
 
-    let z = target_db_size(args.target_path)?;
+    let z = util::target_db_size(args.target_path)?;
 
-    let hmms = parse_hmms(args.query_path)?;
+    let hmms = util::parse_hmms(args.query_path)?;
 
     let nail_tbl = HitTable::from_path::<_, NailTable>(args.nail_tbl_path)?;
     let hmmer_tbl = HitTable::from_path::<_, HmmerTable>(args.hmmer_tbl_path)?;
@@ -1060,21 +1350,21 @@ fn standard(args: StandardArgs) -> anyhow::Result<()> {
 
     for h in nail_tbl.hits {
         if let Some(r) = records_by_pair.get_mut(&(h.query, h.target)) {
-            r.nail_score = Some(h.score as f32);
+            r.nail_score = Some(h.score);
             r.nail_p_value = Some(h.e_value / z);
         }
     }
 
     for h in hmmer_tbl.hits {
         if let Some(r) = records_by_pair.get_mut(&(h.query, h.target)) {
-            r.hmmer_score = Some(h.score as f32);
+            r.hmmer_score = Some(h.score);
             r.hmmer_p_value = Some(h.e_value / z);
         }
     }
 
     for h in mmseqs_tbl.hits {
         if let Some(r) = records_by_pair.get_mut(&(h.query, h.target)) {
-            r.mmseqs_score = Some(h.score as f32);
+            r.mmseqs_score = Some(h.score);
             r.mmseqs_p_value = Some(h.e_value / z);
         }
     }
@@ -1218,19 +1508,19 @@ fn standard(args: StandardArgs) -> anyhow::Result<()> {
                 "{:W1$} {:W2$} {} {} {} {} {} {} {} {} {} {} {} {} {} {}",
                 r.query,
                 r.target,
-                score_fmt(Some(r.ga_score), w[0]),
-                p_value_fmt(Some(r.ga_p_value), w[1]),
-                score_fmt(r.nail_cloud_score, w[2]),
-                p_value_fmt(r.nail_cloud_p_value, w[3]),
-                score_fmt(r.nail_score, w[4]),
-                p_value_fmt(r.nail_p_value, w[5]),
-                score_fmt(r.mmseqs_score, w[6]),
-                p_value_fmt(r.mmseqs_p_value, w[7]),
-                score_fmt(r.hmmer_score, w[8]),
-                p_value_fmt(r.hmmer_p_value, w[9]),
-                score_fmt(r.dom_score_sum, w[10]),
-                score_fmt(r.dom_score_max, w[11]),
-                int_fmt(r.dom_sig_cnt, w[12]),
+                util::score_fmt(Some(r.ga_score), w[0]),
+                util::p_value_fmt(Some(r.ga_p_value), w[1]),
+                util::score_fmt(r.nail_cloud_score, w[2]),
+                util::p_value_fmt(r.nail_cloud_p_value, w[3]),
+                util::score_fmt(r.nail_score, w[4]),
+                util::p_value_fmt(r.nail_p_value, w[5]),
+                util::score_fmt(r.mmseqs_score, w[6]),
+                util::p_value_fmt(r.mmseqs_p_value, w[7]),
+                util::score_fmt(r.hmmer_score, w[8]),
+                util::p_value_fmt(r.hmmer_p_value, w[9]),
+                util::score_fmt(r.dom_score_sum, w[10]),
+                util::score_fmt(r.dom_score_max, w[11]),
+                util::int_fmt(r.dom_sig_cnt, w[12]),
                 match r.dom_scores {
                     Some(ref v) => v
                         .iter()

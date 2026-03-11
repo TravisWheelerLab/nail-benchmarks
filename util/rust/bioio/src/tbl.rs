@@ -196,11 +196,11 @@ pub mod hmmer {
 pub struct Hit {
     pub query: String,
     pub target: String,
-    pub query_start: Option<usize>,
-    pub query_end: Option<usize>,
-    pub target_start: Option<usize>,
-    pub target_end: Option<usize>,
-    pub score: f64,
+    // pub query_start: Option<usize>,
+    // pub query_end: Option<usize>,
+    // pub target_start: Option<usize>,
+    // pub target_end: Option<usize>,
+    pub score: f32,
     pub e_value: f64,
 }
 
@@ -316,10 +316,10 @@ impl HitTable {
             hits.push(Hit {
                 query: tokens[C::QUERY].to_string(),
                 target: tokens[C::TARGET].to_string(),
-                query_start: C::Q_START.map(|i| tokens[i].parse::<usize>()).transpose()?,
-                query_end: C::Q_END.map(|i| tokens[i].parse::<usize>()).transpose()?,
-                target_start: C::T_START.map(|i| tokens[i].parse::<usize>()).transpose()?,
-                target_end: C::T_END.map(|i| tokens[i].parse::<usize>()).transpose()?,
+                // query_start: C::Q_START.map(|i| tokens[i].parse::<usize>()).transpose()?,
+                // query_end: C::Q_END.map(|i| tokens[i].parse::<usize>()).transpose()?,
+                // target_start: C::T_START.map(|i| tokens[i].parse::<usize>()).transpose()?,
+                // target_end: C::T_END.map(|i| tokens[i].parse::<usize>()).transpose()?,
                 score: tokens[C::SCORE].parse()?,
                 e_value: tokens[C::E_VALUE].parse()?,
             })
