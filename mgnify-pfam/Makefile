@@ -15,7 +15,7 @@ SPLIT  := $(FAB)
 #############
 
 N_SPLIT := 1000
-CUTOFFS := ./cutoffs.txt
+CUTOFFS := cutoffs/
 
 # source data
 SRC_STO ?= $(DATA)/pfam.sto
@@ -106,59 +106,78 @@ run-rev-params:
 
 #############
 
-learn-cutoffs: mgy-parse
-	@$(PARSE) cutoffs \
+LEARN_CUTOFFS := numactl --cpunodebind=1 --membind=1 $(PARSE) learn-cutoffs \
 		/data/results-mgy/rev/nail/ \
 		/data/results-mgy/rev/mmseqs/ \
 		$(SRC_HMM) \
-		$(CUTOFFS) \
-		-t 48
+		-t $(THREADS) \
 
-parse-10: mgy-parse
-	@echo "parsing benchmark-all (10)..."
-	$(eval DIR:= benchmark-all)
-	$(eval RESULTS:= $(DIR)/results/10)
-	$(eval ANALYSIS:= $(DIR)/analysis)
-	@numactl --cpunodebind=1 --membind=1 $(PARSE) other \
- 		--dir \
-		-t 10 \
-		--print-times \
-		$(SRC_HMM) \
-		$(CUTOFFS) \
-		$(RESULTS)/nail/ \
-		$(RESULTS)/mmseqs/ \
-		$(RESULTS)/hmmer/ \
-		$(ANALYSIS)
+learn-cutoffs-1: mgy-parse
+	@$(LEARN_CUTOFFS) \
+		-n 1 \
+		-o $(CUTOFFS)/cutoffs.1.txt
 
-parse-100: mgy-parse
-	@echo "parsing benchmark-all (100)..."
-	$(eval DIR:= benchmark-all)
-	$(eval RESULTS:= $(DIR)/results/100)
-	$(eval ANALYSIS:= $(DIR)/analysis)
-	@numactl --cpunodebind=1 --membind=1 $(PARSE) other \
- 		--dir \
-		-t 48 \
-		--print-times \
-		$(SRC_HMM) \
-		$(CUTOFFS) \
-		$(RESULTS)/nail/ \
-		$(RESULTS)/mmseqs/ \
-		$(RESULTS)/hmmer/ \
-		$(ANALYSIS)
+learn-cutoffs-10: mgy-parse
+	@$(LEARN_CUTOFFS) \
+		-n 10 \
+		-o $(CUTOFFS)/cutoffs.10.txt
 
-parse-one: mgy-parse
-	@echo parsing benchmark-one...
-	$(eval DIR:= benchmark-one)
-	$(eval RESULTS:= $(DIR)/results)
-	$(eval ANALYSIS:= $(DIR)/analysis)
-	@mkdir -p $(ANALYSIS)
-	@numactl --cpunodebind=1 --membind=1 $(PARSE) other \
-		$(SRC_HMM) \
-		$(CUTOFFS) \
-		$(RESULTS)/nail.prf.tbl \
-		$(RESULTS)/mmseqs.prf.tbl \
-		$(RESULTS)/hmmer.prf.tbl \
-		$(ANALYSIS)
+learn-cutoffs-50: mgy-parse
+	@$(LEARN_CUTOFFS) \
+		-n 50 \
+		-o $(CUTOFFS)/cutoffs.50.txt
+
+learn-cutoffs-100: mgy-parse
+	@$(LEARN_CUTOFFS) \
+		-n 100 \
+		-o $(CUTOFFS)/cutoffs.100.txt
+
+learn-cutoffs-1000: mgy-parse
+	@$(LEARN_CUTOFFS) \
+		-o $(CUTOFFS)/cutoffs.1000.txt
+
+learn-cutoffs-all:
+	@$(MAKE) learn-cutoffs-1    THREADS=$(THREADS)
+	@$(MAKE) learn-cutoffs-10   THREADS=$(THREADS)
+	@$(MAKE) learn-cutoffs-50   THREADS=$(THREADS)
+	@$(MAKE) learn-cutoffs-100  THREADS=$(THREADS)
+	@$(MAKE) learn-cutoffs-1000 THREADS=$(THREADS)
+
+#############
+
+RECALL := numactl --cpunodebind=1 --membind=1 \
+		  $(PARSE) recall \
+		  --query-path $(SRC_HMM) \
+		  --cutoffs-path $(CUTOFFS)/cutoffs.1000.txt \
+		  --nail-path benchmark-all/results/nail \
+		  --mmseqs-path benchmark-all/results/mmseqs \
+		  --hmmer-path benchmark-all/results/hmmer \
+		  --dir \
+		  -t $(THREADS)
+
+recall-1: mgy-parse
+	@echo "parsing benchmark-all (0.1%)..."
+	@$(RECALL) \
+		-n 1 \
+		-o benchmark-all/analysis/1
+		
+recall-10: mgy-parse
+	@echo "parsing benchmark-all (1%)..."
+	@$(RECALL) \
+		-n 10 \
+		-o benchmark-all/analysis/10
+
+recall-100: mgy-parse
+	@echo "parsing benchmark-all (10%)..."
+	@$(RECALL) \
+		-n 100 \
+		-o benchmark-all/analysis/100
+
+recall-1000: mgy-parse
+	@echo "parsing benchmark-all (100%)..."
+	@$(RECALL) \
+		-n 1000 \
+		-o benchmark-all/analysis/1000
 		
 #############
 

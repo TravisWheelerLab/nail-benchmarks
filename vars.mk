@@ -15,11 +15,11 @@ BINS := $(patsubst %.rs,%,$(notdir $(wildcard $(RUST)/bm/src/bin/*.rs)))
 $(foreach b,$(BINS),$(eval $(shell echo $(b) | tr a-z- A-Z_) := $(RUST_BIN)/$(b)))
 
 # create a target for every binary
-$(BINS): %: $(RUST_BIN)/% $(BIOIO_SRC)
+$(BINS): %: $(RUST_BIN)/% 
 	@:
 
 # actual binary builds
-$(RUST_BIN)/%: $(RUST)/bm/src/bin/%.rs
+$(RUST_BIN)/%: $(RUST)/bm/src/bin/%.rs $(BIOIO_SRC)
 	@cd $(RUST) && cargo build --release --bin $*
 
 FASTA_BALANCE := $(UTIL)/scripts/fastabalance.py

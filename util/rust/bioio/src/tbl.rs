@@ -119,23 +119,33 @@ pub mod hmmer {
     }
 
     impl HmmerDomainTable {
-        pub fn from_path<P: AsRef<Path>>(path: P) -> anyhow::Result<Self> {
+        pub fn from_path<P, F>(path: P, filter: F) -> anyhow::Result<Self>
+        where
+            P: AsRef<Path>,
+            F: Fn(&(String, String)) -> bool,
+        {
             let path = path.as_ref();
+
             let file = File::open(path)?;
             let name = path
                 .file_stem()
                 .and_then(|s| s.to_str())
                 .context("invalid path")?;
 
-            Self::parse::<File>(file, name)
+            Self::parse::<File, F>(file, name, filter)
         }
 
-        pub fn parse<R: Read>(buf: R, name: &str) -> anyhow::Result<Self> {
+        pub fn parse<R, F>(buf: R, name: &str, filter: F) -> anyhow::Result<Self>
+        where
+            R: Read,
+            F: Fn(&(String, String)) -> bool,
+        {
             let reader = BufReader::new(buf);
 
             let mut hits: HashMap<(String, String), HmmerHit> = HashMap::new();
             for line in reader.lines() {
                 let line = line.unwrap_or_default();
+
                 if line.starts_with('#') {
                     continue;
                 }
@@ -144,6 +154,11 @@ pub mod hmmer {
 
                 let query = tokens[3].to_string();
                 let target = tokens[0].to_string();
+                let key = (query, target);
+
+                if !filter(&key) {
+                    continue;
+                }
 
                 let e_value = tokens[6].parse::<f64>()?;
                 let score = tokens[7].parse::<f32>()?;
@@ -166,14 +181,13 @@ pub mod hmmer {
                     e_value: dom_e_value,
                 };
 
-                let k = (query, target);
-                match hits.get_mut(&k) {
+                match hits.get_mut(&key) {
                     Some(hit) => {
                         hit.domains.push(dom);
                     }
                     None => {
                         hits.insert(
-                            (k.0, k.1),
+                            (key.0, key.1),
                             HmmerHit {
                                 score,
                                 e_value,
@@ -323,6 +337,57 @@ impl HitTable {
                 score: tokens[C::SCORE].parse()?,
                 e_value: tokens[C::E_VALUE].parse()?,
             })
+        }
+
+        Ok(Self {
+            name: name.to_string(),
+            hits,
+        })
+    }
+
+    pub fn from_path_filtered<P, C, F>(path: P, f: F) -> anyhow::Result<Self>
+    where
+        P: AsRef<Path>,
+        C: HitColumns,
+        F: Fn(&Hit) -> bool,
+    {
+        let path = path.as_ref();
+        let file =
+            File::open(path).with_context(|| format!("failed to open hit table: {path:?}"))?;
+        let name = path
+            .file_stem()
+            .and_then(|s| s.to_str())
+            .context("invalid path")?;
+
+        Self::parse_filtered::<File, C, F>(file, f, name)
+    }
+
+    pub fn parse_filtered<R, C, F>(buf: R, f: F, name: &str) -> anyhow::Result<Self>
+    where
+        R: Read,
+        C: HitColumns,
+        F: Fn(&Hit) -> bool,
+    {
+        let reader = BufReader::new(buf);
+
+        let mut hits = vec![];
+        for line in reader.lines() {
+            let line = line.unwrap_or_default();
+            if line.starts_with('#') || line.is_empty() {
+                continue;
+            }
+
+            let tokens = line.split_whitespace().collect::<Vec<_>>();
+            let hit = Hit {
+                query: tokens[C::QUERY].to_string(),
+                target: tokens[C::TARGET].to_string(),
+                score: tokens[C::SCORE].parse()?,
+                e_value: tokens[C::E_VALUE].parse()?,
+            };
+
+            if f(&hit) {
+                hits.push(hit);
+            }
         }
 
         Ok(Self {
