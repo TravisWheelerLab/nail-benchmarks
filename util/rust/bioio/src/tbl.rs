@@ -402,4 +402,20 @@ impl HitTable {
             .map(|h| ((h.query.clone(), h.target.clone()), h))
             .collect()
     }
+
+    pub fn to_query_map(self) -> HashMap<String, Vec<Hit>> {
+        let mut map: HashMap<String, Vec<Hit>> = HashMap::new();
+        self.hits
+            .into_iter()
+            .for_each(|h| map.entry(h.query.clone()).or_default().push(h));
+        map
+    }
+
+    pub fn to_target_map(self) -> HashMap<String, Vec<Hit>> {
+        let mut map: HashMap<String, Vec<Hit>> = HashMap::new();
+        self.hits
+            .into_iter()
+            .for_each(|h| map.entry(h.target.clone()).or_default().push(h));
+        map
+    }
 }

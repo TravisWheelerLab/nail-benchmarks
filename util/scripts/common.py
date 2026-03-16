@@ -50,14 +50,20 @@ class HmmIndex:
         self.path = path
         self.line_offsets = index_lines(path)
         self.ranges = []
+        name = None
         start = 0
         length = 0
 
         with open(path) as f:
             for (i, line) in enumerate(f):
                 if "//" in line:
-                    self.ranges.append((start, i, length))
+                    self.ranges.append((start, i, length, name))
+                    name = None
+                    length = 0
                     start = i + 1
+
+                elif line.startswith("NAME"):
+                    name = line.split()[1]
                 elif "LENG" in line:
                     length = int(line.split()[1])
 

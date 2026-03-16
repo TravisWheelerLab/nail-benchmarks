@@ -106,6 +106,36 @@ run-rev-params:
 
 #############
 
+CHECK_REV := numactl --cpunodebind=1 --membind=1 $(PARSE) check-rev \
+		--nail-dir   benchmark-all/results/rev/nail/ \
+		--mmseqs-dir benchmark-all/results/rev/mmseqs/ \
+		--target-dir benchmark-all/mgy/ \
+		--query-path $(SRC_HMM) \
+		-t $(THREADS) \
+
+check-rev-1: mgy-parse
+	@$(CHECK_REV) \
+		-n 1 \
+		-o $(CUTOFFS)/1
+
+check-rev-10: mgy-parse
+	@$(CHECK_REV) \
+		-n 10 \
+		-o $(CUTOFFS)/10
+
+check-rev-100: mgy-parse
+	@$(CHECK_REV) \
+		-n 100 \
+		-o $(CUTOFFS)/100
+
+check-rev-1000: mgy-parse
+	@$(CHECK_REV) \
+		-n 1000 \
+		-o $(CUTOFFS)/1000
+
+
+#############
+
 LEARN_CUTOFFS := numactl --cpunodebind=1 --membind=1 $(PARSE) learn-cutoffs \
 		/data/results-mgy/rev/nail/ \
 		/data/results-mgy/rev/mmseqs/ \
