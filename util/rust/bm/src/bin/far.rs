@@ -24,7 +24,7 @@ fn main() -> anyhow::Result<()> {
     let out_path = if let Some(path) = args.out_path {
         path
     } else {
-        args.fa_path.with_extension(".rev.fa")
+        args.fa_path.with_extension("rev.fa")
     };
 
     let mut out = BufWriter::new(File::create(out_path)?);

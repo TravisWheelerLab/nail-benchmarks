@@ -11,6 +11,7 @@ include $(MAKEFILE_DIR)../vars.mk
 
 PARSE  := $(MGY_PARSE)
 SPLIT  := $(FAB)
+REV    := $(FAR)
 
 #############
 
@@ -133,6 +134,17 @@ check-rev-1000: mgy-parse
 		-n 1000 \
 		-o $(CUTOFFS)/1000
 
+reverse-decoys: far
+	@parallel '$(REV) {} -o $(CUTOFFS)/decoys-rev/{/.}.rev.fa' ::: $(CUTOFFS)/decoys/*.fa
+
+decoys:
+	@./scripts/run-decoys.sh \
+		--numa_node 1 \
+		--threads $(THREADS) \
+		--tmp $(CUTOFFS)/tmp/ \
+		--results $(CUTOFFS)/results/ \
+		cutoffs/
+		
 
 #############
 

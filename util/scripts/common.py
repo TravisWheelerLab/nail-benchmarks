@@ -35,7 +35,9 @@ class FastaIndex:
     def read_lines(self, start, end):
         with open(self.path, 'rb') as f:
             f.seek(self.line_offsets[start])
-            return "".join([f.readline().decode() for _ in range(end - start + 1)])
+            return "".join(
+                [f.readline().decode() for _ in range(end - start + 1)]
+            )
 
     def split(self, n):
         splits = [[] for _ in range(n)]
@@ -73,7 +75,9 @@ class HmmIndex:
     def read_lines(self, start, end):
         with open(self.path, 'rb') as f:
             f.seek(self.line_offsets[start])
-            return "".join([f.readline().decode() for _ in range(end - start + 1)])
+            return "".join(
+                [f.readline().decode() for _ in range(end - start + 1)]
+            )
 
     def split(self, n):
         splits = [[] for _ in range(n)]
@@ -81,3 +85,32 @@ class HmmIndex:
             splits[i % n].append(self.ranges.pop())
 
         return splits
+
+
+class StockholmIndex:
+    def __init__(self, path):
+        self.path = path
+        self.line_offsets = index_lines(path)
+        self.ranges = []
+        name = None
+        start = 0
+
+        with open(path, encoding="utf-8", errors="ignore") as f:
+            for (i, line) in enumerate(f):
+                if "//" in line:
+                    self.ranges.append((start, i, name))
+                    name = None
+                    start = i + 1
+
+                elif line.startswith("#=GF ID"):
+                    name = line.split()[2]
+
+    def len(self):
+        return len(self.ranges)
+
+    def read_lines(self, start, end):
+        with open(self.path, 'rb') as f:
+            f.seek(self.line_offsets[start])
+            return "".join(
+                [f.readline().decode() for _ in range(end - start + 1)]
+            )

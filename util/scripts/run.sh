@@ -83,7 +83,7 @@ set_numa_prefix() {
 set_tool_vars() {
     local SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 
-    local TOOL_BIN="$(realpath "$SCRIPT_DIR/../../tools/bin")"
+    TOOL_BIN="$(realpath "$SCRIPT_DIR/../../tools/bin")"
     NAIL="$NUMA_PREFIX $TOOL_BIN/nail"
     MMSEQS="$NUMA_PREFIX $TOOL_BIN/mmseqs"
     BLASTP="$NUMA_PREFIX $TOOL_BIN/blastp"
