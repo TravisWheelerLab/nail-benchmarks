@@ -14,7 +14,7 @@ def write(hmm_path, out_dir, splits):
 
     for (spl_idx, spl) in enumerate(splits):
         with open(f"{out_dir}/{spl_idx}{ext}", "w") as f:
-            for (start, end, _) in spl:
+            for (start, end, _, _) in spl:
                 for line in hmm_lines[start:end + 1]:
                     f.write(line)
 
