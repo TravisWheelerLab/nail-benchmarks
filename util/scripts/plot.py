@@ -38,25 +38,71 @@ TOOL_COLORS = {
 
 FLOAT_RE = r'\s*(-?\d+(?:\.\d+)?)\s*'
 
-PREFIXES = {
-    "blast.prf" : ("psiblast", "default"),
-    "blast.seq" : ("blastp", "default"),
-    "hmmer.seq" : ("phmmer", "default"),
-    "hmmer.prf" : ("hmmsearch", "default"),
-    "nail-s5.7-ms2000.prf" : ("nail (prf)", "-s 5.7"),
-    "nail-s7.5-ms2000.prf" : ("nail (prf)", "-s 7.5"),
-    "nail-s10.0-ms2000.prf" : ("nail (prf)", "-s 10.0 (default)"),
-    "nail-s12.0-ms2000.prf" : ("nail (prf)", "-s 12.0"),
-    "mmseqs-s5.7.prf" : ("mmseqs (prf)", "-s 5.7 (default)"),
-    "mmseqs-s7.5.prf" : ("mmseqs (prf)", "-s 7.5 (sensitive)"),
-    "mmseqs-s10.0.prf" : ("mmseqs (prf)", "-s 10.0"),
-    "mmseqs-s12.0.prf" : ("mmseqs (prf)", "-s 12.0"),
-    "mmseqs-s5.7.seq" : ("mmseqs (seq)", "-s 5.7 (default)"),
-    "mmseqs-s7.5.seq" : ("mmseqs (seq)", "-s 7.5 (sensitive)"),
-    "mmseqs-s10.0.seq" : ("mmseqs (seq)", "-s 10.0"),
-    "mmseqs-s12.0.seq" : ("mmseqs (seq)", "-s 12.0"),
-}
+def prefix_label(prefix: str, exclude=[], reformat=[]) -> str:
+    rest, search_type = prefix.rsplit(".", 1)
+    tokens = rest.split("-")
 
+    tool = tokens[0]
+    args = tokens[1:]
+
+    args = []
+    for arg in tokens[1:]:
+        if any([e in arg for e in exclude]):
+            continue
+  
+        args.append(arg)
+
+    nail_params = {
+        "s4.0": "--mmseqs-s 4.0",
+        "s5.7": "--mmseqs-s 5.7",
+        "s7.5": "--mmseqs-s 7.5",
+        "s10.0": "--mmseqs-s 10.0 (default)",
+        "s12.0": "--mmseqs-s 12.0",
+        "s14.0": "--mmseqs-s 14.0",
+        "ms2000": "--mmseqs-max-seqs 2000",
+        "prog": "--prog-seed",
+    }
+
+    mmseqs_params = {
+        "s4.0": "-s 4.0 (fast)",
+        "s5.7": "-s 5.7 (default)",
+        "s7.5": "-s 7.5 (sensitive)",
+        "s10.0": "-s 10.0",
+        "s12.0": "-s 12.0",
+        "s14.0": "-s 14.0",
+        "ms300": "--max-seqs 300 (default)",
+        "ms2000": "--max-seqs 2000",
+    }
+
+    ret_args = []
+
+    if tool == "hmmer":
+        if search_type == "prf":
+            tool = "hmmsearch (profile)"
+        elif search_type == "seq":
+            tool = "phmmer (sequence)"
+    elif tool == "nail":
+        ret_args = [nail_params[p] for p in args]
+        if search_type == "prf":
+            tool = "nail (profile)"
+        elif search_type == "seq":
+            tool = "nail (sequence)"
+    elif tool == "mmseqs":
+        ret_args = [mmseqs_params[p] for p in args]
+        if search_type == "prf":
+            tool = "mmseqs (profile)"
+        elif search_type == "seq":
+            tool = "mmseqs (sequence)"
+    elif tool == "blast":
+        if search_type == "prf":
+            tool = "psiblast (profile)"
+        elif search_type == "seq":
+            tool = "blastp (sequence)"
+
+    for (a, b) in reformat:
+        ret_args = [arg.replace(a,b) for arg in ret_args]
+
+    return tool, ret_args
 
 def axes():
     scale = 1.75

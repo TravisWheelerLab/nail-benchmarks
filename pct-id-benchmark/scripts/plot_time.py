@@ -2,30 +2,43 @@
 import argparse
 from pathlib import Path
 
-from plot import axes, Point, TOOL_COLORS, PREFIXES
+from plot import axes, Point, TOOL_COLORS, prefix_label
 
 
 import matplotlib.pyplot as plt
 
+
+
 MMSEQS_SEQ = [
-    "mmseqs-s5.7.seq",
-    "mmseqs-s7.5.seq",
-    "mmseqs-s10.0.seq",
-    "mmseqs-s12.0.seq",
+    "mmseqs-s5.7-ms2000.seq",
+    "mmseqs-s7.5-ms2000.seq",
+    "mmseqs-s10.0-ms2000.seq",
+    "mmseqs-s12.0-ms2000.seq",
+    # "mmseqs-s14.0-ms2000.seq",
 ]
 
 MMSEQS_PRF = [
-    "mmseqs-s5.7.prf",
-    "mmseqs-s7.5.prf",
-    "mmseqs-s10.0.prf",
-    "mmseqs-s12.0.prf",
+    "mmseqs-s5.7-ms2000.prf",
+    "mmseqs-s7.5-ms2000.prf",
+    "mmseqs-s10.0-ms2000.prf",
+    "mmseqs-s12.0-ms2000.prf",
+    "mmseqs-s14.0-ms2000.prf",
+]
+
+NAIL_SEQ = [
+    "nail-s5.7-ms2000.seq",
+    "nail-s7.5-ms2000.seq",
+    "nail-s10.0-ms2000.seq",
+    "nail-s12.0-ms2000.seq",
+    # "nail-s14.0-ms2000.seq",
 ]
 
 NAIL_PRF = [
-    # "nail-s5.7-ms2000.prf",
+    "nail-s5.7-ms2000.prf",
     "nail-s7.5-ms2000.prf",
     "nail-s10.0-ms2000.prf",
     "nail-s12.0-ms2000.prf",
+    "nail-s14.0-ms2000.prf",
 ]
 
 OTHER = [
@@ -37,6 +50,7 @@ OTHER = [
 
 PLOTTED = [
     *OTHER,
+    *NAIL_SEQ,
     *NAIL_PRF,
     *MMSEQS_SEQ,
     *MMSEQS_PRF,
@@ -68,7 +82,9 @@ def nail_plot(pts, label):
     )
 
     for p in pts:
-        (_, args) = PREFIXES[p.prefix]
+        _, args = prefix_label(p.prefix, exclude=["ms"], reformat=[("--mmseqs-s", "-s")])
+        args = " ".join(args)
+        
         plt.text(
             p.x, p.y + 0.005,
             f"{args}",
@@ -102,7 +118,9 @@ def mmseqs_plot(pts, label):
     )
 
     for p in pts:
-        (_, args) = PREFIXES[p.prefix]
+        _, args = prefix_label(p.prefix, exclude=["ms"])
+        args = " ".join(args)
+
         plt.text(
             p.x, p.y + 0.005,
             f"{args}",
@@ -128,6 +146,7 @@ def plot(args):
     points.sort(key=lambda c: c.x, reverse=True)
 
     nail_prf = list(filter(lambda p: p.prefix in NAIL_PRF, points))
+    nail_seq = list(filter(lambda p: p.prefix in NAIL_SEQ, points))
     mmseqs_seq = list(filter(lambda p: p.prefix in MMSEQS_SEQ, points))
     mmseqs_prf = list(filter(lambda p: p.prefix in MMSEQS_PRF, points))
 
@@ -158,7 +177,7 @@ def plot(args):
             s=30,
         )
 
-        (label, args) = PREFIXES[p.prefix]
+        (label, args) = prefix_label(p.prefix, exclude=["ms"])
 
         if p.prefix in OTHER:
             plt.text(
@@ -172,6 +191,7 @@ def plot(args):
     ###
 
     nail_plot(nail_prf, "nail (prf)")
+    nail_plot(nail_seq, "nail (seq)")
     mmseqs_plot(mmseqs_seq, "mmseqs (seq)")
     mmseqs_plot(mmseqs_prf, "mmseqs (prf)")
 

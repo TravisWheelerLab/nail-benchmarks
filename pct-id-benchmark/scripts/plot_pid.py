@@ -2,24 +2,31 @@
 import argparse
 from pathlib import Path
 
-from plot import axes, Curve, COLORS, TOOL_COLORS, PREFIXES
+from plot import axes, Curve, COLORS, TOOL_COLORS, prefix_label
 
 import matplotlib.pyplot as plt
 import numpy as np
 
 
 MMSEQS_SEQ = [
-    # "mmseqs-s5.7.seq",
-    # "mmseqs-s7.5.seq",
-    # "mmseqs-s10.0.seq",
-    "mmseqs-s12.0.seq",
+    # "mmseqs-s5.7-ms2000.seq",
+    # "mmseqs-s7.5-ms2000.seq",
+    # "mmseqs-s10.0-ms2000.seq",
+    "mmseqs-s12.0-ms2000.seq",
 ]
 
 MMSEQS_PRF = [
-    # "mmseqs-s5.7.prf",
-    # "mmseqs-s7.5.prf",
-    # "mmseqs-s10.0.prf",
-    "mmseqs-s12.0.prf",
+    # "mmseqs-s5.7-ms2000.prf",
+    # "mmseqs-s7.5-ms2000.prf",
+    # "mmseqs-s10.0-ms2000.prf",
+    "mmseqs-s12.0-ms2000.prf",
+]
+
+NAIL_SEQ = [
+    # "nail-s5.7-ms2000.seq",
+    # "nail-s7.5-ms2000.seq",
+    # "nail-s10.0-ms2000.seq",
+    "nail-s12.0-ms2000.seq",
 ]
 
 NAIL_PRF = [
@@ -38,6 +45,7 @@ OTHER = [
 
 PLOTTED = [
     *OTHER,
+    *NAIL_SEQ,
     *NAIL_PRF,
     *MMSEQS_SEQ,
     *MMSEQS_PRF,
@@ -75,17 +83,14 @@ def main(args):
     ax.axhline(0.5, color="black", linestyle="--", linewidth=1)
 
     for curve in curves:
+        tool, _params = prefix_label(curve.prefix)
+
         color = TOOL_COLORS[curve.tool]
 
         if "seq" in curve.extra:
             mfc = color
-            label = f"{curve.prefix} seq"
-        elif "prf" in curve.extra:
-            mfc = 'white'
-            label = f"{curve.prefix} prf"
         else:
             mfc = 'white'
-            label = f"{curve.prefix} prf"
 
         ax.plot(
             curve.x, curve.y,
@@ -93,7 +98,7 @@ def main(args):
             marker='o',
             mfc=mfc,
             markersize=5,
-            label=label
+            label=tool
         )
 
     # ax_bins = ax.twinx()
@@ -106,7 +111,7 @@ def main(args):
     #     alpha=0.75,
     #     label="pair count")
 
-    # fig.legend()
+    fig.legend()
 
     plt.savefig(args.out)
 

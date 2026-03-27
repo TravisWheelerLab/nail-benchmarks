@@ -2,7 +2,7 @@
 import argparse
 from pathlib import Path
 
-from plot import axes, Curve, TOOL_COLORS, PREFIXES
+from plot import axes, Curve, TOOL_COLORS, prefix_label
 
 
 import matplotlib.pyplot as plt
@@ -15,17 +15,24 @@ X_MAX = 1.0
 AUC_X_MAX = 1.0
 
 MMSEQS_SEQ = [
-    # "mmseqs-s5.7.seq",
-    # "mmseqs-s7.5.seq",
-    # "mmseqs-s10.0.seq",
-    "mmseqs-s12.0.seq",
+    # "mmseqs-s5.7-ms2000.seq",
+    # "mmseqs-s7.5-ms2000.seq",
+    # "mmseqs-s10.0-ms2000.seq",
+    "mmseqs-s12.0-ms2000.seq",
 ]
 
 MMSEQS_PRF = [
-    # "mmseqs-s5.7.prf",
-    # "mmseqs-s7.5.prf",
-    # "mmseqs-s10.0.prf",
-    "mmseqs-s12.0.prf",
+    # "mmseqs-s5.7-ms2000.prf",
+    # "mmseqs-s7.5-ms2000.prf",
+    # "mmseqs-s10.0-ms2000.prf",
+    "mmseqs-s12.0-ms2000.prf",
+]
+
+NAIL_SEQ = [
+    # "nail-s5.7-ms2000.seq",
+    # "nail-s7.5-ms2000.seq",
+    # "nail-s10.0-ms2000.seq",
+    "nail-s12.0-ms2000.seq",
 ]
 
 NAIL_PRF = [
@@ -44,6 +51,7 @@ OTHER = [
 
 PLOTTED = [
     *OTHER,
+    *NAIL_SEQ,
     *NAIL_PRF,
     *MMSEQS_SEQ,
     *MMSEQS_PRF,
@@ -78,7 +86,7 @@ def main(args):
 
     for curve in curves:
         color = TOOL_COLORS[curve.tool]
-        (label, params) = PREFIXES[curve.prefix]
+        tool, _params = prefix_label(curve.prefix)
 
         ax.plot(
             curve.x, curve.y,
@@ -92,7 +100,7 @@ def main(args):
 
         ax.text(
             X_MIN, y,
-            s=label,
+            s=tool,
             color=color,
             fontsize=8,
             fontweight="bold",
