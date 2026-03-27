@@ -124,6 +124,7 @@ run_nail() {
 
     $TIME_CMD -o $TIME \
         $NAIL search \
+        --mmseqs-path $TOOL_BIN/mmseqs \
         -s \
         -t $THREADS \
         --tmp-dir $TMP \
