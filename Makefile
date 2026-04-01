@@ -48,12 +48,18 @@ SWISSPROT_DIR := $(DATA_DIR)/uniprot_sprot/
 SWISSPROT_FA_GZ := $(SWISSPROT_DIR)/uniprot_sprot.fasta.gz 
 SWISSPROT_FA := $(DATA_DIR)/swissprot.fa
 
+MGY_URL = https://ftp.ebi.ac.uk/pub/databases/metagenomics/peptide_database/2024_04
+MGY_DIR = $(DATA_DIR)/mgnify
+
 .PHONY: none
 none:
 	@true
 
 $(DATA_DIR):
 	@mkdir -p $@
+
+$(MGY_DIR): $(DATA_DIR)
+	@mkdir $(MGY_DIR)
 
 $(SWISSPROT_FA): | $(DATA_DIR)
 	@wget -O $(SWISSPROT_TGZ) $(SWISSPROT_URL)
@@ -67,7 +73,19 @@ $(PFAM_STO): | $(DATA_DIR)
 	@wget -O $(PFAM_GZ) $(PFAM_URL)
 	@gunzip $(PFAM_GZ)
 
-DATA := $(PFAM_STO) $(SWISSPROT_FA)
+mgnify: | $(MGY_DIR)
+	@set -e; \
+	if command -v aria2c >/dev/null 2>&1; then \
+	  for i in $$(seq 1 25); do \
+	    aria2c -x8 -s8 -d $(MGY_DIR) $(MGY_URL)/mgy_proteins_$${i}.fa.gz; \
+	  done; \
+	else \
+	  for i in $$(seq 1 25); do \
+	    wget -O $(MGY_DIR)/mgy_proteins_$${i}.fa.gz $(MGY_URL)/mgy_proteins_$${i}.fa.gz; \
+	  done; \
+	fi
+
+DATA := $(PFAM_STO) $(SWISSPROT_FA) mgnify
 setup: $(DATA)
 
 ####################################
