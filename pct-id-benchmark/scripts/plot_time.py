@@ -6,7 +6,7 @@ from plot import axes, Point, TOOL_COLORS, prefix_label
 
 
 import matplotlib.pyplot as plt
-
+import numpy as np
 
 
 MMSEQS_SEQ = [
@@ -59,78 +59,60 @@ PLOTTED = [
 ax = None
 
 
-def nail_plot(pts, label):
+def plot_line(pts, label, layout=None, label_layout=None):
     global ax
 
-    color = TOOL_COLORS['nail']
-    x = [p.x for p in pts]
-    y = [p.y for p in pts]
+    color = TOOL_COLORS[label.split()[0]]
 
+    x = np.array([p.x for p in pts])
+    y = np.array([p.y for p in pts])
+    
     ax.plot(
         x, y,
         color=color,
         linestyle='--'
     )
 
-    plt.text(
-        pts[-1].x, pts[-1].y - 0.01,
+    if label_layout is None:
+        o =  (10, -10)
+        ha = "center"
+    else:
+        o = label_layout[0]
+        ha = label_layout[1]
+
+    last_pt = (pts[-1].x, pts[-1].y)
+    ax.annotate(
         label,
+        last_pt,
+        xytext=o,
+        textcoords="offset pixels",
         color=color,
         fontweight="bold",
-        ha="center",
-        va="top",
+        ha=ha,
     )
+    
+    if layout is None:
+        offsets = [(10, -10) for _  in range(len(pts))]
+        ha_list = ["left" for _ in range(len(pts))]
+    else:
+        offsets = [l[0] for l in layout]
+        ha_list = [l[1] for l in layout]
 
-    for p in pts:
+    for (p, o, ha) in zip(pts, offsets, ha_list):
         _, args = prefix_label(p.prefix, exclude=["ms"], reformat=[("--mmseqs-s", "-s")])
         args = " ".join(args)
+
+        pt = (p.x, p.y)
+        ax.annotate(
+            f"{args}",
+            pt,
+            xytext=o,
+            textcoords="offset pixels",
+            color=color,
+            fontsize=10,
+            ha=ha,
+        )
         
-        plt.text(
-            p.x, p.y + 0.005,
-            f"{args}",
-            color=color,
-            fontsize=10,
-            ha="right",
-            va="bottom",
-        )
-
-
-def mmseqs_plot(pts, label):
-    global ax
-    x = [p.x for p in pts]
-    y = [p.y for p in pts]
-
-    color = TOOL_COLORS['mmseqs']
-
-    ax.plot(
-        x, y,
-        color=color,
-        linestyle='--'
-    )
-
-    plt.text(
-        pts[-1].x, pts[-1].y - 0.01,
-        label,
-        color=color,
-        fontweight="bold",
-        ha="center",
-        va="top",
-    )
-
-    for p in pts:
-        _, args = prefix_label(p.prefix, exclude=["ms"])
-        args = " ".join(args)
-
-        plt.text(
-            p.x, p.y + 0.005,
-            f"{args}",
-            color=color,
-            fontsize=10,
-            ha="right",
-            va="bottom",
-        )
-
-
 def plot(args):
     points = []
 
@@ -152,17 +134,18 @@ def plot(args):
 
     ###
 
-    global ax
+    global ax, fig
     fig, ax = axes()
     plt.title("Recall by runtime")
 
     ax.set_xlabel("Runtime (seconds; log scale)")
     ax.set_xscale("log")
-    ax.set_xlim(1.0, 1e4)
 
     ax.set_ylabel(f"Recall at {fpr} FP per search")
-    ax.set_ylim(0.2, 0.75)
 
+    ax.set_xlim(1.0, 1e3)
+    ax.set_ylim(0.2, 0.75)
+    
     ax.grid(True)
 
     ###
@@ -178,22 +161,102 @@ def plot(args):
         )
 
         (label, args) = prefix_label(p.prefix, exclude=["ms"])
+        pt = (p.x, p.y)
 
-        if p.prefix in OTHER:
-            plt.text(
-                p.x, p.y - 0.01,
+        if p.prefix == "blast.prf":
+            ax.annotate(
                 label,
+                pt,
+                xytext=(-30, 15),
+                textcoords="offset pixels",
                 color=color,
                 fontweight="bold",
                 ha="center",
-                va="top",
             )
-    ###
+        elif p.prefix == "blast.seq":
+            ax.annotate(
+                label,
+                pt,
+                xytext=(-10, -50),
+                textcoords="offset pixels",
+                color=color,
+                fontweight="bold",
+                ha="center",
+                arrowprops=dict(
+                    arrowstyle="->",
+                    color=color,
+                )
+            )
+        elif p.prefix == "hmmer.prf":
+            ax.annotate(
+                label,
+                pt,
+                xytext=(0, 15),
+                textcoords="offset pixels",
+                color=color,
+                fontweight="bold",
+                ha="center",
+            )
+        elif p.prefix == "hmmer.seq":
+            ax.annotate(
+                label,
+                pt,
+                xytext=(-75, 15),
+                textcoords="offset pixels",
+                color=color,
+                fontweight="bold",
+                ha="center",
+            )
 
-    nail_plot(nail_prf, "nail (prf)")
-    nail_plot(nail_seq, "nail (seq)")
-    mmseqs_plot(mmseqs_seq, "mmseqs (seq)")
-    mmseqs_plot(mmseqs_prf, "mmseqs (prf)")
+    plot_line(
+        nail_prf,
+        "nail (profile)",
+        layout=[
+            [(0, 12),"center"],
+            [(0, 12),"center"],
+            [(10,-10),"left"],
+            [(10, -2.5),"left"],
+            [(10, -2.5),"left"],
+        ],
+        label_layout=[(-50, 260), "left"]
+    )
+
+    plot_line(
+        nail_seq,
+        "nail (sequence)",
+        layout=[
+            [(0, -15),"right"],
+            [(0, -25),"center"],
+            [(10, -10),"left"],
+            [(10, -2.5),"left"],
+        ],
+        label_layout=[(175, -30), "right"]
+    )
+
+    plot_line(
+        mmseqs_prf,
+        "mmseqs (profile)",
+        layout=[
+            [(0, -17.5),"center"],
+            [(0, -17.5),"center"],
+            [(0, 10),"center"],
+            [(10, -10),"left"],
+            [(10, 0),"left"],
+        ],
+        label_layout=[(-10, 50), "right"]
+    )
+
+    plot_line(
+        mmseqs_seq,
+        "mmseqs (sequence)",
+        layout=[
+            [(0, 10),"center"],
+            [(0, 10),"center"],
+            [(-10, 0),"right"],
+            [(-10, 0),"right"],
+        ],
+        label_layout=[(-210, -30), "left"]
+    )
 
 
 if __name__ == "__main__":
