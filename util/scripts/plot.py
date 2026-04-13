@@ -1,3 +1,4 @@
+import math
 from collections.abc import Iterable
 import re
 
@@ -25,20 +26,107 @@ TOL_VIBRANT = [
 
 COLORS = TOL_VIBRANT
 
-MARKERS = ['o', 's', '^', 'v', '<', '>', 'D', 'H', '*', 'p', 'X', 'd', 'h', '8']
+MARKERS = [
+    'o', 's', '^', 'v', '<', '>',
+    'D', 'H', '*', 'p', 'X', 'd', 'h', '8'
+]
 
 TOOL_COLORS = {
-    "diamond": COLORS[0],
-    "last": COLORS[5],
-    "blast": COLORS[2],
-    "mmseqs": COLORS[1],
-    "hmmer": COLORS[3],
-    "nail": COLORS[4],
+    "hmmer": TOL_ORANGE,
+    "nail": TOL_MAGENTA,
+    "mmseqs": TOL_CYAN,
+    "blast": TOL_TEAL,
+    "diamond": TOL_GREY,
+    "last": TOL_GREY,
 }
 
 FLOAT_RE = r'\s*(-?\d+(?:\.\d+)?)\s*'
 
-def prefix_label(prefix: str, exclude=[], reformat=[]) -> str:
+
+def annotate(
+    ax,
+    text: str,
+    point: tuple[float, float],
+    offset_px: tuple[float, float],
+    color: str,
+    rotation: float = 0,
+    ha=None,
+    va=None,
+):
+
+    if ha is None:
+        if offset_px[0] == 0:
+            ha = "center"
+        elif offset_px[0] > 0:
+            ha = "left"
+        else:
+            ha = "right"
+
+    if va is None:
+        if offset_px[1] == 0:
+            va = "center"
+        elif offset_px[1] > 0:
+            va = "bottom"
+        else:
+            va = "top"
+
+    theta = math.radians(rotation)
+    ox, oy = offset_px
+
+    roffset_px = (
+        ox * math.cos(theta) - oy * math.sin(theta),
+        ox * math.sin(theta) + oy * math.cos(theta),
+    )
+
+    ax.annotate(
+        text,
+        point,
+        xytext=roffset_px,
+        textcoords="offset pixels",
+        va=va,
+        ha=ha,
+        color=color,
+        fontweight="bold",
+        rotation=rotation,
+        rotation_mode="anchor",
+    )
+
+    ax.annotate(
+        "",
+        point,
+        xytext=roffset_px,
+        textcoords="offset pixels",
+        arrowprops=dict(
+            arrowstyle="-",
+            linestyle="dashed",
+            color=color,
+        ),
+    )
+
+    head_frac = 0.12
+    head_offset_px = (
+        roffset_px[0] * head_frac,
+        roffset_px[1] * head_frac,
+    )
+
+    ax.annotate(
+        "",
+        point,
+        xytext=head_offset_px,
+        textcoords="offset pixels",
+        arrowprops=dict(
+            arrowstyle="-|>",
+            linewidth=0,
+            color=color,
+        ),
+    )
+
+
+def prefix_label(
+        prefix: str,
+        exclude=[],
+        reformat=[]
+) -> str:
     rest, search_type = prefix.rsplit(".", 1)
     tokens = rest.split("-")
 
@@ -49,7 +137,7 @@ def prefix_label(prefix: str, exclude=[], reformat=[]) -> str:
     for arg in tokens[1:]:
         if any([e in arg for e in exclude]):
             continue
-  
+
         args.append(arg)
 
     nail_params = {
@@ -75,7 +163,6 @@ def prefix_label(prefix: str, exclude=[], reformat=[]) -> str:
     }
 
     ret_args = []
-
     if tool == "hmmer":
         if search_type == "prf":
             tool = "hmmsearch (profile)"
@@ -100,9 +187,10 @@ def prefix_label(prefix: str, exclude=[], reformat=[]) -> str:
             tool = "blastp (sequence)"
 
     for (a, b) in reformat:
-        ret_args = [arg.replace(a,b) for arg in ret_args]
+        ret_args = [arg.replace(a, b) for arg in ret_args]
 
     return tool, ret_args
+
 
 def axes():
     scale = 1.75
@@ -181,19 +269,28 @@ class Curve:
     y: [float]
     prefix: str
     tool: str
+    search_type: str
     params: dict[str, float]
     extra: [str]
 
     def __init__(self, line):
         self.prefix, points = line.split(",", 1)
 
-        prefix_tokens = self.prefix.split(".")[0].split('-')
+        params = self.prefix
+        if self.prefix.endswith(".prf"):
+            params = params.removesuffix(".prf")
+            self.search_type = "prf"
+        elif self.prefix.endswith(".seq"):
+            params = params.removesuffix(".seq")
+            self.search_type = "seq"
+
+        param_tokens = params.split("-")
 
         self.params = {}
         self.extra = []
-        self.tool = prefix_tokens[0]
+        self.tool = param_tokens[0]
 
-        for tok in prefix_tokens[1:]:
+        for tok in param_tokens[1:]:
             m = re.match(r'([a-zA-Z]+)([0-9.]+)', tok)
             if m:
                 p, v = m.groups()
@@ -202,11 +299,23 @@ class Curve:
                 self.extra.append(tok)
 
         points = [
-            (float(a), float(b)) for a, b in re.findall(
-                r'\(\s*(-?\d+(?:\.\d+)?)\s*,\s*(-?\d+(?:\.\d+)?)\s*\)', points
-            )]
+            (float(a), float(b))
+            for a, b in re.findall(
+                r'\(\s*(-?\d+(?:\.\d+)?)\s*,\s*(-?\d+(?:\.\d+)?)\s*\)',
+                points
+            )
+        ]
 
         self.x, self.y = map(list, zip(*points))
+
+    def approx_y(self, x: float) -> float:
+        for (x1, x2), (y1, y2) in zip(
+            zip(self.x, self.x[1:]),
+            zip(self.y, self.y[1:])
+        ):
+            if x1 <= x <= x2:
+                return y1 + (x - x1) * (y2 - y1) / (x2 - x1)
+        raise ValueError("x out of range")
 
 
 class Point:
@@ -220,7 +329,10 @@ class Point:
     def __init__(self, line: str):
         self.prefix, point = line.split(",", 1)
 
-        x, y = map(float, re.match(r'\(\s*([-+]?\d*\.?\d+)\s*,\s*([-+]?\d*\.?\d+)\s*\)', point).groups())
+        x, y = map(float, re.match(
+            r'\(\s*([-+]?\d*\.?\d+)\s*,\s*([-+]?\d*\.?\d+)\s*\)', point)
+            .groups()
+        )
         self.x = float(x)
         self.y = float(y)
 

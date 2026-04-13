@@ -66,7 +66,7 @@ def plot_line(pts, label, layout=None, label_layout=None):
 
     x = np.array([p.x for p in pts])
     y = np.array([p.y for p in pts])
-    
+
     ax.plot(
         x, y,
         color=color,
@@ -74,7 +74,7 @@ def plot_line(pts, label, layout=None, label_layout=None):
     )
 
     if label_layout is None:
-        o =  (10, -10)
+        o = (10, -10)
         ha = "center"
     else:
         o = label_layout[0]
@@ -90,16 +90,17 @@ def plot_line(pts, label, layout=None, label_layout=None):
         fontweight="bold",
         ha=ha,
     )
-    
+
     if layout is None:
-        offsets = [(10, -10) for _  in range(len(pts))]
+        offsets = [(10, -10) for _ in range(len(pts))]
         ha_list = ["left" for _ in range(len(pts))]
     else:
         offsets = [l[0] for l in layout]
         ha_list = [l[1] for l in layout]
 
     for (p, o, ha) in zip(pts, offsets, ha_list):
-        _, args = prefix_label(p.prefix, exclude=["ms"], reformat=[("--mmseqs-s", "-s")])
+        _, args = prefix_label(p.prefix, exclude=["ms"], reformat=[
+                               ("--mmseqs-s", "-s")])
         args = " ".join(args)
 
         pt = (p.x, p.y)
@@ -112,12 +113,14 @@ def plot_line(pts, label, layout=None, label_layout=None):
             fontsize=10,
             ha=ha,
         )
-        
+
+
 def plot(args):
     points = []
 
     with open(args.time) as f:
-        lines = list(filter(lambda line: not line.startswith("#"), f.readlines()))
+        lines = list(
+            filter(lambda line: not line.startswith("#"), f.readlines()))
         fpr = float(lines[0].split()[-1])
 
         for line in lines[1:]:
@@ -145,7 +148,7 @@ def plot(args):
 
     ax.set_xlim(1.0, 1e3)
     ax.set_ylim(0.2, 0.75)
-    
+
     ax.grid(True)
 
     ###
@@ -212,11 +215,11 @@ def plot(args):
         nail_prf,
         "nail (profile)",
         layout=[
-            [(0, 12),"center"],
-            [(0, 12),"center"],
-            [(10,-10),"left"],
-            [(10, -2.5),"left"],
-            [(10, -2.5),"left"],
+            [(0, 12), "center"],
+            [(0, 12), "center"],
+            [(10, -10), "left"],
+            [(10, -2.5), "left"],
+            [(10, -2.5), "left"],
         ],
         label_layout=[(-50, 260), "left"]
     )
@@ -225,10 +228,10 @@ def plot(args):
         nail_seq,
         "nail (sequence)",
         layout=[
-            [(0, -15),"right"],
-            [(0, -25),"center"],
-            [(10, -10),"left"],
-            [(10, -2.5),"left"],
+            [(0, -15), "right"],
+            [(0, -25), "center"],
+            [(10, -10), "left"],
+            [(10, -2.5), "left"],
         ],
         label_layout=[(175, -30), "right"]
     )
@@ -237,11 +240,11 @@ def plot(args):
         mmseqs_prf,
         "mmseqs (profile)",
         layout=[
-            [(0, -17.5),"center"],
-            [(0, -17.5),"center"],
-            [(0, 10),"center"],
-            [(10, -10),"left"],
-            [(10, 0),"left"],
+            [(0, -17.5), "center"],
+            [(0, -17.5), "center"],
+            [(0, 10), "center"],
+            [(10, -10), "left"],
+            [(10, 0), "left"],
         ],
         label_layout=[(-10, 50), "right"]
     )
@@ -250,10 +253,10 @@ def plot(args):
         mmseqs_seq,
         "mmseqs (sequence)",
         layout=[
-            [(0, 10),"center"],
-            [(0, 10),"center"],
-            [(-10, 0),"right"],
-            [(-10, 0),"right"],
+            [(0, 10), "center"],
+            [(0, 10), "center"],
+            [(-10, 0), "right"],
+            [(-10, 0), "right"],
         ],
         label_layout=[(-210, -30), "left"]
     )

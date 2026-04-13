@@ -2,15 +2,19 @@
 import argparse
 from pathlib import Path
 
-from plot import axes, Curve, TOOL_COLORS, prefix_label
+from plot import axes, Curve, TOOL_COLORS, prefix_label, annotate
 
 
 import matplotlib.pyplot as plt
 
 
 X_MIN = 1e-3
-# X_MAX = 1_000.0
 X_MAX = 1.0
+
+Y_MIN = 0.35
+Y_MAX = 0.8
+
+X_LABEL = 3.0e-2
 
 AUC_X_MAX = 1.0
 
@@ -62,7 +66,8 @@ def main(args):
     curves = []
 
     with open(args.roc) as f:
-        lines = list(filter(lambda line: not line.startswith("#"), f.readlines()))
+        lines = list(
+            filter(lambda line: not line.startswith("#"), f.readlines()))
 
         for line in lines:
             curve = Curve(line)
@@ -78,9 +83,7 @@ def main(args):
     ax.set_xscale("log")
 
     ax.set_ylabel("Recall")
-    ax.set_ylim(0.35, 0.8)
-    ax.yaxis.tick_right()
-    ax.yaxis.set_label_position("right")
+    ax.set_ylim(Y_MIN, Y_MAX)
 
     ax.grid(True)
 
@@ -93,20 +96,35 @@ def main(args):
             color=color,
         )
 
-        for (xx, yy) in zip(curve.x, curve.y) :
-            if xx >= X_MIN:
-                y = yy
-                break
+        pt = (X_LABEL, curve.approx_y(X_LABEL))
 
-        ax.text(
-            X_MIN, y,
-            s=tool,
-            color=color,
-            fontsize=8,
-            fontweight="bold",
-            ha="right",
-            va="center",
-        )
+        offset = (0, 0)
+        rotation = 0
+        if curve.search_type == "prf":
+            if curve.tool == "hmmer":
+                offset = (0, 20)
+            elif curve.tool == "nail":
+                offset = (0, 20)
+            elif curve.tool == "mmseqs":
+                offset = (0, -25)
+            elif curve.tool == "blast":
+                offset = (0, 20)
+        elif curve.search_type == "seq":
+            if curve.tool == "hmmer":
+                offset = (0, 20)
+            elif curve.tool == "nail":
+                x = X_LABEL * 2.0
+                pt = (x, curve.approx_y(x))
+                offset = (0, -30)
+            elif curve.tool == "mmseqs":
+                x = X_LABEL / 2.0
+                pt = (x, curve.approx_y(x))
+                offset = (0, -30)
+            elif curve.tool == "blast":
+                offset = (0, 15)
+                rotation = 10
+
+        annotate(ax, tool, pt, offset, color, rotation)
 
     plt.savefig(args.out)
 

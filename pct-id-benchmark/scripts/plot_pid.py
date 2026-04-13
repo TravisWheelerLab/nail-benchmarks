@@ -56,7 +56,8 @@ def main(args):
     curves = []
 
     with open(args.pid) as f:
-        lines = list(filter(lambda line: not line.startswith("#"), f.readlines()))
+        lines = list(
+            filter(lambda line: not line.startswith("#"), f.readlines()))
 
         fpr = float(lines[0].split()[-1])
         bin_cnt = Curve(lines[1])
@@ -83,11 +84,11 @@ def main(args):
     ax.axhline(0.5, color="black", linestyle="--", linewidth=1)
 
     for curve in curves:
-        tool, _params = prefix_label(curve.prefix)
+        (tool, _) = prefix_label(curve.prefix)
 
         color = TOOL_COLORS[curve.tool]
 
-        if "seq" in curve.extra:
+        if curve.search_type == "seq":
             mfc = color
         else:
             mfc = 'white'
@@ -101,15 +102,17 @@ def main(args):
             label=tool
         )
 
-    # ax_bins = ax.twinx()
-    # ax_bins.set_zorder(1)
-    # ax_bins.set_ylabel("Sequence pairs (count)")
+    if args.bins:
+        ax_bins = ax.twinx()
+        ax_bins.set_zorder(1)
+        ax_bins.set_ylabel("Sequence pairs (count)")
 
-    # ax_bins.bar(
-    #     bin_cnt.x, bin_cnt.y,
-    #     color=COLORS[-1],
-    #     alpha=0.75,
-    #     label="pair count")
+        ax_bins.bar(
+            bin_cnt.x, bin_cnt.y,
+            color=COLORS[-1],
+            alpha=0.75,
+            label="pair count"
+        )
 
     fig.legend()
 
@@ -120,5 +123,6 @@ if __name__ == "__main__":
     p = argparse.ArgumentParser()
     p.add_argument("pid", type=Path)
     p.add_argument("out", type=Path)
+    p.add_argument("--bins", action="store_true")
     args = p.parse_args()
     main(args)
