@@ -43,6 +43,18 @@ TOOL_COLORS = {
 FLOAT_RE = r'\s*(-?\d+(?:\.\d+)?)\s*'
 
 
+def theta(ax, x1: float, y1: float, x2: float, y2: float) -> float:
+    x1, y1 = ax.transData.transform((x1, y1))
+    x2, y2 = ax.transData.transform((x2, y2))
+
+    dx = x2 - x1
+    dy = y2 - y1
+
+    theta = math.degrees(math.atan2(dy, dx))
+
+    return theta
+
+
 def annotate(
     ax,
     text: str,
@@ -50,10 +62,13 @@ def annotate(
     offset_px: tuple[float, float],
     color: str,
     rotation: float = 0,
-    ha=None,
-    va=None,
+    ha: str = None,
+    va: str = None,
+    linestyle: str = None,
+    arrowstyle: str = None,
 ):
 
+    # try to auto-set horizontal alignment
     if ha is None:
         if offset_px[0] == 0:
             ha = "center"
@@ -62,6 +77,7 @@ def annotate(
         else:
             ha = "right"
 
+    # try to auto-set vertical alignment
     if va is None:
         if offset_px[1] == 0:
             va = "center"
@@ -70,6 +86,7 @@ def annotate(
         else:
             va = "top"
 
+    # compute rotation stuff
     theta = math.radians(rotation)
     ox, oy = offset_px
 
@@ -78,6 +95,7 @@ def annotate(
         ox * math.sin(theta) + oy * math.cos(theta),
     )
 
+    # draw the label
     ax.annotate(
         text,
         point,
@@ -91,35 +109,39 @@ def annotate(
         rotation_mode="anchor",
     )
 
-    ax.annotate(
-        "",
-        point,
-        xytext=roffset_px,
-        textcoords="offset pixels",
-        arrowprops=dict(
-            arrowstyle="-",
-            linestyle="dashed",
-            color=color,
-        ),
-    )
+    # (optionally) draw the line
+    if linestyle is not None:
+        ax.annotate(
+            "",
+            point,
+            xytext=roffset_px,
+            textcoords="offset pixels",
+            arrowprops=dict(
+                arrowstyle="-",
+                linestyle=linestyle,
+                color=color,
+            ),
+        )
 
-    head_frac = 0.12
-    head_offset_px = (
-        roffset_px[0] * head_frac,
-        roffset_px[1] * head_frac,
-    )
+    # (optionally) draw the arrowtip
+    if arrowstyle is not None:
+        head_frac = 0.12
+        head_offset_px = (
+            roffset_px[0] * head_frac,
+            roffset_px[1] * head_frac,
+        )
 
-    ax.annotate(
-        "",
-        point,
-        xytext=head_offset_px,
-        textcoords="offset pixels",
-        arrowprops=dict(
-            arrowstyle="-|>",
-            linewidth=0,
-            color=color,
-        ),
-    )
+        ax.annotate(
+            "",
+            point,
+            xytext=head_offset_px,
+            textcoords="offset pixels",
+            arrowprops=dict(
+                arrowstyle=arrowstyle,
+                linewidth=0,
+                color=color,
+            ),
+        )
 
 
 def prefix_label(

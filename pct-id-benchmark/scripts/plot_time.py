@@ -2,7 +2,7 @@
 import argparse
 from pathlib import Path
 
-from plot import axes, Point, TOOL_COLORS, prefix_label
+from plot import axes, Point, TOOL_COLORS, prefix_label, annotate
 
 
 import matplotlib.pyplot as plt
@@ -73,6 +73,13 @@ def plot_line(pts, label, layout=None, label_layout=None):
         linestyle='--'
     )
 
+    ax.scatter(
+        x, y,
+        color=color,
+        linewidths=2,
+        s=30,
+    )
+
     if label_layout is None:
         o = (10, -10)
         ha = "center"
@@ -124,9 +131,9 @@ def plot(args):
         fpr = float(lines[0].split()[-1])
 
         for line in lines[1:]:
-            p = Point(line)
-            if p.prefix in PLOTTED:
-                points.append(p)
+            pt = Point(line)
+            if pt.prefix in PLOTTED:
+                points.append(pt)
 
     points.sort(key=lambda c: c.x, reverse=True)
 
@@ -134,6 +141,8 @@ def plot(args):
     nail_seq = list(filter(lambda p: p.prefix in NAIL_SEQ, points))
     mmseqs_seq = list(filter(lambda p: p.prefix in MMSEQS_SEQ, points))
     mmseqs_prf = list(filter(lambda p: p.prefix in MMSEQS_PRF, points))
+
+    points = list(filter(lambda p: p.prefix in OTHER, points))
 
     ###
 
@@ -153,63 +162,39 @@ def plot(args):
 
     ###
 
-    for p in points:
-        color = TOOL_COLORS[p.tool]
+    for pt in points:
+        color = TOOL_COLORS[pt.tool]
 
         ax.scatter(
-            p.x, p.y,
+            pt.x, pt.y,
             color=color,
             linewidths=2,
             s=30,
         )
 
-        (label, args) = prefix_label(p.prefix, exclude=["ms"])
-        pt = (p.x, p.y)
+        (label, _) = prefix_label(pt.prefix, exclude=["ms"])
+        xy = (pt.x, pt.y)
+        offset = (0, 0)
+        linestyle = None
+        arrowstyle = None
+        va = None
+        if pt.prefix == "blast.prf":
+            offset = (-20, 10)
+            va = "center"
+        elif pt.prefix == "blast.seq":
+            offset = (0, -40)
+            linestyle = '--'
+            arrowstyle = '-|>'
+        elif pt.prefix == "hmmer.prf":
+            offset = (0, 10)
+        elif pt.prefix == "hmmer.seq":
+            offset = (-60, 10)
+            va = "center"
 
-        if p.prefix == "blast.prf":
-            ax.annotate(
-                label,
-                pt,
-                xytext=(-30, 15),
-                textcoords="offset pixels",
-                color=color,
-                fontweight="bold",
-                ha="center",
-            )
-        elif p.prefix == "blast.seq":
-            ax.annotate(
-                label,
-                pt,
-                xytext=(-10, -50),
-                textcoords="offset pixels",
-                color=color,
-                fontweight="bold",
-                ha="center",
-                arrowprops=dict(
-                    arrowstyle="->",
-                    color=color,
-                )
-            )
-        elif p.prefix == "hmmer.prf":
-            ax.annotate(
-                label,
-                pt,
-                xytext=(0, 15),
-                textcoords="offset pixels",
-                color=color,
-                fontweight="bold",
-                ha="center",
-            )
-        elif p.prefix == "hmmer.seq":
-            ax.annotate(
-                label,
-                pt,
-                xytext=(-75, 15),
-                textcoords="offset pixels",
-                color=color,
-                fontweight="bold",
-                ha="center",
-            )
+        annotate(
+            ax, label, xy, offset, color,
+            ha=va, linestyle=linestyle, arrowstyle=arrowstyle
+        )
 
     plot_line(
         nail_prf,

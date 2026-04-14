@@ -2,10 +2,19 @@
 import argparse
 from pathlib import Path
 
-from plot import axes, Curve, COLORS, TOOL_COLORS, prefix_label
+from plot import axes, Curve, COLORS, TOOL_COLORS, prefix_label, annotate, theta
 
 import matplotlib.pyplot as plt
 import numpy as np
+
+
+X_MIN = 25
+X_MAX = 10
+
+Y_MIN = 0.0
+Y_MAX = 1.0
+
+X_LABEL = 17.5
 
 
 MMSEQS_SEQ = [
@@ -76,30 +85,68 @@ def main(args):
 
     ax.set_zorder(2)
     ax.patch.set_visible(False)
-    ax.set_xlim(25, 10)
-    ax.set_ylim(0.0, 1.0)
+
+    ax.set_xlim(X_MIN, X_MAX)
+    ax.set_ylim(Y_MIN, Y_MAX)
+
     ax.set_xlabel("Decreasing pairwise %identity")
     ax.set_ylabel(f"Recall at {fpr} FP per search")
 
-    ax.axhline(0.5, color="black", linestyle="--", linewidth=1)
+    ax.axhline(
+        y=0.5,
+        color="black",
+        linestyle="--",
+        linewidth=1, alpha=0.5
+    )
+
+    ax.grid(True)
 
     for curve in curves:
         (tool, _) = prefix_label(curve.prefix)
 
         color = TOOL_COLORS[curve.tool]
 
-        if curve.search_type == "seq":
-            mfc = color
-        else:
-            mfc = 'white'
-
         ax.plot(
             curve.x, curve.y,
             color=color,
             marker='o',
-            mfc=mfc,
+            mfc='white',
             markersize=5,
-            label=tool
+        )
+
+        def pos(x: float, curve: Curve):
+            x1 = x + 1.0
+            x2 = x - 1.0
+
+            y = curve.approx_y(x)
+            y1 = curve.approx_y(x1)
+            y2 = curve.approx_y(x2)
+
+            return ((x, y), theta(ax, x1, y1, x2, y2))
+
+        pt = (X_LABEL, curve.approx_y(X_LABEL))
+        offset = (0, 5)
+        x = X_LABEL
+        if curve.search_type == "prf":
+            x = 16
+        elif curve.search_type == "seq":
+            if curve.tool == "hmmer":
+                x = 16
+            elif curve.tool == "nail":
+                x = 17
+                offset = (0, -20)
+            elif curve.tool == "mmseqs":
+                x = 14
+                offset = (0, -20)
+            elif curve.tool == "blast":
+                x = 20
+                offset = (0, -20)
+
+        (pt, rotation) = pos(x, curve)
+        annotate(
+            ax, tool, pt, offset, color, rotation,
+            linestyle='--',
+            arrowstyle='-|>'
         )
 
     if args.bins:
@@ -111,10 +158,10 @@ def main(args):
             bin_cnt.x, bin_cnt.y,
             color=COLORS[-1],
             alpha=0.75,
-            label="pair count"
+            label="Sequence pair count in %ID bin"
         )
 
-    fig.legend()
+        fig.legend()
 
     plt.savefig(args.out)
 

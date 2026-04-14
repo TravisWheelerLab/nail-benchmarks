@@ -94,10 +94,10 @@ def main(args):
         ax.plot(
             curve.x, curve.y,
             color=color,
+            drawstyle="steps-post",
         )
 
         pt = (X_LABEL, curve.approx_y(X_LABEL))
-
         offset = (0, 0)
         rotation = 0
         if curve.search_type == "prf":
@@ -124,7 +124,11 @@ def main(args):
                 offset = (0, 15)
                 rotation = 10
 
-        annotate(ax, tool, pt, offset, color, rotation)
+        annotate(
+            ax, tool, pt, offset, color, rotation,
+            linestyle='--',
+            arrowstyle='-|>'
+        )
 
     plt.savefig(args.out)
 
