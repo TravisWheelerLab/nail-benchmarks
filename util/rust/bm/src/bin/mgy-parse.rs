@@ -933,23 +933,6 @@ struct RecallArgs {
 }
 
 fn recall(args: RecallArgs) -> anyhow::Result<()> {
-    // TODO:
-    //  - restore GA based thresholding
-    //
-    //  - figures:
-    //     - sweep over: %mgy, c
-    //     - nail vs mmseqs cutoffs
-    //
-    //  - sanity:
-    //      - re-align all reversed matches
-    //        (might have missed due to max-seqs weirdness)
-    //      - re-align all nail reversed matches with hmmer
-    //        (make sure hmmer would have built similar cutoffs)
-    //
-    //
-    //  - run an average model through mgnify
-    //      - how many dp cells would you have to calculate
-
     let start = Instant::now();
 
     util::set_threads(args.num_threads)?;
