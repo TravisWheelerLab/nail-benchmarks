@@ -2,11 +2,11 @@
 import argparse
 from pathlib import Path
 
-from plot import axes, Scatter, TOL_CYAN, TOL_RED, TOL_ORANGE
+from plot import axes, Scatter, TOL_CYAN, TOL_RED
 
 import matplotlib.pyplot as plt
 import matplotlib.cm as cm
-from matplotlib.colors import ListedColormap
+from matplotlib.colors import ListedColormap, LogNorm
 
 
 import numpy as np
@@ -18,14 +18,14 @@ ymax = None
 
 
 def heatmap(points, ax):
-    N_BINS = 500
+    N_BINS = 1000
     global xmin, xmax, ymin, ymax
 
     xbins = np.linspace(xmin, xmax, N_BINS)
     ybins = np.linspace(ymin, ymax, N_BINS)
 
     def plot(points, cmap):
-        colors = cmap(np.linspace(0.5, 1, 256))
+        colors = cmap(np.linspace(0.2, 1, 256))
         cmap = ListedColormap(colors)
         h, xedges, yedges = np.histogram2d(
             points.x,
@@ -35,61 +35,17 @@ def heatmap(points, ax):
 
         h[h == 0] = np.nan
 
-        ax.pcolormesh(
+        return ax.pcolormesh(
             xedges,
             yedges,
             h.T,
             cmap=cmap,
-            shading='auto'
+            norm=LogNorm(),
+            shading='auto',
+            rasterized=True,
         )
 
-    plot(points, cm.Blues)
-
-
-def scatter(points, ax):
-    alpha = 0.6
-
-    ax.scatter(
-        points.x, points.y,
-        label="true positives",
-        color=TOL_CYAN,
-        # marker='^',
-        alpha=alpha,
-        edgecolors="none",
-        rasterized=True,
-    )
-
-
-def yx(ax):
-    # y = x
-    xmin, xmax = ax.get_xlim()
-    ymin, ymax = ax.get_ylim()
-    lo = min(xmin, ymin)
-    hi = max(xmax, ymax)
-    ax.plot(
-        [lo, hi], [lo, hi],
-        color=TOL_ORANGE,
-        linestyle="--",
-        linewidth=1,
-        label="y=x"
-    )
-
-
-def trend(points, ax):
-    xmin, xmax = ax.get_xlim()
-    ymin, ymax = ax.get_ylim()
-    lo = min(xmin, ymin)
-    hi = max(xmax, ymax)
-
-    m, b = np.polyfit(points.x, points.y, 1)
-    x_fit = np.array([lo, hi])
-    y_fit = m * x_fit + b
-    ax.plot(
-        x_fit, y_fit,
-        color=TOL_RED,
-        linewidth=1,
-        label="trend"
-    )
+    return plot(points, cm.Blues)
 
 
 def main(args):
@@ -104,12 +60,10 @@ def main(args):
 
     fig, ax = axes()
 
-    scatter(points, ax)
-    # heatmap(points, ax)
-    yx(ax)
-    trend(points, ax)
+    mesh = heatmap(points, ax)
 
-    ax.legend()
+    fig.colorbar(mesh, ax=ax, label="count")
+    # ax.legend()
 
     ax.set_title("Sequence bitscore")
     ax.grid(True)

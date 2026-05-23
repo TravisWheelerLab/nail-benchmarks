@@ -132,12 +132,12 @@ run-%:
 	@$(MMSEQS)  $(ARGS) 
 	@$(LAST)    $(ARGS) 
 	@$(DIAMOND) $(ARGS) 
-	@$(BLAST)   $(ARGS) 
+	@$(BLAST)   $(ARGS)
 
 run-sparse-%:
 	@echo "benchmarking $*/ with $(THREADS) threads..."
 	$(eval N := $(if $(NUMA_NODE),--numa_node $(NUMA_NODE),))
-	$(eval ARGS := --threads $(THREADS) --e 1e9 --results $*/results-sparse/ $(N) $*)
+	$(eval ARGS := --threads $(THREADS) --results $*/results-sparse/ $(N) $*)
 	@mkdir -p $*/results-sparse/
 	@$(SCRIPTS)/run-sparse.sh $(ARGS) 
 
@@ -148,7 +148,9 @@ plot-recall-%: $(PARSE)
 	@$(PLOT_TIME) $(FIGURE_DATA)/time.txt $(OUT_TIME)
 
 plot-score-%: $(PARSE)
-	@$(PARSE) score $*/results-sparse/nail-s12.0-full.prf.tbl $*/results/nail-s12.0.prf.tbl $(FIGURE_DATA)
+	@$(PARSE) score $*/results-full-sparse/nail-s9.0-full.prf.tbl $*/results-full-sparse/nail-s9.0-sparse.prf.tbl $(FIGURE_DATA)
+	# @$(PARSE) score $*/results-sparse/nail-s12.0-full.prf.tbl $*/results/nail-s12.0-ms2000.prf.tbl $(FIGURE_DATA)
+	# @$(PARSE) score $*/results-sparse/nail-s12.0-full.prf.tbl $*/results-sparse/nail-s12.0-cells.prf.tbl $(FIGURE_DATA)
 	@$(PLOT_SCORE) $(FIGURE_DATA)/score.txt $(OUT_SCORE)
 
 plot-cells-%: $(PARSE)

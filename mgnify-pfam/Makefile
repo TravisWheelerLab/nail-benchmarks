@@ -26,7 +26,13 @@ MGY_DIR ?= $(DATA)/mgy
 MGY_REV_DIR ?= $(DATA)/mgy-rev
 
 #############
+sample: $(FAS)
+	@$(FAS) benchmark-one/target.fa -n 10
 
+split: $(FAB)
+	@echo splitting $(MGY_FA)...
+	@$(SPLIT) -o $(MGY_DIR)/ --n-splits $(N_SPLIT) $(MGY_FA)
+	
 small:
 	@echo building benchmark...
 	$(eval DIR:= benchmark-sm)
@@ -52,7 +58,7 @@ benchmark-all:
 	@ln -sf $(SRC_HMM) $(DIR)/query.hmm
 	@ln -sf $(SRC_STO) $(DIR)/query.sto
 	@ln -sf $(MGY_DIR) $(DIR)/mgy
-	@ln -sf $(MGY_DIR) $(DIR)/mgy-rev
+	@ln -sf $(MGY_REV_DIR) $(DIR)/mgy-rev
 	@echo done
 
 #############

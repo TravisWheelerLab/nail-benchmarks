@@ -4,6 +4,7 @@ use std::{
     path::PathBuf,
 };
 
+use anyhow::Context;
 use bioio::fasta::FastaByteIndex;
 use rand::{rngs::StdRng, seq::SliceRandom, SeedableRng};
 
@@ -34,10 +35,10 @@ fn main() -> anyhow::Result<()> {
     };
 
     if out_prefix.to_string_lossy().ends_with('/') {
-        std::fs::create_dir_all(&out_prefix)?;
+        std::fs::create_dir_all(&out_prefix).context("failed to create dir")?;
     } else if let Some(dir) = out_prefix.parent() {
         if !dir.as_os_str().is_empty() {
-            std::fs::create_dir_all(dir)?;
+            std::fs::create_dir_all(dir).context("failed to create dir")?;
         }
     }
 

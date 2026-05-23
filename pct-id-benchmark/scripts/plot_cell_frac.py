@@ -2,14 +2,13 @@
 import argparse
 from pathlib import Path
 
-from plot import axes, Scatter, TOL_CYAN, TOL_MAGENTA
+from plot import axes, Scatter, TOL_CYAN
 
 import matplotlib as mpl
 import matplotlib.pyplot as plt
 import matplotlib.cm as cm
 from matplotlib.colors import ListedColormap
 from matplotlib.legend_handler import HandlerBase
-
 
 import numpy as np
 
@@ -29,17 +28,41 @@ class HandlerColormap(HandlerBase):
     def create_artists(self, legend, orig_handle,
                        x0, y0, w, h, fontsize, trans):
         artists = []
+
+        # gradient fills full handle area so it centers with the label text
         for i in range(self.n):
             xi = x0 + w * i / self.n
             wi = w / self.n
-            color = self.cmap(i / self.n)
-            r = mpl.patches.Rectangle(
+            artists.append(mpl.patches.Rectangle(
                 (xi, y0), wi, h,
                 transform=trans,
-                facecolor=color,
-                edgecolor='none'
-            )
-            artists.append(r)
+                facecolor=self.cmap(i / self.n),
+                edgecolor='none',
+            ))
+
+        # tick marks and labels below the gradient (in labelspacing gap)
+        vmin = self.norm.vmin
+        vmax = self.norm.vmax
+        if vmin is not None and vmax is not None:
+            for val in np.linspace(vmin, vmax, 5):
+                frac = (val - vmin) / (vmax - vmin)
+                xt = x0 + frac * w
+                tick_bot = y0 - fontsize * 0.15
+                artists.append(mpl.lines.Line2D(
+                    [xt, xt], [y0, tick_bot],
+                    transform=trans,
+                    color='black',
+                    linewidth=0.8,
+                ))
+                artists.append(mpl.text.Text(
+                    xt, y0 - fontsize * 0.4,
+                    str(int(val)),
+                    transform=trans,
+                    fontsize=fontsize * 0.55,
+                    ha='center', va='top',
+                    clip_on=False,
+                ))
+
         return artists
 
 
@@ -50,8 +73,8 @@ def heatmap(true_points, decoy_points, ax, long_points=None):
     xbins = np.logspace(np.log10(xmin), np.log10(xmax), N_BINS)
     ybins = np.logspace(np.log10(ymin), np.log10(ymax), N_BINS)
 
-    def plot(points, cmap):
-        colors = cmap(np.linspace(0.25, 1, 256))
+    def plot(points, cmap_base):
+        colors = cmap_base(np.linspace(0.25, 1, 256))
         colors[:, -1] = np.linspace(0.8, 1, 256)
         cmap = ListedColormap(colors)
         h, xedges, yedges = np.histogram2d(
@@ -59,25 +82,19 @@ def heatmap(true_points, decoy_points, ax, long_points=None):
             points.y,
             bins=[xbins, ybins]
         )
-
         h[h == 0] = np.nan
-
-        return (
-            ax.pcolormesh(
-                xedges,
-                yedges,
-                h.T,
-                cmap=cmap,
-                shading='auto',
-                rasterized=True,
-            ),
-            cmap
+        return ax.pcolormesh(
+            xedges,
+            yedges,
+            h.T,
+            cmap=cmap,
+            shading='auto',
+            rasterized=True,
         )
 
-    dh, dc = plot(decoy_points, cm.Reds)
-    th, tc = plot(true_points, cm.Blues)
+    dh = plot(decoy_points, cm.Reds)
+    th = plot(true_points, cm.Blues)
 
-    # set norms (linear example)
     dh.set_norm(mpl.colors.Normalize(
         vmin=np.nanmin(dh.get_array()),
         vmax=np.nanmax(dh.get_array()),
@@ -87,55 +104,32 @@ def heatmap(true_points, decoy_points, ax, long_points=None):
         vmax=np.nanmax(th.get_array()),
     ))
 
-    decoy_sm = plt.cm.ScalarMappable(norm=dh.norm, cmap=dc)
-    true_sm = plt.cm.ScalarMappable(norm=th.norm, cmap=tc)
+    decoy_sm = plt.cm.ScalarMappable(norm=dh.norm, cmap=dh.cmap)
+    true_sm = plt.cm.ScalarMappable(norm=th.norm, cmap=th.cmap)
 
     handles = [decoy_sm, true_sm]
     labels = ["Decoys", "True positives"]
 
     if long_points:
-        long = ax.scatter(
+        handles.append(ax.scatter(
             long_points.x, long_points.y,
-            color=TOL_MAGENTA,
+            color=TOL_CYAN,
             marker='^',
-        )
-        handles.append(long)
+            s=64,
+        ))
         labels.append("Long sequences")
 
     ax.legend(
         handles=handles,
         labels=labels,
         handler_map={
-            decoy_sm: HandlerColormap(dc, dh.norm),
-            true_sm: HandlerColormap(tc, th.norm),
+            decoy_sm: HandlerColormap(dh.cmap, dh.norm),
+            true_sm: HandlerColormap(th.cmap, th.norm),
         },
+        handleheight=1.0,
+        handlelength=6.0,
+        labelspacing=1.2,
     )
-
-
-def scatter(true_points, decoy_points, ax):
-    alpha = 0.6
-
-    ax.scatter(
-        decoy_points.x, decoy_points.y,
-        label="decoys",
-        color=TOL_MAGENTA,
-        marker='v',
-        alpha=alpha,
-        edgecolors="none",
-        rasterized=True,
-    )
-
-    ax.scatter(
-        true_points.x, true_points.y,
-        label="True positives",
-        color=TOL_CYAN,
-        marker='^',
-        alpha=alpha,
-        edgecolors="none",
-        rasterized=True,
-    )
-
-    ax.legend()
 
 
 def main(args):
@@ -158,7 +152,6 @@ def main(args):
 
     fig, ax = axes()
 
-    # scatter(true_points, decoy_points, ax)
     heatmap(true_points, decoy_points, ax, long_points)
 
     ax.set_title("Cells computed")

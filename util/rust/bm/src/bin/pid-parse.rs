@@ -100,8 +100,19 @@ fn main() -> anyhow::Result<()> {
 }
 
 fn score(args: ScoreArgs) -> anyhow::Result<()> {
-    let full_tbl = bioio::tbl::nail::NailTable::parse(File::open(args.full_tbl)?, "")?.to_map();
-    let sparse_tbl = bioio::tbl::nail::NailTable::parse(File::open(args.sparse_tbl)?, "")?.to_map();
+    let full_tbl = bioio::tbl::nail::NailTable::parse(
+        File::open(&args.full_tbl)
+            .with_context(|| format!("failed to open: {:?}", args.full_tbl))?,
+        "",
+    )?
+    .to_map();
+
+    let sparse_tbl = bioio::tbl::nail::NailTable::parse(
+        File::open(&args.sparse_tbl)
+            .with_context(|| format!("failed to open: {:?}", args.sparse_tbl))?,
+        "",
+    )?
+    .to_map();
 
     let intersection = full_tbl
         .keys()
