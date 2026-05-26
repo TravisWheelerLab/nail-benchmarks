@@ -36,7 +36,7 @@ TOOL_COLORS = {
     "nail": TOL_MAGENTA,
     "mmseqs": TOL_CYAN,
     "blast": TOL_TEAL,
-    "diamond": TOL_GREY,
+    "diamond": TOL_BLUE,
     "last": TOL_GREY,
 }
 
@@ -207,6 +207,9 @@ def prefix_label(
             tool = "psiblast (profile)"
         elif search_type == "seq":
             tool = "blastp (sequence)"
+    elif tool == "diamond":
+        if search_type == "seq":
+            tool = "diamond (sequence)"
 
     for (a, b) in reformat:
         ret_args = [arg.replace(a, b) for arg in ret_args]

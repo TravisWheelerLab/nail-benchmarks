@@ -246,3 +246,12 @@ params-%: mgy-parse
 		$(DIR)/results-mmseqs-params \
 		params.txt
 
+
+
+#############
+
+plot-pf: 
+	@./scripts/plot_pf_dist.py \
+		benchmark-one/results-prefilter/psc/s12.0.txt \
+		benchmark-one/results-prefilter/psc/s10.0.txt \
+		benchmark-one/results-prefilter/psc/s7.5.txt

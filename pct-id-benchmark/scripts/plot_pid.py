@@ -50,6 +50,7 @@ OTHER = [
     "blast.seq",
     "hmmer.prf",
     "hmmer.seq",
+    "diamond-ultra-sens.seq"
 ]
 
 PLOTTED = [
@@ -139,7 +140,10 @@ def main(args):
                 x = 14
                 offset = (0, -20)
             elif curve.tool == "blast":
-                x = 20
+                x = 19.5
+                offset = (0, -20)
+            elif curve.tool == "diamond":
+                x = 23
                 offset = (0, -20)
 
         (pt, rotation) = pos(x, curve)

@@ -20,14 +20,14 @@ AUC_X_MAX = 1.0
 
 MMSEQS_SEQ = [
     # "mmseqs-s5.7-ms2000.seq",
-    # "mmseqs-s7.5-ms2000.seq",
+    "mmseqs-s7.5-ms2000.seq",
     # "mmseqs-s10.0-ms2000.seq",
     "mmseqs-s12.0-ms2000.seq",
 ]
 
 MMSEQS_PRF = [
     # "mmseqs-s5.7-ms2000.prf",
-    # "mmseqs-s7.5-ms2000.prf",
+    "mmseqs-s7.5-ms2000.prf",
     # "mmseqs-s10.0-ms2000.prf",
     "mmseqs-s12.0-ms2000.prf",
 ]
@@ -51,6 +51,7 @@ OTHER = [
     "blast.seq",
     "hmmer.prf",
     "hmmer.seq",
+    "diamond-ultra-sens.seq",
 ]
 
 PLOTTED = [
@@ -123,6 +124,10 @@ def main(args):
             elif curve.tool == "blast":
                 offset = (0, 15)
                 rotation = 10
+            elif curve.tool == "diamond":
+                x = X_LABEL * 10.0
+                pt = (x, curve.approx_y(x))
+                offset = (0, -30)
 
         annotate(
             ax, tool, pt, offset, color, rotation,
