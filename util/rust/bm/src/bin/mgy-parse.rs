@@ -739,52 +739,88 @@ fn learn_cutoffs(args: LearnCutoffsArgs) -> anyhow::Result<()> {
 
 #[derive(Parser)]
 struct ParamsArgs {
-    #[arg(value_name = "query.hmm")]
+    #[arg(long, short, value_name = "query.hmm")]
     query_path: PathBuf,
 
-    #[arg(value_name = "target.fa")]
-    target_path: PathBuf,
+    #[arg(long, value_name = "cutoffs.txt")]
+    cutoffs_path: PathBuf,
 
-    #[arg(value_name = "hmmer.tbl")]
-    hmmer_tbl_path: PathBuf,
+    #[arg(long, value_name = "nail.tbl")]
+    nail_path: PathBuf,
 
-    #[arg(value_name = "nail/")]
-    nail_dir: PathBuf,
+    #[arg(long, value_name = "mmseqs.tbl")]
+    mmseqs_path: PathBuf,
 
-    #[arg(value_name = "mmseqs/")]
-    mmseqs_dir: PathBuf,
+    #[arg(long, value_name = "hmmer.tbl")]
+    hmmer_path: PathBuf,
 
-    #[arg(value_name = "out.txt")]
+    #[arg(long, value_name = "hmmer.domtbl")]
+    hmmer_dom_path: PathBuf,
+
+    #[arg(short, long, value_name = "out/")]
     out_path: PathBuf,
+
+    #[arg(short = 'c', default_value_t = 2usize, value_name = "N")]
+    c: usize,
+
+    #[arg(long)]
+    print_times: bool,
 }
 
 fn params(args: ParamsArgs) -> anyhow::Result<()> {
     let start = Instant::now();
 
-    let z = util::target_db_size(args.target_path)?;
+    // util::set_threads(args.num_threads)?;
 
-    let hmms = util::parse_hmms(args.query_path)?;
+    // ---
 
-    let hmmer_tbl = HitTable::from_path::<_, HmmerTable>(args.hmmer_tbl_path)?;
+    let (nail_cutoffs, mmseqs_cutoffs) =
+        util::parse_cutoffs(&args.cutoffs_path, args.c).context("cutoffs")?;
 
-    let mut ga_hmmer: HashSet<(&str, &str)> = HashSet::new();
+    let hmms = util::parse_hmms(&args.query_path)
+        .with_context(|| format!("failed to open: {:?}", args.query_path))?;
 
-    for h in &hmmer_tbl.hits {
-        let hmm = hmms.get(&h.query).unwrap();
+    let mut queries = hmms.keys().collect::<Vec<_>>();
+    queries.sort();
 
-        if h.score >= hmm.ga_sc {
-            ga_hmmer.insert((&h.query, &h.target));
+    // ---
+
+    let hmmer_tbl = HitTable::from_path::<_, HmmerTable>(args.hmmer_path)?;
+    let hmmer_dom = HmmerDomainTable::from_path(args.hmmer_dom_path, |_| true)?;
+
+    let mut passed_hmmer = HashSet::new();
+    let mut hmmer_cnt = 0.0;
+    let mut fuck = 0;
+    for hit in hmmer_tbl.hits {
+        let cutoff = match nail_cutoffs.get(&hit.query) {
+            Some(c) => c,
+            None => continue,
+        };
+
+        let domain_hit = match hmmer_dom.hits.get(&(hit.query.clone(), hit.target.clone())) {
+            Some(h) => h,
+            None => {
+                fuck += 1;
+                continue;
+            }
+        };
+
+        if domain_hit.domains.iter().any(|h| h.score >= *cutoff) {
+            passed_hmmer.insert((hit.query, hit.target));
+            hmmer_cnt += 1.0;
         }
     }
 
-    let hmmer_cnt = ga_hmmer.len() as f32;
+    println!("{fuck}");
+
+    // ---
 
     let time_pattern = Regex::new(r"Elapsed.*\): (?P<time>.*)$").unwrap();
 
     let mut out = BufWriter::new(File::create(&args.out_path)?);
 
     for path in glob(
-        args.nail_dir
+        args.nail_path
             .join("*.tbl")
             .to_str()
             .context("invalid *.tbl glob")?,
@@ -794,10 +830,13 @@ fn params(args: ParamsArgs) -> anyhow::Result<()> {
         let mut cnt = 0.0;
 
         let tbl = HitTable::from_path::<_, NailTable>(&path)?;
-        for h in &tbl.hits {
-            let hmm = hmms.get(&h.query).unwrap();
+        for hit in tbl.hits {
+            let cutoff = match nail_cutoffs.get(&hit.query) {
+                Some(c) => c,
+                None => continue,
+            };
 
-            if ga_hmmer.contains(&(&h.query, &h.target)) && h.score >= hmm.ga_sc {
+            if passed_hmmer.contains(&(hit.query, hit.target)) && hit.score >= *cutoff {
                 cnt += 1.0;
             }
         }
@@ -832,11 +871,13 @@ fn params(args: ParamsArgs) -> anyhow::Result<()> {
             .max_by(util::float_cmp)
             .expect("no times found");
 
-        writeln!(out, "{prefix},{search_type},({time:.4},{frac:.4})")?;
+        let name = format!("{prefix}.{search_type}");
+
+        writeln!(out, "{name},({time:.4},{frac:.4})")?;
     }
 
     for path in glob(
-        args.mmseqs_dir
+        args.mmseqs_path
             .join("*.tbl")
             .to_str()
             .context("invalid *.tbl glob")?,
@@ -846,10 +887,12 @@ fn params(args: ParamsArgs) -> anyhow::Result<()> {
         let mut cnt = 0.0;
 
         let tbl = HitTable::from_path::<_, BlastTable>(&path)?;
-        for h in &tbl.hits {
-            let hmm = hmms.get(&h.query).unwrap();
-
-            if ga_hmmer.contains(&(&h.query, &h.target)) && h.e_value / z <= hmm.ga_p {
+        for hit in tbl.hits {
+            let cutoff = match mmseqs_cutoffs.get(&hit.query) {
+                Some(c) => c,
+                None => continue,
+            };
+            if passed_hmmer.contains(&(hit.query, hit.target)) && hit.score >= *cutoff {
                 cnt += 1.0;
             }
         }
@@ -875,7 +918,7 @@ fn params(args: ParamsArgs) -> anyhow::Result<()> {
                     .unwrap()
                     .as_str()
                     .split(':')
-                    .map(|t| t.parse::<f32>().unwrap())
+                    .map(|t| t.parse::<f32>().expect("failed to parse time"))
                     .rev()
                     .enumerate()
                     .map(|(i, t)| t * 60.0_f32.powf(i as f32))
@@ -884,7 +927,8 @@ fn params(args: ParamsArgs) -> anyhow::Result<()> {
             .max_by(util::float_cmp)
             .expect("no times found");
 
-        writeln!(out, "{prefix},{search_type},({time:.4},{frac:.4})")?;
+        let name = format!("{prefix}.{search_type}");
+        writeln!(out, "{name},({time:.4},{frac:.4})")?;
     }
 
     println!(
@@ -1187,48 +1231,6 @@ fn recall(args: RecallArgs) -> anyhow::Result<()> {
             now.elapsed().as_millis() as usize,
             std::sync::atomic::Ordering::Relaxed,
         );
-
-        // ---
-
-        // ---------------------------------------------------------------------
-        // if let Some(path) = args.nail_stats_path {
-        //     let reader = BufReader::new(File::open(path)?);
-
-        //     let mut it = reader.lines();
-
-        //     while let Ok(batch) = it.by_ref().take(100_000).collect::<Result<Vec<_>, _>>() {
-        //         if batch.is_empty() {
-        //             break;
-        //         }
-
-        //         let filtered = batch
-        //             .par_iter()
-        //             .filter_map(|line| {
-        //                 let mut it = line.split_whitespace();
-
-        //                 let q = it.next()?.to_string();
-        //                 let t = it.next()?.to_string();
-
-        //                 // skip 4 fields
-        //                 it.nth(3)?;
-
-        //                 let sc = it.next()?.parse::<f32>().ok()?;
-        //                 let p = it.next()?.parse::<f64>().ok()?;
-
-        //                 let key = (q, t);
-        //                 test.contains(&key).then_some((key, sc, p))
-        //             })
-        //             .collect::<Vec<_>>();
-
-        //         for (k, sc, p) in filtered {
-        //             if let Some(r) = records_by_pair.get_mut(&k) {
-        //                 r.nail_cloud_score = Some(sc);
-        //                 r.nail_cloud_p_value = Some(p);
-        //             }
-        //         }
-        //     }
-        // }
-        // ---------------------------------------------------------------------
 
         let now = Instant::now();
 

@@ -235,16 +235,15 @@ run-params-nail:
 run-params-mmseqs: 
 	./scripts/params-mmseqs.sh benchmark-one/ --numa_node 0
 
-params-%: mgy-parse
-	$(eval DIR:= $*)
-	$(eval P := figures-params/)
+params: mgy-parse
 	@$(PARSE) params \
-		$(DIR)/query.hmm \
-		$(DIR)/target.fa \
-		$(DIR)/results/hmmer.prf.tbl \
-		$(DIR)/results-nail-params \
-		$(DIR)/results-mmseqs-params \
-		params.txt
+		--query-path   benchmark-one/query.hmm \
+		--cutoffs-path $(CUTOFFS)/cutoffs.1000.txt \
+		--hmmer-path   benchmark-one/results/hmmer.prf.tbl \
+		--hmmer-dom-path   benchmark-one/results/hmmer.prf.domtbl \
+		--nail-path    benchmark-one/results-nail-params \
+		--mmseqs-path  benchmark-one/results-mmseqs-params \
+		--out-path     params.txt
 
 
 

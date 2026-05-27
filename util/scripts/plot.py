@@ -61,6 +61,7 @@ def annotate(
     point: tuple[float, float],
     offset_px: tuple[float, float],
     color: str,
+    fontsize: float = 16,
     rotation: float = 0,
     ha: str = None,
     va: str = None,
@@ -104,6 +105,7 @@ def annotate(
         va=va,
         ha=ha,
         color=color,
+        fontsize=fontsize,
         fontweight="bold",
         rotation=rotation,
         rotation_mode="anchor",
@@ -166,7 +168,10 @@ def prefix_label(
         "s4.0": "--mmseqs-s 4.0",
         "s5.7": "--mmseqs-s 5.7",
         "s7.5": "--mmseqs-s 7.5",
+        "s8.0": "--mmseqs-s 8.0",
+        "s9.0": "--mmseqs-s 9.0",
         "s10.0": "--mmseqs-s 10.0 (default)",
+        "s11.0": "--mmseqs-s 11.0",
         "s12.0": "--mmseqs-s 12.0",
         "s14.0": "--mmseqs-s 14.0",
         "ms2000": "--mmseqs-max-seqs 2000",
@@ -177,7 +182,10 @@ def prefix_label(
         "s4.0": "-s 4.0 (fast)",
         "s5.7": "-s 5.7 (default)",
         "s7.5": "-s 7.5 (sensitive)",
+        "s8.0": "-s 8.0",
+        "s9.0": "-s 9.0",
         "s10.0": "-s 10.0",
+        "s11.0": "-s 11.0",
         "s12.0": "-s 12.0",
         "s14.0": "-s 14.0",
         "ms300": "--max-seqs 300 (default)",
@@ -361,7 +369,7 @@ class Point:
         self.x = float(x)
         self.y = float(y)
 
-        prefix_tokens = self.prefix.split(".")[0].split('-')
+        prefix_tokens = self.prefix.rsplit(".", 1)[0].split('-')
 
         self.params = {}
         self.extra = []
