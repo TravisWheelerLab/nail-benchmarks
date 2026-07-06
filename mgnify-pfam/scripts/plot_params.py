@@ -211,10 +211,8 @@ def plot_line(pts, label, layout=None, label_layout=None):
 
         annotate(
             ax, f"{args}", pt, o, color,
-            fontsize=6,
+            fontsize=8,
             rotation=0,
-            linestyle='-',
-            # arrowstyle='-|>'
         )
 
 
@@ -250,7 +248,7 @@ if __name__ == "__main__":
     plot_line(
         n_prog, "nail (prog)",
         layout=[[(-5, 5), "left"] for _ in range(len(n_prog))],
-        label_layout=[(-20, 0), "left"]
+        label_layout=[(0, -20), "center"]
     )
 
     plot_line(
@@ -262,7 +260,7 @@ if __name__ == "__main__":
     plot_line(
         n_2000, "nail (ms=2000)",
         layout=[[(5, -5), "left"] for _ in range(len(n_2000))],
-        label_layout=[(0, -25), "center"]
+        label_layout=[(0, -30), "center"]
     )
 
     plot_line(
@@ -291,10 +289,10 @@ if __name__ == "__main__":
 
     ax.set_xlabel("Runtime (seconds; log scale)")
     ax.set_xscale("log")
-    ax.set_xlim(10.0, 5e3)
+    ax.set_xlim(10.0, 4e3)
 
-    ax.set_ylabel("")
-    ax.set_ylim(0.3, 1.0)
+    ax.set_ylabel("Fraction of HMMER recall")
+    ax.set_ylim(0.35, 1.025)
 
     ax.grid(True)
 

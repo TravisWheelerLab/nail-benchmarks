@@ -71,6 +71,29 @@ struct ScoreArgs {
 }
 
 #[derive(Parser)]
+struct TableArgs {
+    #[arg(short, long, value_name = "benchmark.tbl")]
+    benchmark_tbl: PathBuf,
+
+    #[arg(short, long, value_name = "results/")]
+    results_dir: PathBuf,
+
+    #[arg(short, long, value_name = "out.tbl", default_value = "results.tbl")]
+    out_path: PathBuf,
+
+    #[arg(short, long, default_value_t = false)]
+    e_value: bool,
+
+    #[arg(
+        short,
+        long,
+        default_value_t = 6,
+        default_value_if("e_value", "true", "9")
+    )]
+    min_width: usize,
+}
+
+#[derive(Parser)]
 struct Cli {
     #[command(subcommand)]
     cmd: Cmd,
@@ -81,6 +104,7 @@ enum Cmd {
     Recall(RecallArgs),
     Cells(CellsArgs),
     Score(ScoreArgs),
+    Table(TableArgs),
 }
 
 fn main() -> anyhow::Result<()> {
@@ -94,6 +118,200 @@ fn main() -> anyhow::Result<()> {
         Cmd::Score(args) => {
             score(args)?;
         }
+        Cmd::Table(args) => {
+            table(args)?;
+        }
+    }
+
+    Ok(())
+}
+
+fn table(args: TableArgs) -> anyhow::Result<()> {
+    let bm = Benchmark::new(args.benchmark_tbl).context("failed to open benchmark.tbl")?;
+
+    let mut out = BufWriter::new(File::create(args.out_path)?);
+
+    let mut tuples = vec![];
+
+    for path in glob(
+        args.results_dir
+            .join("*.tbl")
+            .to_str()
+            .context("invalid *.tbl glob")?,
+    )?
+    .filter_map(Result::ok)
+    {
+        let stem = path
+            .file_stem()
+            .and_then(|s| s.to_str())
+            .context("failed to produce file stem")?;
+
+        let (prefix, search_type) = stem.rsplit_once(".").context("failed to split prefix")?;
+        let prefix_tokens = prefix.split("-").map(|s| s.to_string()).collect::<Vec<_>>();
+
+        let file = BufReader::new(File::open(&path)?);
+
+        let tbl = match prefix_tokens.first().context("no prefix tokens")?.as_str() {
+            "nail" => HitTable::parse::<_, NailTable>(file, prefix)?,
+            "hmmer" => HitTable::parse::<_, HmmerTable>(file, prefix)?,
+            "mmseqs" => HitTable::parse::<_, BlastTable>(file, prefix)?,
+            "last" => HitTable::parse::<_, BlastTable>(file, prefix)?,
+            "blast" => HitTable::parse::<_, BlastTable>(file, prefix)?,
+            "diamond" => HitTable::parse::<_, BlastTable>(file, prefix)?,
+            _ => continue,
+        };
+
+        fn true_hit_filter(hit: &Hit) -> bool {
+            if hit.target.starts_with("decoy") {
+                return false;
+            }
+
+            let q = hit.query.split('|').next().unwrap();
+            let t = hit.target.split('|').next().unwrap();
+
+            q == t
+        }
+
+        let hits = tbl
+            .hits
+            .into_iter()
+            .filter(true_hit_filter)
+            .collect::<Vec<_>>();
+
+        let map: HashMap<String, f64> = if search_type == "prf" {
+            hits.into_iter()
+                .map(|hit| {
+                    let t = hit.target.split('|').nth(1).unwrap().to_string();
+
+                    if args.e_value {
+                        (t, hit.e_value)
+                    } else {
+                        (t, hit.score as f64)
+                    }
+                })
+                .collect()
+        } else {
+            // if we have seq queries, retain the single highest score
+            let mut best: HashMap<String, f64> = HashMap::new();
+            for hit in hits {
+                let t = hit.target.split('|').nth(1).unwrap().to_string();
+
+                if args.e_value {
+                    best.entry(t)
+                        .and_modify(|score| *score = score.min(hit.e_value))
+                        .or_insert(hit.e_value);
+                } else {
+                    best.entry(t)
+                        .and_modify(|score| *score = score.max(hit.score as f64))
+                        .or_insert(hit.score as f64);
+                }
+            }
+            best
+        };
+
+        tuples.push((prefix_tokens, search_type.to_string(), map));
+    }
+
+    // ---
+
+    fn cmp_component(a: &str, b: &str) -> std::cmp::Ordering {
+        let na = a.chars().find(|c| c.is_ascii_digit()).map(|_| {
+            a.chars()
+                .skip_while(|c| !c.is_ascii_digit())
+                .collect::<String>()
+                .parse::<f64>()
+                .unwrap()
+        });
+
+        let nb = b.chars().find(|c| c.is_ascii_digit()).map(|_| {
+            b.chars()
+                .skip_while(|c| !c.is_ascii_digit())
+                .collect::<String>()
+                .parse::<f64>()
+                .unwrap()
+        });
+
+        match (na, nb) {
+            (Some(a), Some(b)) => a.partial_cmp(&b).unwrap(),
+            _ => a.cmp(b),
+        }
+    }
+
+    fn cmp_keys(a: &[String], b: &[String]) -> std::cmp::Ordering {
+        for (x, y) in a.iter().zip(b) {
+            let ord = cmp_component(x, y);
+            if ord != std::cmp::Ordering::Equal {
+                return ord;
+            }
+        }
+
+        a.len().cmp(&b.len())
+    }
+
+    tuples.sort_by(|a, b| a.1.cmp(&b.1).then_with(|| cmp_keys(&a.0, &b.0)));
+
+    // ---
+
+    let n_rows = tuples.iter().map(|(p, _, _)| p.len()).max().unwrap();
+
+    let target_width = bm.entries.iter().map(|e| e.target.len()).max().unwrap();
+    let fam_width = bm.entries.iter().map(|e| e.family.len()).max().unwrap();
+
+    let widths = tuples
+        .iter()
+        .map(|(p, _, _)| p.iter().map(|s| s.len().max(args.min_width)).max().unwrap())
+        .collect::<Vec<_>>();
+
+    let total_width = widths.iter().map(|w| w + 1).sum::<usize>();
+
+    // first header line
+    write!(out, "#{:<W$} ", "target", W = target_width)?;
+    write!(out, "{:<W$} ", "family", W = fam_width)?;
+    write!(out, "{:<W$} ", "%id", W = 3)?;
+    tuples
+        .iter()
+        .zip(&widths)
+        .try_for_each(|((_, s, _), w)| write!(out, "{s:<W$} ", W = w))?;
+    writeln!(out)?;
+
+    // variable header lines
+    for r in 0..n_rows {
+        write!(out, "#{:W$} ", "", W = target_width)?;
+        write!(out, "{:W$} ", "", W = fam_width)?;
+        write!(out, "{:W$} ", "", W = 3)?;
+        tuples.iter().zip(&widths).try_for_each(|((p, _, _), w)| {
+            let val = p.get(r).map_or("", |v| v);
+            write!(out, "{val:<W$} ", W = w)
+        })?;
+        writeln!(out)?;
+    }
+
+    writeln!(
+        out,
+        "#{}",
+        "-".repeat(total_width + target_width + fam_width + 3)
+    )?;
+
+    // entries
+    for entry in bm.entries {
+        write!(out, "{:<W$} ", entry.target, W = target_width)?;
+        write!(out, " {:<W$} ", entry.family, W = fam_width)?;
+        write!(out, " {:>W$}% ", entry.pid, W = 2)?;
+        tuples
+            .iter()
+            .zip(&widths)
+            .try_for_each(|((_, _, m), w)| match m.get(&entry.target) {
+                Some(val) => {
+                    if args.e_value {
+                        write!(out, "{val:<W$.1e} ", W = w)
+                    } else {
+                        write!(out, "{val:<W$.1} ", W = w)
+                    }
+                }
+                None => write!(out, "{:<W$} ", "-", W = w),
+            })?;
+
+        writeln!(out)?;
     }
 
     Ok(())

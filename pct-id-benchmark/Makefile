@@ -163,6 +163,20 @@ plot-all-%:
 	@$(MAKE) plot-score-$*
 	@$(MAKE) plot-cells-$*
 
+table-score: $(PARSE)
+	@$(PARSE) table\
+		--benchmark-tbl ./benchmark/benchmark.tbl \
+		--results-dir ./benchmark/results/ \
+		--out-path results.score.tbl
+
+table-e: $(PARSE)
+	@$(PARSE) table\
+		--benchmark-tbl ./benchmark/benchmark.tbl \
+		--results-dir ./benchmark/results/ \
+		--out-path results.evalue.tbl \
+		--e-value
+
+
 params-%: $(PARSE)
 	$(eval P := figures-params/)
 	$(eval OVERLAY := $(if $(wildcard figures/time.txt),--overlay figures/time.txt,))
