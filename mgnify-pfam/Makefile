@@ -83,6 +83,49 @@ run-nail-1:
 		--results /data/results-mgy/nail/ \
 		benchmark-all/
 
+run-mmseqs-single:
+	@./scripts/run-mmseqs.sh \
+		--numa_node 1 \
+		--threads 48 \
+		--a 1 \
+		--b 1 \
+		--tmp /data/results-mgy/tmp/mmseqs-single/ \
+		--results /data/results-mgy/mmseqs-single/ \
+		benchmark-all/
+
+run-mmseqs-s7.5-a:
+	@./scripts/run-mmseqs.sh \
+		--numa_node 0 \
+		--threads 48 \
+		--s 7.5 \
+		--a 1 \
+		--b 500 \
+		--tmp /data/results-mgy/tmp/mmseqs-a/ \
+		--results /data/results-mgy/mmseqs-s7.5/ \
+		benchmark-all/
+
+run-mmseqs-s7.5-b:
+	@./scripts/run-mmseqs.sh \
+		--numa_node 1 \
+		--threads 48 \
+		--s 7.5 \
+		--a 501 \
+		--b 1000 \
+		--tmp /data/results-mgy/tmp/mmseqs-b/ \
+		--results /data/results-mgy/mmseqs-s7.5/ \
+		benchmark-all/
+
+run-hmmer-single:
+	@./scripts/run-hmmer.sh \
+		--numa_node 1 \
+		--threads 48 \
+		--a 1 \
+		--b 1 \
+		--tmp /data/results-mgy/tmp/hmmer-single/ \
+		--results /data/results-mgy/hmmer-single/ \
+		benchmark-all/
+
+
 run-rev-0:
 	@./scripts/run-rev.sh \
 		--numa_node 0 \
@@ -109,6 +152,22 @@ run-rev-params:
 		--threads 48 \
 		--tmp ./tmp-rev/ \
 		--results ./results-rev/ \
+		benchmark-all/
+
+#############
+
+runtime-extrap: 
+	@./scripts/runtime-extrap.sh \
+		--numa_node $(NUMA_NODE) \
+		--threads $(THREADS) \
+		--tmp benchmark-all/tmp-runtime-extrap/ \
+		benchmark-all/
+
+full-sparse: 
+	@./scripts/full-sparse.sh \
+		--numa_node $(NUMA_NODE) \
+		--threads $(THREADS) \
+		--tmp benchmark-all/tmp-full-sparse/ \
 		benchmark-all/
 
 #############
@@ -145,7 +204,7 @@ reverse-decoys: far
 
 decoys:
 	@./scripts/run-decoys.sh \
-		--numa_node 1 \
+		--numa_node $(NUMA_NODE) \
 		--threads $(THREADS) \
 		--tmp $(CUTOFFS)/tmp/ \
 		--results $(CUTOFFS)/results/ \
@@ -155,41 +214,15 @@ decoys:
 #############
 
 LEARN_CUTOFFS := numactl --cpunodebind=1 --membind=1 $(PARSE) learn-cutoffs \
-		/data/results-mgy/rev/nail/ \
-		/data/results-mgy/rev/mmseqs/ \
+		$(CUTOFFS)/results/nail/ \
+		$(CUTOFFS)/results/mmseqs/ \
+		$(CUTOFFS)/results/hmmer/ \
 		$(SRC_HMM) \
 		-t $(THREADS) \
 
-learn-cutoffs-1: mgy-parse
+learn-cutoffs: mgy-parse
 	@$(LEARN_CUTOFFS) \
-		-n 1 \
-		-o $(CUTOFFS)/cutoffs.1.txt
-
-learn-cutoffs-10: mgy-parse
-	@$(LEARN_CUTOFFS) \
-		-n 10 \
-		-o $(CUTOFFS)/cutoffs.10.txt
-
-learn-cutoffs-50: mgy-parse
-	@$(LEARN_CUTOFFS) \
-		-n 50 \
-		-o $(CUTOFFS)/cutoffs.50.txt
-
-learn-cutoffs-100: mgy-parse
-	@$(LEARN_CUTOFFS) \
-		-n 100 \
-		-o $(CUTOFFS)/cutoffs.100.txt
-
-learn-cutoffs-1000: mgy-parse
-	@$(LEARN_CUTOFFS) \
-		-o $(CUTOFFS)/cutoffs.1000.txt
-
-learn-cutoffs-all:
-	@$(MAKE) learn-cutoffs-1    THREADS=$(THREADS)
-	@$(MAKE) learn-cutoffs-10   THREADS=$(THREADS)
-	@$(MAKE) learn-cutoffs-50   THREADS=$(THREADS)
-	@$(MAKE) learn-cutoffs-100  THREADS=$(THREADS)
-	@$(MAKE) learn-cutoffs-1000 THREADS=$(THREADS)
+		-o $(CUTOFFS)/cutoffs.txt
 
 #############
 
@@ -197,35 +230,41 @@ RECALL := numactl --cpunodebind=1 --membind=1 \
 		  $(PARSE) recall \
 		  --query-path $(SRC_HMM) \
 		  --cutoffs-path $(CUTOFFS)/cutoffs.1000.txt \
-		  --nail-path benchmark-all/results/nail \
-		  --mmseqs-path benchmark-all/results/mmseqs \
 		  --hmmer-path benchmark-all/results/hmmer \
 		  --dir \
 		  -t $(THREADS)
-
-recall-1: mgy-parse
-	@echo "parsing benchmark-all (0.1%)..."
-	@$(RECALL) \
-		-n 1 \
-		-o benchmark-all/analysis/1
 		
-recall-10: mgy-parse
-	@echo "parsing benchmark-all (1%)..."
-	@$(RECALL) \
-		-n 10 \
-		-o benchmark-all/analysis/10
-
-recall-100: mgy-parse
-	@echo "parsing benchmark-all (10%)..."
-	@$(RECALL) \
-		-n 100 \
-		-o benchmark-all/analysis/100
-
-recall-1000: mgy-parse
+recall-n9.0-m7.5: mgy-parse
 	@echo "parsing benchmark-all (100%)..."
 	@$(RECALL) \
 		-n 1000 \
-		-o benchmark-all/analysis/1000
+		--nail-path benchmark-all/results/nail-s9.0 \
+		--mmseqs-path benchmark-all/results/mmseqs-s7.5 \
+		-o benchmark-all/analysis/n9.0-m7.5
+
+recall-n10.0-m7.5: mgy-parse
+	@echo "parsing benchmark-all (100%)..."
+	@$(RECALL) \
+		-n 1000 \
+		--nail-path benchmark-all/results/nail-s10.0 \
+		--mmseqs-path benchmark-all/results/mmseqs-s7.5 \
+		-o benchmark-all/analysis/n10.0-m7.5
+
+recall-n12.0-m7.5: mgy-parse
+	@echo "parsing benchmark-all (100%)..."
+	@$(RECALL) \
+		-n 1000 \
+		--nail-path benchmark-all/results/nail-s12.0 \
+		--mmseqs-path benchmark-all/results/mmseqs-s7.5 \
+		-o benchmark-all/analysis/n12.0-m7.5
+
+recall-n12.0-m12.0: mgy-parse
+	@echo "parsing benchmark-all (100%)..."
+	@$(RECALL) \
+		-n 1000 \
+		--nail-path benchmark-all/results/nail-s12.0 \
+		--mmseqs-path benchmark-all/results/mmseqs-s12.0 \
+		-o benchmark-all/analysis/n12.0-m12.0
 		
 #############
 

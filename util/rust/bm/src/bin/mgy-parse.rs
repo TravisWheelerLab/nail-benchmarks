@@ -4,7 +4,7 @@ use std::{
     fs::{create_dir_all, File, OpenOptions},
     io::{BufWriter, Write},
     path::{Path, PathBuf},
-    sync::{atomic::AtomicUsize, Arc},
+    sync::{atomic::AtomicUsize, Arc, Mutex},
     time::Instant,
 };
 
@@ -27,7 +27,7 @@ mod util {
     };
 
     use anyhow::Context;
-    use bioio::tbl::{BlastTable, HitTable, NailTable};
+    use bioio::tbl::{BlastTable, HitTable, HmmerTable, NailTable};
     use glob::glob;
     use rayon::ThreadPoolBuilder;
 
@@ -240,34 +240,46 @@ mod util {
         pub nail_rev: bioio::tbl::HitTable,
         pub mmseqs: bioio::tbl::HitTable,
         pub mmseqs_rev: bioio::tbl::HitTable,
+        pub hmmer: bioio::tbl::HitTable,
+        pub hmmer_rev: bioio::tbl::HitTable,
     }
 
     impl Tables {
         pub fn new(
             nail_dir: impl AsRef<Path>,
             mmseqs_dir: impl AsRef<Path>,
-            idx: usize,
+            hmmer_dir: impl AsRef<Path>,
+            query: &str,
         ) -> anyhow::Result<Self> {
             let nail_dir = nail_dir.as_ref();
             let mmseqs_dir = mmseqs_dir.as_ref();
+            let hmmer_dir = hmmer_dir.as_ref();
 
-            let path = nail_dir.join(format!("nail.{idx}.prf.tbl"));
+            let path = nail_dir.join(format!("{query}.tbl"));
             let nail = HitTable::from_path::<_, NailTable>(&path)?;
 
-            let path = nail_dir.join(format!("nail.{idx}.rev.prf.tbl"));
+            let path = nail_dir.join(format!("{query}.rev.tbl"));
             let nail_rev = HitTable::from_path::<_, NailTable>(&path)?;
 
-            let path = mmseqs_dir.join(format!("mmseqs.{idx}.prf.tbl"));
+            let path = mmseqs_dir.join(format!("{query}.tbl"));
             let mmseqs = HitTable::from_path::<_, BlastTable>(&path)?;
 
-            let path = mmseqs_dir.join(format!("mmseqs.{idx}.rev.prf.tbl"));
+            let path = mmseqs_dir.join(format!("{query}.rev.tbl"));
             let mmseqs_rev = HitTable::from_path::<_, BlastTable>(&path)?;
+
+            let path = hmmer_dir.join(format!("{query}.tbl"));
+            let hmmer = HitTable::from_path::<_, HmmerTable>(&path)?;
+
+            let path = hmmer_dir.join(format!("{query}.rev.tbl"));
+            let hmmer_rev = HitTable::from_path::<_, HmmerTable>(&path)?;
 
             Ok(Self {
                 nail,
                 nail_rev,
                 mmseqs,
                 mmseqs_rev,
+                hmmer,
+                hmmer_rev,
             })
         }
     }
@@ -538,6 +550,9 @@ struct LearnCutoffsArgs {
     #[arg(value_name = "mmseqs/")]
     mmseqs_dir: PathBuf,
 
+    #[arg(value_name = "hmmer/")]
+    hmmer_dir: PathBuf,
+
     #[arg(value_name = "query.hmm")]
     query_path: PathBuf,
 
@@ -570,167 +585,114 @@ fn learn_cutoffs(args: LearnCutoffsArgs) -> anyhow::Result<()> {
     let mut queries = hmms.keys().collect::<Vec<_>>();
     queries.sort();
 
-    let tbl_indices = util::parse_table_indices(&args.nail_dir, args.num_tables)
-        .context("failed to parse table indices")?;
-
-    // ---
-
-    type DecoyMap = HashMap<String, Vec<bioio::tbl::Hit>>;
-
-    #[derive(Default)]
-    struct Data {
-        nail_decoys: DecoyMap,
-        mmseqs_decoys: DecoyMap,
-    }
-
-    impl Data {
-        fn update(&mut self, mut tables: util::Tables, reverse_e_cutoff: f64) {
-            // ---
-            // filter the real hits by E-value
-
-            tables.nail.hits.retain(|h| h.e_value <= reverse_e_cutoff);
-            tables.mmseqs.hits.retain(|h| h.e_value <= reverse_e_cutoff);
-
-            // ---
-            // convert to (query, target)-keyed maps for easier comparison
-
-            let nail_map = tables.nail.to_map();
-            let mut nail_rev_map = tables.nail_rev.to_map();
-            let mmseqs_map = tables.mmseqs.to_map();
-            let mut mmseqs_rev_map = tables.mmseqs_rev.to_map();
-
-            // ---
-            // retain only reverse hits for pairs that don't
-            // remain in the real hits after filtering
-
-            nail_rev_map.retain(|k, _| !nail_map.contains_key(k));
-            mmseqs_rev_map.retain(|k, _| !mmseqs_map.contains_key(k));
-
-            // ---
-
-            nail_rev_map
-                .into_values()
-                .for_each(|h| self.nail_decoys.entry(h.query.clone()).or_default().push(h));
-
-            mmseqs_rev_map.into_values().for_each(|h| {
-                self.mmseqs_decoys
-                    .entry(h.query.clone())
-                    .or_default()
-                    .push(h)
-            });
-        }
-
-        fn merge(&mut self, other: Self) {
-            for (k, mut v) in other.nail_decoys {
-                self.nail_decoys.entry(k).or_default().append(&mut v);
-            }
-
-            for (k, mut v) in other.mmseqs_decoys {
-                self.mmseqs_decoys.entry(k).or_default().append(&mut v);
-            }
-        }
-    }
-
-    let mut data = tbl_indices
-        .par_iter()
-        .panic_fuse()
-        .try_fold(Data::default, |mut data, &idx| -> anyhow::Result<_> {
-            let tables = util::Tables::new(&args.nail_dir, &args.mmseqs_dir, idx)?;
-            data.update(tables, args.reverse_e_cutoff);
-            Ok(data)
-        })
-        .try_reduce(Data::default, |mut d1, d2| {
-            d1.merge(d2);
-            Ok(d1)
-        })?;
-
-    // ---
-
-    queries.iter().for_each(|q| {
-        data.nail_decoys.entry(q.to_string()).or_default();
-        data.mmseqs_decoys.entry(q.to_string()).or_default();
-    });
-
-    data.nail_decoys
-        .values_mut()
-        .for_each(|v| v.sort_by(util::hit_cmp));
-    data.mmseqs_decoys
-        .values_mut()
-        .for_each(|v| v.sort_by(util::hit_cmp));
-
-    // ---
-
     if let Some(parent) = args.out_path.parent() {
         create_dir_all(parent)?;
     }
 
-    let mut out = BufWriter::new(File::create(&args.out_path)?);
+    let out = Arc::new(Mutex::new(BufWriter::new(File::create(&args.out_path)?)));
 
-    struct FiguresOut {
-        dist: BufWriter<File>,
-        ga: BufWriter<File>,
-        cnt: BufWriter<File>,
-    }
-    let mut figures_out = if let Some(figures) = args.figures_dir {
-        std::fs::create_dir_all(&figures)?;
-        Some(FiguresOut {
-            dist: BufWriter::new(File::create(figures.join("dist.txt"))?),
-            ga: BufWriter::new(File::create(figures.join("ga.txt"))?),
-            cnt: BufWriter::new(File::create(figures.join("count.txt"))?),
-        })
-    } else {
-        None
-    };
-
-    const N_CUTOFF: usize = 5;
-    for (q, nail_hits) in data.nail_decoys.iter() {
-        let hmm = hmms.get(q).unwrap();
-        let mmseqs_hits = data.mmseqs_decoys.get(q).unwrap();
-
-        let nail_scores = nail_hits
-            .iter()
-            .map(|t| t.score)
-            .chain(std::iter::repeat(0.0))
-            .take(N_CUTOFF)
-            .collect::<Vec<_>>();
-
-        let mmseqs_scores = mmseqs_hits
-            .iter()
-            .map(|t| t.score)
-            .chain(std::iter::repeat(0.0))
-            .take(N_CUTOFF)
-            .collect::<Vec<_>>();
-
-        writeln!(
-            out,
-            "{q},(nail,{},{}),(mmseqs,{},{})",
-            nail_scores
-                .iter()
-                .map(|s| format!("{s:.1}"))
-                .collect::<Vec<_>>()
-                .join(","),
-            nail_hits.len(),
-            mmseqs_scores
-                .iter()
-                .map(|s| format!("{s:.1}"))
-                .collect::<Vec<_>>()
-                .join(","),
-            mmseqs_hits.len(),
-        )?;
+    queries.par_iter().try_for_each(|q| -> anyhow::Result<()> {
+        let mut tables =
+            match util::Tables::new(&args.nail_dir, &args.mmseqs_dir, &args.hmmer_dir, q) {
+                Ok(t) => t,
+                Err(_) => return Ok(()),
+            };
 
         // ---
+        // filter the real hits by E-value
+        tables
+            .nail
+            .hits
+            .retain(|h| h.e_value <= args.reverse_e_cutoff);
 
-        if let Some(out) = figures_out.as_mut() {
-            writeln!(out.dist, "{q},({},{})", nail_hits.len(), mmseqs_hits.len())?;
+        tables
+            .mmseqs
+            .hits
+            .retain(|h| h.e_value <= args.reverse_e_cutoff);
 
-            writeln!(out.ga, "{:.1},{:.1}", nail_scores[0], hmm.ga_sc)?;
+        tables
+            .hmmer
+            .hits
+            .retain(|h| h.e_value <= args.reverse_e_cutoff);
 
-            let diff = hmm.ga_sc - nail_scores[0];
-            writeln!(out.cnt, "{},{diff:.1}", nail_hits.len())?;
+        // ---
+        // convert to (query, target)-keyed maps for easier comparison
+
+        let nail_map = tables.nail.to_map();
+        let mut nail_rev_map = tables.nail_rev.to_map();
+
+        let mmseqs_map = tables.mmseqs.to_map();
+        let mut mmseqs_rev_map = tables.mmseqs_rev.to_map();
+
+        let hmmer_map = tables.hmmer.to_map();
+        let mut hmmer_rev_map = tables.hmmer_rev.to_map();
+
+        // ---
+        // retain only reverse hits for pairs that don't
+        // remain in the real hits after filtering
+
+        nail_rev_map.retain(|k, _| !nail_map.contains_key(k));
+        mmseqs_rev_map.retain(|k, _| !mmseqs_map.contains_key(k));
+        hmmer_rev_map.retain(|k, _| !hmmer_map.contains_key(k));
+
+        let mut n = nail_rev_map.into_values().collect::<Vec<_>>();
+        let mut m = mmseqs_rev_map.into_values().collect::<Vec<_>>();
+        let mut h = hmmer_rev_map.into_values().collect::<Vec<_>>();
+
+        n.sort_by(util::hit_cmp);
+        m.sort_by(util::hit_cmp);
+        h.sort_by(util::hit_cmp);
+
+        const N_CUTOFF: usize = 5;
+
+        let nn = n
+            .iter()
+            .map(|t| t.score)
+            .chain(std::iter::repeat(0.0))
+            .take(N_CUTOFF)
+            .collect::<Vec<_>>();
+
+        let mm = m
+            .iter()
+            .map(|t| t.score)
+            .chain(std::iter::repeat(0.0))
+            .take(N_CUTOFF)
+            .collect::<Vec<_>>();
+
+        let hh = h
+            .iter()
+            .map(|t| t.score)
+            .chain(std::iter::repeat(0.0))
+            .take(N_CUTOFF)
+            .collect::<Vec<_>>();
+
+        match out.lock() {
+            Ok(mut guard) => {
+                writeln!(
+                    guard,
+                    "{q},(nail,{},{}),(mmseqs,{},{})(hmmer,{},{})",
+                    nn.iter()
+                        .map(|s| format!("{s:.1}"))
+                        .collect::<Vec<_>>()
+                        .join(","),
+                    n.len(),
+                    mm.iter()
+                        .map(|s| format!("{s:.1}"))
+                        .collect::<Vec<_>>()
+                        .join(","),
+                    m.len(),
+                    hh.iter()
+                        .map(|s| format!("{s:.1}"))
+                        .collect::<Vec<_>>()
+                        .join(","),
+                    h.len(),
+                )?;
+            }
+            Err(_) => panic!("poisoned"),
         }
-    }
 
-    // ---
+        Ok(())
+    })?;
 
     println!("{:?} took {:?}", args.out_path, start.elapsed());
 
@@ -1040,15 +1002,17 @@ fn recall(args: RecallArgs) -> anyhow::Result<()> {
     create_dir_all(&args.out_path)?;
 
     let header = format!(
-        "{:^10}|{:^19}|{:^5}|{:^5}|{:^8}|{:^5}|{:^5}|{:^8}|{:^5}|{:^8}|{:^8}|{:^8}|{:^8}|{}",
+        "{:^10}|{:^19}|{:^8}|{:^5}|{:^5}|{:^8}|{:^5}|{:^5}|{:^8}|{:^5}|{:^5}|{:^8}|{:^8}|{:^8}|{:^8}|{}",
         "query",
         "target",
+        "file",
         "n cut",
         "n sc",
         "n Eval",
         "m cut",
         "m sc",
         "m Eval",
+        "h cut",
         "h sc",
         "h Eval",
         "dom max",
@@ -1059,6 +1023,11 @@ fn recall(args: RecallArgs) -> anyhow::Result<()> {
 
     let handles = util::PathHandles::new(queries, &args.out_path, "tbl", |p| {
         let mut f = File::create(p)
+            .unwrap_or_else(|e| panic!("failed to create output file: {p:?}\n\terror: {e:?}"));
+        writeln!(f, "{header}").unwrap();
+        writeln!(f, "{}", "-".repeat(header.len())).unwrap();
+
+        let mut f = File::create(p.with_extension("md.tbl"))
             .unwrap_or_else(|e| panic!("failed to create output file: {p:?}\n\terror: {e:?}"));
         writeln!(f, "{header}").unwrap();
         writeln!(f, "{}", "-".repeat(header.len())).unwrap();
@@ -1141,12 +1110,47 @@ fn recall(args: RecallArgs) -> anyhow::Result<()> {
         mmseqs_cutoff: f32,
         mmseqs_score: Option<f32>,
         mmseqs_e_value: Option<f64>,
+        hmmer_cutoff: f32,
         hmmer_score: Option<f32>,
         hmmer_e_value: Option<f64>,
         dom_score_sum: Option<f32>,
         dom_score_max: Option<f32>,
         dom_sig_cnt: Option<usize>,
         dom_scores: Option<Vec<f32>>,
+        file: String,
+    }
+
+    impl Record {
+        pub fn write(&self, buf: &mut impl Write) {
+            writeln!(
+                buf,
+                "{:10} {:19} {:8} {} {} {} {} {} {} {} {} {} {} {} {} {}",
+                self.query,
+                self.target,
+                self.file,
+                util::score_fmt(Some(self.nail_cutoff), 5),
+                util::score_fmt(self.nail_score, 5),
+                util::p_value_fmt(self.nail_e_value, 8),
+                util::score_fmt(Some(self.mmseqs_cutoff), 5),
+                util::score_fmt(self.mmseqs_score, 5),
+                util::p_value_fmt(self.mmseqs_e_value, 8),
+                util::score_fmt(Some(self.hmmer_cutoff), 5),
+                util::score_fmt(self.hmmer_score, 5),
+                util::p_value_fmt(self.hmmer_e_value, 8),
+                util::score_fmt(self.dom_score_max, 5),
+                util::score_fmt(self.dom_score_sum, 5),
+                util::int_fmt(self.dom_sig_cnt, 5),
+                match self.dom_scores {
+                    Some(ref v) => v
+                        .iter()
+                        .map(|f| format!("{f:.1}"))
+                        .collect::<Vec<_>>()
+                        .join(","),
+                    None => "-".to_string(),
+                },
+            )
+            .expect("failed to write record");
+        }
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -1161,6 +1165,16 @@ fn recall(args: RecallArgs) -> anyhow::Result<()> {
         times: Arc<Times>,
     ) -> anyhow::Result<()> {
         let start = Instant::now();
+
+        let idx = nail_path
+            .as_ref()
+            .file_name()
+            .unwrap()
+            .to_str()
+            .unwrap()
+            .split('.')
+            .nth(1)
+            .unwrap();
 
         // ---
         let now = Instant::now();
@@ -1254,6 +1268,7 @@ fn recall(args: RecallArgs) -> anyhow::Result<()> {
                 mmseqs_cutoff: *mmseqs_cutoffs
                     .get(query)
                     .expect("no mmseqs cutoff for query"),
+                file: format!("{idx}.fa"),
                 ..Default::default()
             };
 
@@ -1384,11 +1399,13 @@ fn recall(args: RecallArgs) -> anyhow::Result<()> {
         );
 
         let mut buf: Vec<u8> = vec![];
+        let mut md_buf: Vec<u8> = vec![];
         let mut remove: Vec<String> = vec![];
         while !records_by_query.is_empty() {
             remove.clear();
             for (query, records) in records_by_query.iter() {
                 buf.clear();
+                md_buf.clear();
                 match handles
                     .get(query)
                     .unwrap_or_else(|| panic!("failed to retrive file handle for query: {query}"))
@@ -1402,36 +1419,24 @@ fn recall(args: RecallArgs) -> anyhow::Result<()> {
                             .append(true)
                             .open(guard.clone())?;
 
+                        let mut md_file = OpenOptions::new()
+                            .create(true)
+                            .append(true)
+                            .open(guard.with_extension("md.tbl"))?;
+
                         for rec in records {
-                            writeln!(
-                                buf,
-                                "{:10} {:19} {} {} {} {} {} {} {} {} {} {} {} {}",
-                                rec.query,
-                                rec.target,
-                                util::score_fmt(Some(rec.nail_cutoff), 5),
-                                util::score_fmt(rec.nail_score, 5),
-                                util::p_value_fmt(rec.nail_e_value, 8),
-                                util::score_fmt(Some(rec.mmseqs_cutoff), 5),
-                                util::score_fmt(rec.mmseqs_score, 5),
-                                util::p_value_fmt(rec.mmseqs_e_value, 8),
-                                util::score_fmt(rec.hmmer_score, 5),
-                                util::p_value_fmt(rec.hmmer_e_value, 8),
-                                util::score_fmt(rec.dom_score_max, 5),
-                                util::score_fmt(rec.dom_score_sum, 5),
-                                util::int_fmt(rec.dom_sig_cnt, 5),
-                                match rec.dom_scores {
-                                    Some(ref v) => v
-                                        .iter()
-                                        .map(|f| format!("{f:.1}"))
-                                        .collect::<Vec<_>>()
-                                        .join(","),
-                                    None => "-".to_string(),
-                                },
-                            )
-                            .expect("failed to write record");
+                            rec.write(&mut buf);
+
+                            if rec.dom_sig_cnt >= Some(2) && rec.nail_score == None {
+                                rec.write(&mut md_buf);
+                            }
                         }
 
                         file.write_all(&buf)
+                            .context("failed to write record buffer to file")?;
+
+                        md_file
+                            .write_all(&md_buf)
                             .context("failed to write record buffer to file")?;
 
                         times.write.fetch_add(

@@ -36,7 +36,7 @@ export DECOYS
 export DECOYS_REV
 export RESULTS
 
-# # ---
+# ---
 
 # export ARGS="-t 1 --allow-overwrite --mmseqs-s 12.0 --mmseqs-max-seqs 1000000000"
 # time ${NUMA_PREFIX} parallel -j "${THREADS}" '
@@ -62,74 +62,74 @@ export RESULTS
 #         > /dev/null
 # ' ::: "${DECOYS}"/*
 
-# # ---
+# ---
 
-# export ARGS="--threads 1 -s 12.0 --max-seqs 1000000000"
-# time ${NUMA_PREFIX} parallel -j "${THREADS}" '
-#     Q="$STO/{/.}.sto"
-#     T="$DECOYS/{/.}.fa"
-#     T_R="$DECOYS_REV/{/.}.rev.fa"
-#     TBL="${RESULTS}/mmseqs/{/.}.tbl"
-#     TBL_R="${RESULTS}/mmseqs/{/.}.rev.tbl"
-#     D="${TMP}/mmseqs/{%}" 
+export ARGS="--threads 1 -s 12.0 --max-seqs 1000000000"
+time ${NUMA_PREFIX} parallel -j "${THREADS}" '
+    Q="$STO/{/.}.sto"
+    T="$DECOYS/{/.}.fa"
+    T_R="$DECOYS_REV/{/.}.rev.fa"
+    TBL="${RESULTS}/mmseqs/{/.}.tbl"
+    TBL_R="${RESULTS}/mmseqs/{/.}.rev.tbl"
+    D="${TMP}/mmseqs/{%}" 
 
-#     [ -e $D ] && rm -rf $D
-#     mkdir $D
+    [ -e $D ] && rm -rf $D
+    mkdir $D
 
-#     ANNOYING="$D/annoying"
+    ANNOYING="$D/annoying"
     
-#     MDB=$D/msaDB
-#     $MMSEQS convertmsa "$Q" $MDB --identifier-field 0 > /dev/null
+    MDB=$D/msaDB
+    $MMSEQS convertmsa "$Q" $MDB --identifier-field 0 > /dev/null
     
-#     QDB=$D/queryDB
-#     $MMSEQS msa2profile $MDB $QDB --match-mode 1 > /dev/null
+    QDB=$D/queryDB
+    $MMSEQS msa2profile $MDB $QDB --match-mode 1 > /dev/null
 
-#     TDB=$D/targetDB
-#     $MMSEQS createdb "$T" $TDB > /dev/null
+    TDB=$D/targetDB
+    $MMSEQS createdb "$T" $TDB > /dev/null
 
-#     ADB=$D/alignDB
+    ADB=$D/alignDB
 
-#     $MMSEQS search \
-#         $QDB $TDB $ADB $ANNOYING \
-#         $ARGS \
-#         > /dev/null
+    $MMSEQS search \
+        $QDB $TDB $ADB $ANNOYING \
+        $ARGS \
+        > /dev/null
 
-#     $MMSEQS convertalis $QDB $TDB $ADB $TBL --format-mode 0 > /dev/null
+    $MMSEQS convertalis $QDB $TDB $ADB $TBL --format-mode 0 > /dev/null
 
-#     rm $TDB*
-#     rm $ADB*
-#     rm -rf $ANNOYING
-#     $MMSEQS createdb "$T_R" $TDB > /dev/null
+    rm $TDB*
+    rm $ADB*
+    rm -rf $ANNOYING
+    $MMSEQS createdb "$T_R" $TDB > /dev/null
 
-#     $MMSEQS search \
-#         $QDB $TDB $ADB $ANNOYING \
-#         $ARGS \
-#         > /dev/null
+    $MMSEQS search \
+        $QDB $TDB $ADB $ANNOYING \
+        $ARGS \
+        > /dev/null
 
-#     $MMSEQS convertalis $QDB $TDB $ADB $TBL_R --format-mode 0 > /dev/null
-#  ' ::: "${DECOYS}"/*
+    $MMSEQS convertalis $QDB $TDB $ADB $TBL_R --format-mode 0 > /dev/null
+ ' ::: "${DECOYS}"/*
 
 
 # ---
 
-export ARGS="--cpu 1"
-time ${NUMA_PREFIX} parallel -j "${THREADS}" '
-    Q="$HMM/{/.}.hmm"
-    T="$DECOYS/{/.}.fa"
-    T_R="$DECOYS_REV/{/.}.rev.fa"
-    TBL="${RESULTS}/hmmer/{/.}.tbl"
-    TBL_R="${RESULTS}/hmmer/{/.}.rev.tbl"
-    D="${TMP}/hmmer/{%}" 
+# export ARGS="--cpu 1"
+# time ${NUMA_PREFIX} parallel -j "${THREADS}" '
+#     Q="$HMM/{/.}.hmm"
+#     T="$DECOYS/{/.}.fa"
+#     T_R="$DECOYS_REV/{/.}.rev.fa"
+#     TBL="${RESULTS}/hmmer/{/.}.tbl"
+#     TBL_R="${RESULTS}/hmmer/{/.}.rev.tbl"
+#     D="${TMP}/hmmer/{%}" 
 
-    $HMMSEARCH \
-        $ARGS \
-        --tblout $TBL \
-        $Q $T \
-        > /dev/null
+#     $HMMSEARCH \
+#         $ARGS \
+#         --tblout $TBL \
+#         $Q $T \
+#         > /dev/null
 
-    $HMMSEARCH \
-        $ARGS \
-        --tblout $TBL_R \
-        $Q $T_R \
-        > /dev/null
- ' ::: "${DECOYS}"/*
+#     $HMMSEARCH \
+#         $ARGS \
+#         --tblout $TBL_R \
+#         $Q $T_R \
+#         > /dev/null
+#  ' ::: "${DECOYS}"/*

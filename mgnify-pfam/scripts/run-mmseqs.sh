@@ -6,6 +6,7 @@ SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 set_default THREADS 8
 set_default E 10
 
+check_defined S
 check_defined BM_DIR
 check_defined A
 check_defined B
@@ -30,5 +31,5 @@ ADB=$TMP/alignDB
 for i in $(seq "$A" "$B"); do
     TARGET="$MGY/$i.fa"
     $MMSEQS createdb $TARGET $TDB > /dev/null
-    run_mmseqs "mmseqs.${i}.prf" "-s 12.0 --max-seqs 2000"
+    run_mmseqs "mmseqs.${i}.prf" "-s ${S} --max-seqs 2000 -e ${E}"
 done
