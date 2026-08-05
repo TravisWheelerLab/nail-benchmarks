@@ -6,6 +6,7 @@
 //! constructed is the benchmark's business.
 
 pub mod config;
+pub mod root;
 pub mod exec;
 pub mod split;
 pub mod tools;
@@ -16,6 +17,7 @@ use anyhow::{bail, Context, Result};
 
 pub use config::{Config, Run};
 pub use exec::{Numa, RunsTable};
+pub use root::find as repo_root;
 pub use tools::{Asset, Bin, Ctx, Search};
 
 /// Options that override what the config declares.
@@ -53,8 +55,9 @@ pub fn plan(config: &Config, opts: &Options) -> Result<Vec<Run>> {
 /// Execute every run against every search, writing one row per (run, search)
 /// into the results table.
 ///
-/// Searches are the outer loop so that per-target setup — an mmseqs target db,
-/// a blast db — is built once and then reused by every run against it.
+/// Runs are the outer loop: one configuration sweeps every search before the
+/// next begins, so a tool's numbers arrive together rather than interleaved
+/// shard by shard.
 pub fn execute(
     config: &Config,
     runs: &[Run],
@@ -70,15 +73,16 @@ pub fn execute(
     let mut done = 0usize;
     let mut failed = 0usize;
 
-    for search in searches {
-        // (tool, search) pairs already prepared; tools additionally skip work
-        // whose output exists, so a shared query set converts only once
-        let mut prepped: HashSet<String> = HashSet::new();
+    // (tool, search) pairs already prepared. Tracked across the whole execution
+    // rather than per outer iteration, so a later run reuses the databases an
+    // earlier one built; tools additionally skip work whose output exists.
+    let mut prepped: HashSet<(String, String)> = HashSet::new();
 
-        for run in runs {
+    for run in runs {
+        for search in searches {
             let tool = tools::get(&run.tool)?;
 
-            if prepped.insert(run.tool.clone()) {
+            if prepped.insert((run.tool.clone(), search.label.clone())) {
                 tool.prep(ctx, search)
                     .with_context(|| format!("prep failed for tool {:?}", run.tool))?;
                 std::fs::remove_file(ctx.log_dir().join(format!("prep-{}.err", run.tool))).ok();

@@ -16,8 +16,6 @@ use rand::{Rng, SeedableRng};
 use run::exec::Job;
 use run::Bin;
 
-use crate::root;
-
 /// This benchmark's directory, relative to the repository root.
 const DIR: &str = "pct-id";
 
@@ -86,7 +84,7 @@ pub struct Args {
 }
 
 pub fn main(args: Args) -> Result<()> {
-    let repo = root::find(args.root.as_deref())?;
+    let repo = run::repo_root(args.root.as_deref())?;
     let dir = repo.join(DIR);
 
     let bin = Bin::new(repo.join("tools/bin"));

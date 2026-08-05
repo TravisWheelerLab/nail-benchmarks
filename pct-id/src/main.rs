@@ -6,7 +6,6 @@
 
 mod build;
 mod parse;
-mod root;
 
 use std::path::PathBuf;
 
@@ -72,7 +71,7 @@ fn main() -> Result<()> {
 }
 
 fn run_main(args: RunArgs) -> Result<()> {
-    let root = root::find(args.root.as_deref())?;
+    let root = run::repo_root(args.root.as_deref())?;
     let dir = root.join(DIR);
 
     let config = run::Config::from_path(dir.join("bench.toml"))?;

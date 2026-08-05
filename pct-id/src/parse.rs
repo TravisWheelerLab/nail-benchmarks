@@ -12,7 +12,6 @@ use bioio::tbl::{BlastTable, Hit, HitTable, HmmerTable, NailTable};
 use anyhow::Context;
 use clap::{Parser, Subcommand};
 use glob::glob;
-use regex::Regex;
 
 const PRECISION: usize = 4;
 const FIXED_FPR: f32 = 0.01;
@@ -703,6 +702,65 @@ struct RecallData {
     positive_cnt: usize,
 }
 
+/// Wall-clock seconds per run, read from the runs table the runner writes.
+///
+/// This replaces the per-run GNU `time -v` files the old bash pipeline
+/// produced; timing now lives in one space-aligned table instead of one text
+/// file per run.
+fn read_runtimes(results_dir: &Path) -> anyhow::Result<HashMap<String, f32>> {
+    let path = results_dir.join("runs.tbl");
+    let text = std::fs::read_to_string(&path)
+        .with_context(|| format!("failed to read {}", path.display()))?;
+
+    let mut columns: Vec<String> = Vec::new();
+    let mut out = HashMap::new();
+
+    for line in text.lines() {
+        if let Some(rest) = line.strip_prefix("# ") {
+            // the header names the columns; the separator row that follows is
+            // only dashes
+            if columns.is_empty() && !rest.starts_with('-') {
+                columns = rest.split_whitespace().map(str::to_string).collect();
+            }
+            continue;
+        }
+
+        if line.trim().is_empty() {
+            continue;
+        }
+
+        let name_idx = columns
+            .iter()
+            .position(|c| c == "name")
+            .context("runs.tbl has no `name` column")?;
+        let wall_idx = columns
+            .iter()
+            .position(|c| c == "wall_s")
+            .context("runs.tbl has no `wall_s` column")?;
+
+        // cmd is the last column and contains spaces, but every column we need
+        // precedes it, so positional splitting is safe
+        let fields: Vec<&str> = line.split_whitespace().collect();
+        let name = fields
+            .get(name_idx)
+            .context("short row in runs.tbl")?
+            .to_string();
+        let wall: f32 = fields
+            .get(wall_idx)
+            .context("short row in runs.tbl")?
+            .parse()
+            .with_context(|| format!("unparseable wall_s for run {name:?}"))?;
+
+        out.insert(name, wall);
+    }
+
+    if out.is_empty() {
+        anyhow::bail!("no runs found in {}", path.display());
+    }
+
+    Ok(out)
+}
+
 impl RecallData {
     fn new<P: AsRef<Path>>(results_dir: P, bm: &Benchmark) -> anyhow::Result<Self> {
         let results_dir = PathBuf::from(results_dir.as_ref());
@@ -717,7 +775,7 @@ impl RecallData {
             pid_bin_tot_cnts[pid] += 1;
         });
 
-        let time_pattern = Regex::new(r"Elapsed.*\): (?P<time>.*)$").unwrap();
+        let runtimes = read_runtimes(&results_dir)?;
 
         for path in glob(
             results_dir
@@ -727,14 +785,21 @@ impl RecallData {
         )?
         .filter_map(Result::ok)
         {
+            // the runs table lives alongside the per-run hit tables and shares
+            // their extension, but is not one of them
+            if path.file_name().is_some_and(|n| n == "runs.tbl") {
+                continue;
+            }
+
             let file = BufReader::new(File::open(&path)?);
 
-            let stem_tokens: Vec<&str> = path
+            let stem = path
                 .file_stem()
                 .and_then(|s| s.to_str())
                 .context("invalid path")?
-                .split('.')
-                .collect();
+                .to_string();
+
+            let stem_tokens: Vec<&str> = stem.split('.').collect();
 
             assert!(stem_tokens.len() >= 2);
 
@@ -756,24 +821,10 @@ impl RecallData {
             .map(|tbl| HitTable2::new(&tbl, bm, search_type))?;
             tables.push(tbl);
 
-            // the time file will have the same prefix as the tbl
-            let time_path = path.with_extension("time");
-            let time: f32 = std::fs::read_to_string(time_path)?
-                .lines()
-                .filter_map(|l| time_pattern.captures(l))
-                .map(|c| {
-                    c.name("time")
-                        .unwrap()
-                        .as_str()
-                        .split(':')
-                        .map(|t| t.parse::<f32>().unwrap())
-                        .rev()
-                        .enumerate()
-                        .map(|(i, t)| t * 60.0_f32.powf(i as f32))
-                        .sum()
-                })
-                .max_by(float_cmp)
-                .expect("no times found");
+            // a hit table's stem is exactly the run name in the runs table
+            let time = *runtimes
+                .get(&stem)
+                .with_context(|| format!("no row for run {stem:?} in runs.tbl"))?;
 
             times.push(time);
         }

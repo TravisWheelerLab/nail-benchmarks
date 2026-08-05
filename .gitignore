@@ -4,6 +4,8 @@ data/
 tools/
 **/benchmark*/
 **/figures*/
+**/profmark/
+**/results/
 **/tmp/
 **/tmp-*/
 **/__pycache__/

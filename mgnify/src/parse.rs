@@ -319,8 +319,10 @@ mod util {
     }
 }
 
+/// Analysis subcommands for this benchmark. Kept here rather than in the `run`
+/// library because what counts as a result is benchmark-specific.
 #[derive(Subcommand)]
-enum SubCommands {
+pub enum Cmd {
     Recall(RecallArgs),
     LearnCutoffs(LearnCutoffsArgs),
     CutoffsSweep(CutoffsSweepArgs),
@@ -328,24 +330,18 @@ enum SubCommands {
     CheckRev(CheckRevArgs),
 }
 
-#[derive(Parser)]
-struct Cli {
-    #[command(subcommand)]
-    pub command: SubCommands,
-}
-
-fn main() -> anyhow::Result<()> {
-    match Cli::parse().command {
-        SubCommands::Recall(args) => recall(args),
-        SubCommands::Params(args) => params(args),
-        SubCommands::LearnCutoffs(args) => learn_cutoffs(args),
-        SubCommands::CutoffsSweep(args) => cutoffs_sweep(args),
-        SubCommands::CheckRev(args) => check_rev(args),
+pub fn main(cmd: Cmd) -> anyhow::Result<()> {
+    match cmd {
+        Cmd::Recall(args) => recall(args),
+        Cmd::Params(args) => params(args),
+        Cmd::LearnCutoffs(args) => learn_cutoffs(args),
+        Cmd::CutoffsSweep(args) => cutoffs_sweep(args),
+        Cmd::CheckRev(args) => check_rev(args),
     }
 }
 
 #[derive(Parser)]
-struct CutoffsSweepArgs {
+pub struct CutoffsSweepArgs {
     #[arg(value_name = "nail.tbl")]
     nail_tbl: PathBuf,
 
@@ -543,7 +539,7 @@ fn cutoffs_sweep(args: CutoffsSweepArgs) -> anyhow::Result<()> {
 }
 
 #[derive(Parser)]
-struct LearnCutoffsArgs {
+pub struct LearnCutoffsArgs {
     #[arg(value_name = "nail/")]
     nail_dir: PathBuf,
 
@@ -700,7 +696,7 @@ fn learn_cutoffs(args: LearnCutoffsArgs) -> anyhow::Result<()> {
 }
 
 #[derive(Parser)]
-struct ParamsArgs {
+pub struct ParamsArgs {
     #[arg(long, short, value_name = "query.hmm")]
     query_path: PathBuf,
 
@@ -903,7 +899,7 @@ fn params(args: ParamsArgs) -> anyhow::Result<()> {
 }
 
 #[derive(Parser)]
-struct RecallArgs {
+pub struct RecallArgs {
     #[arg(long, short, value_name = "query.hmm")]
     query_path: PathBuf,
 
@@ -1517,7 +1513,7 @@ fn recall(args: RecallArgs) -> anyhow::Result<()> {
 }
 
 #[derive(Parser)]
-struct CheckRevArgs {
+pub struct CheckRevArgs {
     #[arg(long, value_name = "nail/")]
     nail_dir: PathBuf,
 

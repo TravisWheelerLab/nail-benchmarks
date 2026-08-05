@@ -98,42 +98,47 @@ def main(args):
             drawstyle="steps-post",
         )
 
-        pt = (X_LABEL, curve.approx_y(X_LABEL))
-        offset = (0, 0)
-        rotation = 0
-        if curve.search_type == "prf":
-            if curve.tool == "hmmer":
-                offset = (0, 20)
-            elif curve.tool == "nail":
-                offset = (0, 20)
-            elif curve.tool == "mmseqs":
-                offset = (0, -25)
-            elif curve.tool == "blast":
-                offset = (0, 20)
-        elif curve.search_type == "seq":
-            if curve.tool == "hmmer":
-                offset = (0, 20)
-            elif curve.tool == "nail":
-                x = X_LABEL * 2.0
-                pt = (x, curve.approx_y(x))
-                offset = (0, -30)
-            elif curve.tool == "mmseqs":
-                x = X_LABEL / 2.0
-                pt = (x, curve.approx_y(x))
-                offset = (0, -30)
-            elif curve.tool == "blast":
-                offset = (0, 15)
-                rotation = 10
-            elif curve.tool == "diamond":
-                x = X_LABEL * 10.0
-                pt = (x, curve.approx_y(x))
-                offset = (0, -30)
+        # a curve that never reaches the annotation x cannot be labelled; draw
+        # it unlabelled rather than losing the whole figure to one short curve
+        try:
+            pt = (X_LABEL, curve.approx_y(X_LABEL))
+            offset = (0, 0)
+            rotation = 0
+            if curve.search_type == "prf":
+                if curve.tool == "hmmer":
+                    offset = (0, 20)
+                elif curve.tool == "nail":
+                    offset = (0, 20)
+                elif curve.tool == "mmseqs":
+                    offset = (0, -25)
+                elif curve.tool == "blast":
+                    offset = (0, 20)
+            elif curve.search_type == "seq":
+                if curve.tool == "hmmer":
+                    offset = (0, 20)
+                elif curve.tool == "nail":
+                    x = X_LABEL * 2.0
+                    pt = (x, curve.approx_y(x))
+                    offset = (0, -30)
+                elif curve.tool == "mmseqs":
+                    x = X_LABEL / 2.0
+                    pt = (x, curve.approx_y(x))
+                    offset = (0, -30)
+                elif curve.tool == "blast":
+                    offset = (0, 15)
+                    rotation = 10
+                elif curve.tool == "diamond":
+                    x = X_LABEL * 10.0
+                    pt = (x, curve.approx_y(x))
+                    offset = (0, -30)
 
-        annotate(
-            ax, tool, pt, offset, color, rotation,
-            linestyle='--',
-            arrowstyle='-|>'
-        )
+            annotate(
+                ax, tool, pt, offset, color, rotation,
+                linestyle='--',
+                arrowstyle='-|>'
+            )
+        except ValueError:
+            pass
 
     plt.savefig(args.out)
 

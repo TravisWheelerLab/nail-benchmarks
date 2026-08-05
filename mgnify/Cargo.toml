@@ -1,0 +1,21 @@
+[package]
+name = "mgnify"
+version = "0.1.0"
+edition = "2024"
+
+[[bin]]
+name = "mgnify"
+path = "src/main.rs"
+
+[dependencies]
+bioio = { workspace = true }
+run = { workspace = true }
+
+anyhow = { workspace = true }
+clap = { workspace = true }
+glob = { workspace = true }
+indexmap = { workspace = true }
+rand = { workspace = true }
+rayon = { workspace = true }
+regex = { workspace = true }
+thread_local = { workspace = true }
