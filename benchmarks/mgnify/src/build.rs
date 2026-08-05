@@ -8,7 +8,7 @@ use clap::Parser;
 use crate::fasta;
 
 /// This benchmark's directory, relative to the repository root.
-pub const DIR: &str = "mgnify";
+pub const DIR: &str = "benchmarks/mgnify";
 
 #[derive(Parser, Debug)]
 pub struct Args {

@@ -17,7 +17,7 @@ use run::exec::Job;
 use run::Bin;
 
 /// This benchmark's directory, relative to the repository root.
-const DIR: &str = "pct-id";
+const DIR: &str = "benchmarks/pct-id";
 
 /// Decoys per true pair in the target database.
 const DECOY_RATIO: usize = 100;

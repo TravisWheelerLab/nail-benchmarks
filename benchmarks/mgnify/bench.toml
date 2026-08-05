@@ -17,7 +17,7 @@ evalue = "10"
 [[run]]
 tool = "nail"
 query = "prf"
-s = 12.0
+s = [9.0, 10.0, 12.0]
 name = "nail-s{s}-prog.{query}"
 args = "--allow-overwrite --mmseqs-s {s} --seed-mode prog -E {evalue}"
 
@@ -26,7 +26,7 @@ args = "--allow-overwrite --mmseqs-s {s} --seed-mode prog -E {evalue}"
 [[run]]
 tool = "mmseqs"
 query = "prf"
-s = 7.5
+s = [7.5, 12.0]
 max_seqs = 2000
 name = "mmseqs-s{s}-ms{max_seqs}.{query}"
 args = "-s {s} --max-seqs {max_seqs} -e {evalue}"

@@ -2,15 +2,15 @@
 resolver = "2"
 
 members = [
-    "bioio",
-    "run",
-    "pct-id",
-    "mgnify",
+    "crates/bioio",
+    "crates/run",
+    "benchmarks/pct-id",
+    "benchmarks/mgnify",
 ]
 
 [workspace.dependencies]
-bioio = { path = "bioio" }
-run = { path = "run" }
+bioio = { path = "crates/bioio" }
+run = { path = "crates/run" }
 
 anyhow = "1.0.99"
 clap = { version = "4.5.53", features = ["derive"] }

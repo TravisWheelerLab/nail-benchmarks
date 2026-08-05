@@ -15,7 +15,7 @@ use clap::{Parser, Subcommand};
 use run::{Asset, Bin, Ctx, Numa, Options, Search};
 
 /// This benchmark's directory, relative to the repository root.
-const DIR: &str = "pct-id";
+const DIR: &str = "benchmarks/pct-id";
 
 #[derive(Parser)]
 #[command(name = "pct-id", about = "percent-identity benchmark")]
