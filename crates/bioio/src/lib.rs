@@ -1,3 +1,4 @@
+pub mod aggregate;
 pub mod fasta;
 pub mod hmm;
 pub mod mmseqs;

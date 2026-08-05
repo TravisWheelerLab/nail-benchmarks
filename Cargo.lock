@@ -73,7 +73,9 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "indexmap",
+ "memchr",
  "rand",
+ "rayon",
  "regex",
 ]
 
