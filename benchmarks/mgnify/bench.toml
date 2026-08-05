@@ -1,7 +1,7 @@
 # MGnify/Pfam benchmark: the full Pfam profile set against metagenomic
 # proteins, sharded so work can be split across NUMA nodes.
 #
-#   mgnify build                          shard data/mgnify.fa
+#   mgnify build                          shard all of MGnify against all of Pfam
 #   mgnify run --shards 1-500 --numa-node 0
 #   mgnify run --shards 501-1000 --numa-node 1
 #

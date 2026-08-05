@@ -10,14 +10,14 @@ use bioio::fasta::{Fasta, FastaRecord};
 use bioio::stockholm::Stockholm;
 
 use rand::rngs::StdRng;
-use rand::seq::{IndexedRandom, SliceRandom};
-use rand::{Rng, SeedableRng};
+use rand::seq::IndexedRandom;
+use rand::SeedableRng;
 
 use run::exec::Job;
 use run::Bin;
 
 /// This benchmark's directory, relative to the repository root.
-const DIR: &str = "benchmarks/pct-id";
+
 
 /// Decoys per true pair in the target database.
 const DECOY_RATIO: usize = 100;
@@ -78,14 +78,11 @@ pub struct Args {
     #[arg(short, long, default_value_t = 8)]
     pub threads: usize,
 
-    /// Repository root, if it cannot be discovered automatically.
-    #[arg(long)]
-    pub root: Option<PathBuf>,
 }
 
 pub fn main(args: Args) -> Result<()> {
-    let repo = run::repo_root(args.root.as_deref())?;
-    let dir = repo.join(DIR);
+    let repo = run::repo(env!("CARGO_MANIFEST_DIR"));
+    let dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
 
     let bin = Bin::new(repo.join("tools/bin"));
 
@@ -467,43 +464,17 @@ fn assemble(
 
     // ---- decoys ----
 
-    let n_src = src_fa.records.len();
     let n_decoys = pairs.len() * DECOY_RATIO;
-    println!("sampling {n_decoys} decoys from {n_src} source sequences...");
+    println!(
+        "sampling {n_decoys} decoys from {} source sequences...",
+        src_fa.records.len()
+    );
 
-    let mut src_bytes: &[u8] = &[];
-    for decoy_idx in 0..n_decoys {
-        // length-match each decoy to a randomly chosen real target
-        let decoy_len = targets
-            .get(rng.random_range(0..targets.len()))
-            .context("bad target index")?
-            .seq
-            .len();
-
-        while src_bytes.len() < decoy_len {
-            src_bytes = src_fa
-                .records
-                .get_index(rng.random_range(0..n_src))
-                .context("bad source index")?
-                .1
-                .seq
-                .as_bytes();
-        }
-
-        let start = rng.random_range(0..=src_bytes.len() - decoy_len);
-        let mut sample: Vec<u8> = src_bytes[start..start + decoy_len].to_vec();
-        sample.shuffle(&mut rng);
-
-        let decoy = FastaRecord {
-            name: format!("decoy{decoy_idx}"),
-            extra: String::new(),
-            seq: std::str::from_utf8(&sample)
-                .context("decoy sequence was not utf8")?
-                .to_string(),
-        };
-
+    // decoys are length-matched to real targets and shuffled, so they share the
+    // benchmark's length and composition profile without any real homology
+    let lengths: Vec<usize> = targets.iter().map(|t| t.seq.len()).collect();
+    for decoy in bioio::fasta::decoys(&src_fa, &lengths, n_decoys, &mut rng)? {
         writeln!(target_writer, "{decoy}")?;
-        src_bytes = &[];
     }
 
     target_writer.flush()?;

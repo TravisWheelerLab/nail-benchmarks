@@ -194,3 +194,192 @@ where
         String::from_utf8(buf).context("failed to produce string")
     }
 }
+
+// ---------------------------------------------------------------- shaping
+
+use std::io::{BufWriter, Write};
+use rand::rngs::StdRng;
+use rand::seq::SliceRandom;
+use rand::{Rng, SeedableRng};
+
+/// Deal a fasta into `n` shards, reshuffling the destination order every `n`
+/// records so shards stay comparable in composition rather than reflecting
+/// whatever order the source happened to be in.
+pub fn split(fa_path: &Path, n: usize, out_dir: &Path, seed: u64) -> anyhow::Result<()> {
+    std::fs::create_dir_all(out_dir)
+        .with_context(|| format!("failed to create {}", out_dir.display()))?;
+
+    let mut writers = Vec::with_capacity(n);
+    for i in 1..=n {
+        let path = out_dir.join(format!("{i}.fa"));
+        let file = std::fs::File::create(&path)
+            .with_context(|| format!("failed to create {}", path.display()))?;
+        writers.push(BufWriter::new(file));
+    }
+
+    let mut index: FastaByteIndex<_, 64> = FastaByteIndex::new(
+        std::fs::File::open(fa_path)
+            .with_context(|| format!("failed to open {}", fa_path.display()))?,
+    )?;
+
+    let mut rng = StdRng::seed_from_u64(seed);
+    let mut order: Vec<usize> = (0..n).collect();
+
+    for i in 1..=index.size {
+        let j = i % n;
+        if j == 0 {
+            order.shuffle(&mut rng);
+        }
+        let seq = index.get(i)?;
+        write!(&mut writers[order[j]], "{seq}")?;
+    }
+
+    for mut w in writers {
+        w.flush()?;
+    }
+
+    Ok(())
+}
+
+/// Write a copy of `fa_path` with every sequence reversed. Reversed sequences
+/// keep the composition of the original but destroy its homology, which makes
+/// them usable as decoys when calibrating score cutoffs.
+pub fn reverse(fa_path: &Path, out_path: &Path) -> anyhow::Result<()> {
+    if let Some(dir) = out_path.parent() {
+        std::fs::create_dir_all(dir)?;
+    }
+
+    let mut out = BufWriter::new(
+        std::fs::File::create(out_path)
+            .with_context(|| format!("failed to create {}", out_path.display()))?,
+    );
+
+    let mut index: FastaByteIndex<_, 64> = FastaByteIndex::new(
+        std::fs::File::open(fa_path)
+            .with_context(|| format!("failed to open {}", fa_path.display()))?,
+    )?;
+
+    for i in 1..=index.size {
+        let mut rec = index.get_record(i)?;
+        rec.reverse();
+        writeln!(out, "{rec}")?;
+    }
+
+    out.flush()?;
+    Ok(())
+}
+
+/// Write the first `n` records of a fasta to `out_path`.
+pub fn sample_to(fa_path: &Path, n: usize, out_path: &Path) -> anyhow::Result<()> {
+    if let Some(dir) = out_path.parent() {
+        std::fs::create_dir_all(dir)?;
+    }
+
+    let mut index: FastaByteIndex<_, 64> = FastaByteIndex::new(
+        std::fs::File::open(fa_path)
+            .with_context(|| format!("failed to open {}", fa_path.display()))?,
+    )?;
+    let mut out = BufWriter::new(std::fs::File::create(out_path)?);
+
+    for i in 1..=n.min(index.size) {
+        write!(out, "{}", index.get(i)?)?;
+    }
+
+    out.flush()?;
+    Ok(())
+}
+
+/// Number of records in a fasta, counted without holding the file in memory.
+pub fn count(path: impl AsRef<Path>) -> anyhow::Result<usize> {
+    use std::io::BufRead;
+
+    let reader = std::io::BufReader::new(std::fs::File::open(path.as_ref())?);
+    let mut n = 0usize;
+
+    for line in reader.lines() {
+        if line?.starts_with('>') {
+            n += 1;
+        }
+    }
+
+    Ok(n)
+}
+
+/// Residue count of a fasta holding exactly one sequence.
+pub fn residue_len(path: impl AsRef<Path>) -> anyhow::Result<usize> {
+    let path = path.as_ref();
+    let text = std::fs::read_to_string(path)
+        .with_context(|| format!("failed to read {}", path.display()))?;
+
+    let mut headers = 0usize;
+    let mut len = 0usize;
+
+    for line in text.lines() {
+        if line.starts_with('>') {
+            headers += 1;
+        } else {
+            len += line.chars().filter(|c| !c.is_whitespace()).count();
+        }
+    }
+
+    if headers != 1 {
+        anyhow::bail!(
+            "expected exactly one sequence in {}, found {headers}",
+            path.display()
+        );
+    }
+
+    Ok(len)
+}
+
+/// Generate decoy records by drawing a subsequence from `source` matched to the
+/// length of a randomly chosen record in `lengths`, then shuffling it.
+///
+/// Shuffling preserves amino acid composition while destroying any real
+/// homology, which is what makes a decoy a fair negative rather than simply an
+/// unrelated sequence.
+pub fn decoys(
+    source: &Fasta,
+    lengths: &[usize],
+    count: usize,
+    rng: &mut StdRng,
+) -> anyhow::Result<Vec<FastaRecord>> {
+    if source.records.is_empty() || lengths.is_empty() {
+        anyhow::bail!("cannot generate decoys from an empty source");
+    }
+
+    let n_src = source.records.len();
+    let mut out = Vec::with_capacity(count);
+    let mut src_bytes: &[u8] = &[];
+
+    for idx in 0..count {
+        let decoy_len = lengths[rng.random_range(0..lengths.len())];
+
+        // keep drawing until a source sequence is long enough to cut from
+        while src_bytes.len() < decoy_len {
+            src_bytes = source
+                .records
+                .get_index(rng.random_range(0..n_src))
+                .context("bad source index")?
+                .1
+                .seq
+                .as_bytes();
+        }
+
+        let start = rng.random_range(0..=src_bytes.len() - decoy_len);
+        let mut sample: Vec<u8> = src_bytes[start..start + decoy_len].to_vec();
+        sample.shuffle(rng);
+
+        out.push(FastaRecord {
+            name: format!("decoy{idx}"),
+            extra: String::new(),
+            seq: std::str::from_utf8(&sample)
+                .context("decoy sequence was not utf8")?
+                .to_string(),
+        });
+
+        src_bytes = &[];
+    }
+
+    Ok(out)
+}

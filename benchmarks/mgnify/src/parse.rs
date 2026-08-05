@@ -71,95 +71,6 @@ mod util {
         }
     }
 
-    pub fn p_value(score: f64, lambda: f64, tau: f64) -> f64 {
-        (-lambda * (score - tau)).exp()
-    }
-
-    pub struct HmmGumbel {
-        pub ga_sc: f32,
-        pub ga_p: f64,
-        pub tau: f64,
-        pub lambda: f64,
-    }
-
-    impl HmmGumbel {
-        pub fn p_value(&self, score: f64) -> f64 {
-            (-self.lambda * (score - self.tau)).exp()
-        }
-    }
-
-    pub fn target_db_size(target_path: impl AsRef<Path>) -> anyhow::Result<f64> {
-        let reader = BufReader::new(File::open(target_path.as_ref())?);
-        let mut z = 0.0;
-
-        for line in reader.lines() {
-            let line = line?;
-
-            if line.starts_with('>') {
-                z += 1.0;
-            }
-        }
-
-        Ok(z)
-    }
-
-    pub fn parse_hmms(hmm_path: impl AsRef<Path>) -> anyhow::Result<HashMap<String, HmmGumbel>> {
-        let reader = BufReader::new(File::open(hmm_path.as_ref())?);
-
-        let mut names = vec![];
-        let mut gathering_thresholds = vec![];
-        let mut gumbels = vec![];
-
-        for line in reader.lines() {
-            let line = line?;
-
-            if let Some(rest) = line.strip_prefix("NAME") {
-                names.push(rest.split_whitespace().collect::<String>());
-            }
-
-            if let Some(rest) = line.strip_prefix("GA") {
-                let x = rest
-                    .split_whitespace()
-                    .map(|s| s.parse::<f32>().unwrap())
-                    .collect::<Vec<_>>();
-
-                gathering_thresholds.push((x[0], x[1]));
-            }
-
-            if let Some(rest) = line.strip_prefix("STATS LOCAL FORWARD") {
-                let x = rest
-                    .split_whitespace()
-                    .map(|s| s.parse::<f64>().unwrap())
-                    .collect::<Vec<_>>();
-
-                gumbels.push((x[0], x[1]))
-            }
-        }
-
-        assert_eq!(names.len(), gathering_thresholds.len());
-        assert_eq!(names.len(), gumbels.len());
-
-        Ok(names
-            .into_iter()
-            .enumerate()
-            .map(|(i, n)| {
-                let ga_sc = gathering_thresholds[i].0;
-                let tau = gumbels[i].0;
-                let lambda = gumbels[i].1;
-                let ga_p = (-lambda * (ga_sc as f64 - tau)).exp();
-                (
-                    n,
-                    HmmGumbel {
-                        ga_sc,
-                        ga_p,
-                        tau,
-                        lambda,
-                    },
-                )
-            })
-            .collect())
-    }
-
     pub type Cutoffs = HashMap<String, f32>;
     pub fn parse_cutoffs(
         cutoffs_path: impl AsRef<Path>,
@@ -215,18 +126,30 @@ mod util {
         let dir = dir.as_ref();
         let mut indices = glob(dir.join("*.tbl").to_str().context("invalid *.tbl glob")?)?
             .filter_map(Result::ok)
+            // the runs table shares the extension but is not a hit table
+            .filter(|p| p.file_name().is_some_and(|n| n != run::table::FILE_NAME))
             .filter_map(|p| {
-                p.file_name()
+                // the shard index is the last dot-separated token of the stem.
+                // It cannot be taken from the front: run names embed floating
+                // point parameters, so `nail-s12.0-prog.prf.7` has dots well
+                // before the index.
+                p.file_stem()
                     .and_then(|n| n.to_str())
-                    // NOTE: this assumes the prefixes are of the form
-                    //       <tool>.<index>.<blah...>.tbl
-                    .and_then(|s| s.split('.').nth(1))
+                    .and_then(|s| s.rsplit('.').next())
                     .and_then(|i| i.parse::<usize>().ok())
             })
             .collect::<Vec<_>>();
 
         indices.sort();
         indices.dedup();
+
+        if indices.is_empty() {
+            anyhow::bail!(
+                "found no shard-indexed hit tables in {}; \
+                 expected names like <run>.<shard>.tbl",
+                dir.display()
+            );
+        }
 
         if let Some(n) = n {
             Ok(indices.into_iter().take(n).collect())
@@ -374,7 +297,7 @@ fn cutoffs_sweep(args: CutoffsSweepArgs) -> anyhow::Result<()> {
 
     // ---
 
-    let hmms = util::parse_hmms(&args.query_path)
+    let hmms = bioio::hmm::parse_stats(&args.query_path)
         .with_context(|| format!("failed to open: {:?}", args.query_path))?;
 
     let mut queries = hmms.keys().collect::<Vec<_>>();
@@ -575,7 +498,7 @@ fn learn_cutoffs(args: LearnCutoffsArgs) -> anyhow::Result<()> {
 
     // ---
 
-    let hmms = util::parse_hmms(&args.query_path)
+    let hmms = bioio::hmm::parse_stats(&args.query_path)
         .with_context(|| format!("failed to open: {:?}", args.query_path))?;
 
     let mut queries = hmms.keys().collect::<Vec<_>>();
@@ -735,7 +658,7 @@ fn params(args: ParamsArgs) -> anyhow::Result<()> {
     let (nail_cutoffs, mmseqs_cutoffs) =
         util::parse_cutoffs(&args.cutoffs_path, args.c).context("cutoffs")?;
 
-    let hmms = util::parse_hmms(&args.query_path)
+    let hmms = bioio::hmm::parse_stats(&args.query_path)
         .with_context(|| format!("failed to open: {:?}", args.query_path))?;
 
     let mut queries = hmms.keys().collect::<Vec<_>>();
@@ -906,17 +829,32 @@ pub struct RecallArgs {
     #[arg(long, value_name = "cutoffs.txt")]
     cutoffs_path: PathBuf,
 
-    #[arg(long, value_name = "nail.tbl")]
-    nail_path: PathBuf,
+    /// Which benchmark directory under benchmarks/mgnify/ to read.
+    #[arg(long, default_value = crate::build::DEFAULT_NAME)]
+    name: String,
 
-    #[arg(long, value_name = "mmseqs.tbl")]
-    mmseqs_path: PathBuf,
+    /// Directory holding the per-shard hit tables.
+    #[arg(long, value_name = "results/")]
+    results: Option<PathBuf>,
 
-    #[arg(long, value_name = "hmmer.tbl")]
-    hmmer_path: PathBuf,
+    /// The runs table indexing those results.
+    #[arg(long, value_name = "runs.tbl")]
+    runs: Option<PathBuf>,
+
+    /// Run name to read for each tool. Only needed when the config sweeps a
+    /// tool over several parameter settings; otherwise the single run for that
+    /// tool is used.
+    #[arg(long, value_name = "RUN")]
+    nail: Option<String>,
+
+    #[arg(long, value_name = "RUN")]
+    mmseqs: Option<String>,
+
+    #[arg(long, value_name = "RUN")]
+    hmmer: Option<String>,
 
     #[arg(short, long, value_name = "out/")]
-    out_path: PathBuf,
+    out_path: Option<PathBuf>,
 
     #[arg(short = 'c', default_value_t = 2usize, value_name = "N")]
     c: usize,
@@ -924,11 +862,9 @@ pub struct RecallArgs {
     #[arg(short = 't', default_value_t = 4usize, value_name = "N")]
     num_threads: usize,
 
+    /// Only read this many shards.
     #[arg(short = 'n', value_name = "N")]
     num_tables: Option<usize>,
-
-    #[arg(long)]
-    dir: bool,
 
     #[arg(long)]
     print_times: bool,
@@ -937,13 +873,19 @@ pub struct RecallArgs {
 fn recall(args: RecallArgs) -> anyhow::Result<()> {
     let start = Instant::now();
 
+    // a benchmark owns its results, runs table, and analysis output
+    let bench = crate::build::dir().join(&args.name);
+    let results_dir = args.results.unwrap_or_else(|| bench.join("results"));
+    let runs_path = args.runs.unwrap_or_else(|| bench.join(run::table::FILE_NAME));
+    let out_path = args.out_path.unwrap_or_else(|| bench.join("analysis"));
+
     util::set_threads(args.num_threads)?;
 
     // ---
 
     let (nail_cutoffs, mmseqs_cutoffs) = util::parse_cutoffs(&args.cutoffs_path, args.c)?;
 
-    let hmms = util::parse_hmms(&args.query_path)
+    let hmms = bioio::hmm::parse_stats(&args.query_path)
         .with_context(|| format!("failed to open: {:?}", args.query_path))?;
 
     let mut queries = hmms.keys().collect::<Vec<_>>();
@@ -995,7 +937,7 @@ fn recall(args: RecallArgs) -> anyhow::Result<()> {
 
     let times: Arc<Times> = Arc::default();
 
-    create_dir_all(&args.out_path)?;
+    create_dir_all(&out_path)?;
 
     let header = format!(
         "{:^10}|{:^19}|{:^8}|{:^5}|{:^5}|{:^8}|{:^5}|{:^5}|{:^8}|{:^5}|{:^5}|{:^8}|{:^8}|{:^8}|{:^8}|{}",
@@ -1017,7 +959,7 @@ fn recall(args: RecallArgs) -> anyhow::Result<()> {
         "dom scores",
     );
 
-    let handles = util::PathHandles::new(queries, &args.out_path, "tbl", |p| {
+    let handles = util::PathHandles::new(queries, &out_path, "tbl", |p| {
         let mut f = File::create(p)
             .unwrap_or_else(|e| panic!("failed to create output file: {p:?}\n\terror: {e:?}"));
         writeln!(f, "{header}").unwrap();
@@ -1151,6 +1093,10 @@ fn recall(args: RecallArgs) -> anyhow::Result<()> {
 
     #[allow(clippy::too_many_arguments)]
     fn process(
+        // the target file name, as it appears in the runs table; deriving it
+        // from the hit table's path is what produced "0-prog" out of
+        // nail-s12.0-prog.prf.1.tbl
+        shard: &str,
         nail_path: impl AsRef<Path>,
         mmseqs_path: impl AsRef<Path>,
         hmmer_path: impl AsRef<Path>,
@@ -1161,16 +1107,6 @@ fn recall(args: RecallArgs) -> anyhow::Result<()> {
         times: Arc<Times>,
     ) -> anyhow::Result<()> {
         let start = Instant::now();
-
-        let idx = nail_path
-            .as_ref()
-            .file_name()
-            .unwrap()
-            .to_str()
-            .unwrap()
-            .split('.')
-            .nth(1)
-            .unwrap();
 
         // ---
         let now = Instant::now();
@@ -1264,7 +1200,8 @@ fn recall(args: RecallArgs) -> anyhow::Result<()> {
                 mmseqs_cutoff: *mmseqs_cutoffs
                     .get(query)
                     .expect("no mmseqs cutoff for query"),
-                file: format!("{idx}.fa"),
+                // shard is already the target file name from the runs table
+                file: shard.to_string(),
                 ..Default::default()
             };
 
@@ -1464,40 +1401,67 @@ fn recall(args: RecallArgs) -> anyhow::Result<()> {
 
     // ---
 
-    if args.dir {
-        let tbl_indices = util::parse_table_indices(&args.nail_path, args.num_tables)?;
-        tbl_indices
-            .par_iter()
-            .panic_fuse()
-            .try_for_each(|idx| -> anyhow::Result<()> {
-                process(
-                    args.nail_path.join(format!("nail.{idx}.prf.tbl")),
-                    args.mmseqs_path.join(format!("mmseqs.{idx}.prf.tbl")),
-                    args.hmmer_path.join(format!("hmmer.{idx}.prf.tbl")),
-                    &nail_cutoffs,
-                    &mmseqs_cutoffs,
-                    handles.clone(),
-                    stats.clone(),
-                    times.clone(),
-                )?;
-                Ok(())
-            })?;
-    } else {
-        process(
-            args.nail_path,
-            args.mmseqs_path,
-            args.hmmer_path,
-            &nail_cutoffs,
-            &mmseqs_cutoffs,
-            handles,
-            stats.clone(),
-            times.clone(),
-        )?;
+    // the runs table is the index of a results directory: it records which run
+    // names exist and which shards each covered, so nothing has to be inferred
+    // from filenames. It sits beside benchmark/ rather than inside results/,
+    // so the two paths are given separately.
+    let runs = run::Runs::load(&runs_path, &results_dir)?;
+
+    let pick = |explicit: Option<String>, tool: &str| -> anyhow::Result<String> {
+        match explicit {
+            Some(name) => {
+                if runs.targets(&name).is_empty() {
+                    anyhow::bail!(
+                        "no run named {name:?} in {}; available: {}",
+                        runs_path.display(),
+                        runs.names().join(", ")
+                    );
+                }
+                Ok(name)
+            }
+            None => Ok(runs.only_for_tool(tool)?.to_string()),
+        }
+    };
+
+    let nail_run = pick(args.nail, "nail")?;
+    let mmseqs_run = pick(args.mmseqs, "mmseqs")?;
+    let hmmer_run = pick(args.hmmer, "hmmer")?;
+
+    println!("nail:   {nail_run}");
+    println!("mmseqs: {mmseqs_run}");
+    println!("hmmer:  {hmmer_run}");
+
+    // only shards all three tools completed are comparable
+    let mut shards = runs.shared_targets(&[&nail_run, &mmseqs_run, &hmmer_run]);
+    if shards.is_empty() {
+        anyhow::bail!("no shard was completed by all three of nail, mmseqs and hmmer");
     }
+    if let Some(n) = args.num_tables {
+        shards.truncate(n);
+    }
+    println!("{} shards\n", shards.len());
+
+    shards
+        .par_iter()
+        .panic_fuse()
+        .try_for_each(|shard| -> anyhow::Result<()> {
+            process(
+                shard,
+                runs.table_path(&nail_run, shard),
+                runs.table_path(&mmseqs_run, shard),
+                runs.table_path(&hmmer_run, shard),
+                &nail_cutoffs,
+                &mmseqs_cutoffs,
+                handles.clone(),
+                stats.clone(),
+                times.clone(),
+            )?;
+            Ok(())
+        })?;
 
     println!(
         "{} took {:.2}s",
-        args.out_path.to_string_lossy(),
+        out_path.to_string_lossy(),
         start.elapsed().as_secs_f32()
     );
 
@@ -1543,7 +1507,7 @@ fn check_rev(args: CheckRevArgs) -> anyhow::Result<()> {
 
     // ---
 
-    let hmms = util::parse_hmms(&args.query_path)
+    let hmms = bioio::hmm::parse_stats(&args.query_path)
         .with_context(|| format!("failed to open: {:?}", args.query_path))?;
 
     let mut queries = hmms.keys().collect::<Vec<_>>();

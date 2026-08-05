@@ -5,7 +5,9 @@
 /data/*
 !/data/long-seqs/
 /tools/
-**/benchmark*/
+# generated benchmark instances are benchmark-<size>/; the trailing dash
+# matters, or this also swallows the benchmarks/ source tree
+**/benchmark-*/
 **/figures*/
 **/profmark/
 **/results/

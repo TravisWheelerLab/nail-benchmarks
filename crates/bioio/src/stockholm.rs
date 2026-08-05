@@ -148,3 +148,57 @@ impl Stockholm {
         self.records.values().map(|r| r.sequences.len()).sum()
     }
 }
+
+/// Copy the records whose `#=GF ID` is in `names` from `src` to `dst`.
+///
+/// Streams rather than parsing: this is used to cut a subset out of Pfam, which
+/// is 500MB, and only the identifier of each block matters.
+pub fn subset_by_id(
+    src: impl AsRef<Path>,
+    names: &std::collections::HashSet<String>,
+    dst: impl AsRef<Path>,
+) -> anyhow::Result<usize> {
+    use std::io::{BufRead, BufReader, BufWriter, Write};
+
+    let src = src.as_ref();
+    let mut reader = BufReader::new(
+        std::fs::File::open(src)
+            .with_context(|| format!("failed to open {}", src.display()))?,
+    );
+    let mut writer = BufWriter::new(std::fs::File::create(dst.as_ref())?);
+
+    let mut block: Vec<String> = Vec::new();
+    let mut id: Option<String> = None;
+    let mut kept = 0usize;
+    let mut line = String::new();
+
+    loop {
+        line.clear();
+        if reader.read_line(&mut line)? == 0 {
+            break;
+        }
+
+        if let Some(rest) = line.strip_prefix("#=GF ID") {
+            id = Some(rest.trim().to_string());
+        }
+
+        block.push(line.clone());
+
+        if line.starts_with("//") {
+            if id.as_ref().is_some_and(|i| names.contains(i)) {
+                for l in &block {
+                    writer.write_all(l.as_bytes())?;
+                }
+                kept += 1;
+                if kept == names.len() {
+                    break;
+                }
+            }
+            block.clear();
+            id = None;
+        }
+    }
+
+    writer.flush()?;
+    Ok(kept)
+}

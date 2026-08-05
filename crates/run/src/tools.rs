@@ -5,7 +5,7 @@ use anyhow::{bail, Context, Result};
 
 use crate::config::Run;
 use crate::exec::{self, Job, Numa, Timing};
-use crate::split::{self, Kind};
+use bioio::split::{self, Kind};
 
 /// A query artifact a benchmark can offer. Tools ask for what they need and
 /// fail cleanly when a benchmark does not provide it — mgnify has no unaligned
@@ -73,16 +73,26 @@ impl Search {
             })
     }
 
-    /// How this search is identified in the runs table.
+    /// How this search is identified in the runs table: the target's file name,
+    /// which says more than a bare shard number.
     pub fn display(&self) -> String {
+        self.target
+            .file_name()
+            .map(|n| n.to_string_lossy().to_string())
+            .unwrap_or_else(|| self.target.display().to_string())
+    }
+
+    /// The token used to distinguish this search's output files. It is the
+    /// stem of what `display` reports, so a row in the runs table and the file
+    /// it refers to always agree.
+    pub fn key(&self) -> String {
         if self.label.is_empty() {
-            self.target
-                .file_name()
-                .map(|n| n.to_string_lossy().to_string())
-                .unwrap_or_else(|| self.target.display().to_string())
-        } else {
-            self.label.clone()
+            return String::new();
         }
+        self.target
+            .file_stem()
+            .map(|n| n.to_string_lossy().to_string())
+            .unwrap_or_else(|| self.label.clone())
     }
 }
 
@@ -131,6 +141,9 @@ pub struct Ctx {
     pub bin: Bin,
     pub tmp: PathBuf,
     pub results: PathBuf,
+    /// Where the runs table is written. Usually inside `results`, but a
+    /// benchmark may keep it above so clearing results does not remove it.
+    pub runs_table: PathBuf,
     pub numa: Option<Numa>,
 }
 
@@ -145,19 +158,20 @@ impl Ctx {
 
     /// Output path for one run of one search.
     pub fn out(&self, run: &Run, search: &Search, ext: &str) -> PathBuf {
-        if search.label.is_empty() {
+        let key = search.key();
+        if key.is_empty() {
             self.results.join(format!("{}.{ext}", run.name))
         } else {
-            self.results
-                .join(format!("{}.{}.{ext}", run.name, search.label))
+            self.results.join(format!("{}.{key}.{ext}", run.name))
         }
     }
 
     pub fn log_path(&self, run: &Run, search: &Search) -> PathBuf {
-        let stem = if search.label.is_empty() {
+        let key = search.key();
+        let stem = if key.is_empty() {
             run.name.clone()
         } else {
-            format!("{}.{}", run.name, search.label)
+            format!("{}.{key}", run.name)
         };
         self.log_dir().join(format!("{stem}.err"))
     }
@@ -328,6 +342,10 @@ impl Tool for Hmmer {
 
         let program = ctx.bin.get(program)?;
         let tbl = ctx.out(run, search, "tbl");
+        // per-domain output as well as per-sequence: analysis needs domain
+        // scores, and the old shell pipeline named a domtbl but never asked
+        // hmmsearch for one
+        let dom = ctx.out(run, search, "domtbl");
 
         // hmmsearch/phmmer scale poorly past a few threads, so the query set is
         // split and run as several concurrent processes when threads_per is set
@@ -346,6 +364,8 @@ impl Tool for Hmmer {
                 .arg("/dev/null")
                 .arg("--tblout")
                 .arg(tbl.display().to_string())
+                .arg("--domtblout")
+                .arg(dom.display().to_string())
                 .arg(query.display().to_string())
                 .arg(search.target.display().to_string());
 
@@ -360,9 +380,11 @@ impl Tool for Hmmer {
 
         let mut jobs = Vec::with_capacity(parts.len());
         let mut part_tbls = Vec::with_capacity(parts.len());
+        let mut part_doms = Vec::with_capacity(parts.len());
 
         for part in &parts {
             let part_tbl = part.with_extension("tbl");
+            let part_dom = part.with_extension("domtbl");
             jobs.push(
                 ctx.job(program.clone(), run, search)
                     .arg("--cpu")
@@ -372,16 +394,20 @@ impl Tool for Hmmer {
                     .arg("/dev/null")
                     .arg("--tblout")
                     .arg(part_tbl.display().to_string())
+                    .arg("--domtblout")
+                    .arg(part_dom.display().to_string())
                     .arg(part.display().to_string())
                     .arg(search.target.display().to_string()),
             );
             part_tbls.push(part_tbl);
+            part_doms.push(part_dom);
         }
 
         let cmd = format!("[{} x] {}", jobs.len(), jobs[0].display(ctx.numa()));
         let timing = exec::run_concurrent(&jobs, ctx.numa())?;
 
         concat(&part_tbls, &tbl)?;
+        concat(&part_doms, &dom)?;
 
         Ok(Outcome { timing, cmd })
     }

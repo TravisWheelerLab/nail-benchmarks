@@ -213,8 +213,14 @@ mod tests {
     use super::*;
     use std::io::Write;
 
+    // one directory per test: they run in parallel, and a shared one gets
+    // removed out from under its neighbours
     fn tmp(name: &str, body: &str) -> PathBuf {
-        let dir = std::env::temp_dir().join(format!("bm-split-{}", std::process::id()));
+        let dir = std::env::temp_dir().join(format!(
+            "bioio-split-{}-{}",
+            std::process::id(),
+            name.replace('.', "_")
+        ));
         std::fs::create_dir_all(&dir).unwrap();
         let path = dir.join(name);
         let mut f = File::create(&path).unwrap();

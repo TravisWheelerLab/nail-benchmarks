@@ -6,9 +6,8 @@
 //! constructed is the benchmark's business.
 
 pub mod config;
-pub mod root;
 pub mod exec;
-pub mod split;
+pub mod table;
 pub mod tools;
 
 use std::collections::HashSet;
@@ -17,8 +16,22 @@ use anyhow::{bail, Context, Result};
 
 pub use config::{Config, Run};
 pub use exec::{Numa, RunsTable};
-pub use root::find as repo_root;
+pub use table::Runs;
 pub use tools::{Asset, Bin, Ctx, Search};
+
+/// The repository root, derived from a benchmark crate's manifest directory.
+///
+/// Call as `run::repo(env!("CARGO_MANIFEST_DIR"))`: benchmark crates live at
+/// `<repo>/benchmarks/<name>`, so the root is two levels up. This is fixed at
+/// compile time, which is fine because the binaries are built and run out of
+/// the same checkout.
+pub fn repo(manifest_dir: &str) -> std::path::PathBuf {
+    std::path::Path::new(manifest_dir)
+        .parent()
+        .and_then(std::path::Path::parent)
+        .expect("benchmark crates live at <repo>/benchmarks/<name>")
+        .to_path_buf()
+}
 
 /// Options that override what the config declares.
 #[derive(Default, Debug)]
@@ -68,7 +81,7 @@ pub fn execute(
         bail!("no searches to run");
     }
 
-    let mut table = RunsTable::create(&ctx.results, config.sweep_columns())?;
+    let mut table = RunsTable::create_at(&ctx.runs_table, config.sweep_columns())?;
     let total = runs.len() * searches.len();
     let mut done = 0usize;
     let mut failed = 0usize;

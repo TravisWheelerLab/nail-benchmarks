@@ -73,6 +73,7 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "indexmap",
+ "rand",
  "regex",
 ]
 
@@ -386,6 +387,7 @@ name = "run"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "bioio",
  "clap",
  "glob",
  "indexmap",

@@ -305,10 +305,14 @@ pub struct RunsTable {
 }
 
 impl RunsTable {
-    pub fn create(dir: impl AsRef<Path>, sweep_columns: Vec<String>) -> Result<Self> {
-        let dir = dir.as_ref();
-        std::fs::create_dir_all(dir)?;
-        let path = dir.join("runs.tbl");
+    /// Create the table at an explicit path. It does not have to live beside
+    /// the hit tables — mgnify keeps it above its results directory so it is
+    /// not wiped when a run clears results.
+    pub fn create_at(path: impl AsRef<Path>, sweep_columns: Vec<String>) -> Result<Self> {
+        let path = path.as_ref().to_path_buf();
+        if let Some(dir) = path.parent() {
+            std::fs::create_dir_all(dir)?;
+        }
 
         let mut header: Vec<String> = ["name", "tool", "query"]
             .iter()
@@ -317,7 +321,7 @@ impl RunsTable {
         header.extend(sweep_columns.iter().cloned());
         header.extend(["threads", "target"].iter().map(|s| s.to_string()));
         header.extend(
-            ["wall_s", "user_s", "sys_s", "max_rss_kb", "exit", "cmd"]
+            ["wall(s)", "user(s)", "sys(s)", "max_rss", "exit", "cmd"]
                 .iter()
                 .map(|s| s.to_string()),
         );
@@ -361,7 +365,7 @@ impl RunsTable {
         row.push(format!("{:.2}", timing.wall_s));
         row.push(format!("{:.2}", timing.user_s));
         row.push(format!("{:.2}", timing.sys_s));
-        row.push(timing.max_rss_kb.to_string());
+        row.push(format_bytes(timing.max_rss_kb));
         row.push(timing.exit.to_string());
         row.push(cmd.to_string());
 
@@ -409,6 +413,29 @@ fn render(header: &[String], rows: &[Vec<String>]) -> String {
     }
 
     out
+}
+
+/// Peak memory in binary units, kept to about three significant figures so the
+/// column reads at a glance: 940KiB, 10.4MiB, 1.02GiB.
+fn format_bytes(kib: i64) -> String {
+    if kib < 0 {
+        return "-".to_string();
+    }
+
+    const STEP: f64 = 1024.0;
+    let (value, unit) = match kib as f64 {
+        v if v < STEP => (v, "KiB"),
+        v if v < STEP * STEP => (v / STEP, "MiB"),
+        v => (v / (STEP * STEP), "GiB"),
+    };
+
+    if value >= 100.0 {
+        format!("{value:.0}{unit}")
+    } else if value >= 10.0 {
+        format!("{value:.1}{unit}")
+    } else {
+        format!("{value:.2}{unit}")
+    }
 }
 
 fn write_row(out: &mut String, cells: &[String], widths: &[usize]) {
@@ -466,6 +493,16 @@ mod tests {
 
     fn strings(cells: &[&str]) -> Vec<String> {
         cells.iter().map(|s| s.to_string()).collect()
+    }
+
+    #[test]
+    fn memory_reads_in_binary_units() {
+        assert_eq!(format_bytes(940), "940KiB");
+        assert_eq!(format_bytes(10_649), "10.4MiB");
+        assert_eq!(format_bytes(107_800), "105MiB");
+        assert_eq!(format_bytes(1_066_344), "1.02GiB");
+        // exactly on a boundary should step up rather than read as 1024KiB
+        assert_eq!(format_bytes(1024), "1.00MiB");
     }
 
     #[test]

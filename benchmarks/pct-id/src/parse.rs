@@ -702,65 +702,6 @@ struct RecallData {
     positive_cnt: usize,
 }
 
-/// Wall-clock seconds per run, read from the runs table the runner writes.
-///
-/// This replaces the per-run GNU `time -v` files the old bash pipeline
-/// produced; timing now lives in one space-aligned table instead of one text
-/// file per run.
-fn read_runtimes(results_dir: &Path) -> anyhow::Result<HashMap<String, f32>> {
-    let path = results_dir.join("runs.tbl");
-    let text = std::fs::read_to_string(&path)
-        .with_context(|| format!("failed to read {}", path.display()))?;
-
-    let mut columns: Vec<String> = Vec::new();
-    let mut out = HashMap::new();
-
-    for line in text.lines() {
-        if let Some(rest) = line.strip_prefix("# ") {
-            // the header names the columns; the separator row that follows is
-            // only dashes
-            if columns.is_empty() && !rest.starts_with('-') {
-                columns = rest.split_whitespace().map(str::to_string).collect();
-            }
-            continue;
-        }
-
-        if line.trim().is_empty() {
-            continue;
-        }
-
-        let name_idx = columns
-            .iter()
-            .position(|c| c == "name")
-            .context("runs.tbl has no `name` column")?;
-        let wall_idx = columns
-            .iter()
-            .position(|c| c == "wall_s")
-            .context("runs.tbl has no `wall_s` column")?;
-
-        // cmd is the last column and contains spaces, but every column we need
-        // precedes it, so positional splitting is safe
-        let fields: Vec<&str> = line.split_whitespace().collect();
-        let name = fields
-            .get(name_idx)
-            .context("short row in runs.tbl")?
-            .to_string();
-        let wall: f32 = fields
-            .get(wall_idx)
-            .context("short row in runs.tbl")?
-            .parse()
-            .with_context(|| format!("unparseable wall_s for run {name:?}"))?;
-
-        out.insert(name, wall);
-    }
-
-    if out.is_empty() {
-        anyhow::bail!("no runs found in {}", path.display());
-    }
-
-    Ok(out)
-}
-
 impl RecallData {
     fn new<P: AsRef<Path>>(results_dir: P, bm: &Benchmark) -> anyhow::Result<Self> {
         let results_dir = PathBuf::from(results_dir.as_ref());
@@ -775,7 +716,7 @@ impl RecallData {
             pid_bin_tot_cnts[pid] += 1;
         });
 
-        let runtimes = read_runtimes(&results_dir)?;
+        let runs = run::Runs::from_dir(&results_dir)?;
 
         for path in glob(
             results_dir
@@ -787,7 +728,7 @@ impl RecallData {
         {
             // the runs table lives alongside the per-run hit tables and shares
             // their extension, but is not one of them
-            if path.file_name().is_some_and(|n| n == "runs.tbl") {
+            if path.file_name().is_some_and(|n| n == run::table::FILE_NAME) {
                 continue;
             }
 
@@ -822,9 +763,9 @@ impl RecallData {
             tables.push(tbl);
 
             // a hit table's stem is exactly the run name in the runs table
-            let time = *runtimes
-                .get(&stem)
-                .with_context(|| format!("no row for run {stem:?} in runs.tbl"))?;
+            let time = runs
+                .mean_wall_s(&stem)
+                .with_context(|| format!("no row for run {stem:?} in the runs table"))?;
 
             times.push(time);
         }

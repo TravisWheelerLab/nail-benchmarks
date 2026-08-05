@@ -5,7 +5,6 @@
 //! `run` library.
 
 mod build;
-mod fasta;
 mod parse;
 
 use std::path::PathBuf;
@@ -15,7 +14,6 @@ use clap::{Parser, Subcommand};
 
 use run::{Asset, Bin, Ctx, Numa, Options, Search};
 
-use build::DIR;
 
 #[derive(Parser)]
 #[command(name = "mgnify", about = "mgnify/pfam benchmark")]
@@ -26,7 +24,7 @@ struct Cli {
 
 #[derive(Subcommand)]
 enum Command {
-    /// Shard the MGnify proteins, optionally writing reversed decoy shards.
+    /// Shard the MGnify proteins into a benchmark directory.
     Build(build::Args),
     /// Execute the runs declared in bench.toml against a range of shards.
     Run(RunArgs),
@@ -37,19 +35,15 @@ enum Command {
 
 #[derive(Parser, Debug)]
 pub struct RunArgs {
-    /// Which benchmark to run, naming benchmark-<size>/.
-    #[arg(short, long, default_value = "toy")]
-    pub size: String,
+    /// Which benchmark directory under benchmarks/mgnify/ to run.
+    #[arg(long, default_value = build::DEFAULT_NAME)]
+    pub name: String,
 
     /// Shard range, as `N` or `FIRST-LAST` (1-based, inclusive). Defaults to
     /// every shard in the benchmark. The two-node production runs split this,
     /// e.g. 1-500 on one node and 501-1000 on the other.
     #[arg(long)]
     pub shards: Option<String>,
-
-    /// Search the reversed decoy shards instead of the real ones.
-    #[arg(long)]
-    pub rev: bool,
 
     /// Only run entries whose name matches this glob.
     #[arg(short, long)]
@@ -75,9 +69,6 @@ pub struct RunArgs {
     #[arg(long)]
     pub dry_run: bool,
 
-    /// Repository root, if it cannot be discovered automatically.
-    #[arg(long)]
-    pub root: Option<PathBuf>,
 }
 
 fn main() -> Result<()> {
@@ -124,8 +115,8 @@ fn shard_range(spec: &str) -> Result<(usize, usize)> {
 }
 
 fn run_main(args: RunArgs) -> Result<()> {
-    let repo = run::repo_root(args.root.as_deref())?;
-    let dir = repo.join(DIR);
+    let repo = build::repo();
+    let dir = build::dir();
 
     let config = run::Config::from_path(dir.join("bench.toml"))?;
     let opts = Options {
@@ -136,28 +127,24 @@ fn run_main(args: RunArgs) -> Result<()> {
     };
     let runs = run::plan(&config, &opts)?;
 
-    let bench = dir.join(format!("benchmark-{}", args.size));
+    let bench = dir.join(&args.name);
     if !bench.is_dir() {
         bail!(
-            "benchmark directory {} does not exist; run `mgnify build --size {}` first",
+            "benchmark directory {} does not exist; run `mgnify build{}` first",
             bench.display(),
-            args.size
+            if args.name == build::DEFAULT_NAME {
+                String::new()
+            } else {
+                format!(" --name {}", args.name)
+            }
         );
     }
     let bench = bench.canonicalize()?;
 
-    let shard_dir = bench.join(if args.rev { "mgy-rev" } else { "mgy" });
+    let shard_dir = bench.join("mgy");
     let available = count_shards(&shard_dir);
     if available == 0 {
-        bail!(
-            "no shards in {}{}",
-            shard_dir.display(),
-            if args.rev {
-                "; rebuild with --reverse"
-            } else {
-                ""
-            }
-        );
+        bail!("no shards in {}", shard_dir.display());
     }
 
     let (first, last) = match &args.shards {
@@ -183,6 +170,8 @@ fn run_main(args: RunArgs) -> Result<()> {
         return Ok(());
     }
 
+    // results, the runs table, and scratch all live under the benchmark, so
+    // several benchmarks can sit side by side without colliding
     let results = args.results.unwrap_or_else(|| bench.join("results"));
     let tmp = args.tmp.unwrap_or_else(|| bench.join("tmp"));
     if results.exists() {
@@ -200,6 +189,8 @@ fn run_main(args: RunArgs) -> Result<()> {
         bin: Bin::new(repo.join("tools/bin")),
         tmp,
         results,
+        // above results/, so it survives the wipe at the start of a run
+        runs_table: bench.join(run::table::FILE_NAME),
         numa,
     };
 
