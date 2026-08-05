@@ -1,7 +1,9 @@
 *.DS_Store
 /target/
-# only the top-level download directory; long-seqs keeps its inputs in data/
-/data/
+# downloaded data is not tracked, but long-seqs' inputs are small and checked
+# in — nothing fetches them, so ignoring them would empty a fresh clone
+/data/*
+!/data/long-seqs/
 /tools/
 **/benchmark*/
 **/figures*/
