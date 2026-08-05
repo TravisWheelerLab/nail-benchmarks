@@ -32,7 +32,7 @@ fn e_value_cmp(a: &Hit2, b: &Hit2) -> std::cmp::Ordering {
 }
 
 #[derive(Parser)]
-struct RecallArgs {
+pub struct RecallArgs {
     #[arg(value_name = "benchmark.tbl")]
     benchmark_tbl: PathBuf,
 
@@ -44,7 +44,7 @@ struct RecallArgs {
 }
 
 #[derive(Parser)]
-struct CellsArgs {
+pub struct CellsArgs {
     #[arg(value_name = "nail.tbl")]
     nail_tbl: PathBuf,
 
@@ -59,7 +59,7 @@ struct CellsArgs {
 }
 
 #[derive(Parser)]
-struct ScoreArgs {
+pub struct ScoreArgs {
     #[arg(value_name = "nail.full.tbl")]
     full_tbl: PathBuf,
 
@@ -71,7 +71,7 @@ struct ScoreArgs {
 }
 
 #[derive(Parser)]
-struct TableArgs {
+pub struct TableArgs {
     #[arg(short, long, value_name = "benchmark.tbl")]
     benchmark_tbl: PathBuf,
 
@@ -93,22 +93,18 @@ struct TableArgs {
     min_width: usize,
 }
 
-#[derive(Parser)]
-struct Cli {
-    #[command(subcommand)]
-    cmd: Cmd,
-}
-
+/// Analysis subcommands for this benchmark. Kept here rather than in the `run`
+/// library because what counts as a result is benchmark-specific.
 #[derive(Subcommand)]
-enum Cmd {
+pub enum Cmd {
     Recall(RecallArgs),
     Cells(CellsArgs),
     Score(ScoreArgs),
     Table(TableArgs),
 }
 
-fn main() -> anyhow::Result<()> {
-    match Cli::parse().cmd {
+pub fn main(cmd: Cmd) -> anyhow::Result<()> {
+    match cmd {
         Cmd::Recall(args) => {
             recall(args)?;
         }

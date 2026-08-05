@@ -1,0 +1,18 @@
+[package]
+name = "pct-id"
+version = "0.1.0"
+edition = "2024"
+
+[[bin]]
+name = "pct-id"
+path = "src/main.rs"
+
+[dependencies]
+bioio = { workspace = true }
+run = { workspace = true }
+
+anyhow = { workspace = true }
+clap = { workspace = true }
+glob = { workspace = true }
+rand = { workspace = true }
+regex = { workspace = true }
