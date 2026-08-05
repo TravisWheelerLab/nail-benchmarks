@@ -6,6 +6,7 @@ members = [
     "crates/run",
     "benchmarks/pct-id",
     "benchmarks/mgnify",
+    "benchmarks/long-seqs",
 ]
 
 [workspace.dependencies]

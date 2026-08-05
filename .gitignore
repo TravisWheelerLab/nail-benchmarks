@@ -1,7 +1,8 @@
 *.DS_Store
 /target/
-data/
-tools/
+# only the top-level download directory; long-seqs keeps its inputs in data/
+/data/
+/tools/
 **/benchmark*/
 **/figures*/
 **/profmark/
