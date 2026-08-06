@@ -133,6 +133,36 @@ impl Config {
         toml::from_str(&text).with_context(|| format!("failed to parse config: {}", path.display()))
     }
 
+    /// Load a config whose run blocks live under a name other than `[[run]]`.
+    ///
+    /// One file can then describe several independent stages that share a
+    /// `[defaults]` table — mgnify's calibration has a cheap recruitment sweep
+    /// and an exhaustive per-family pass, at different parameterizations.
+    pub fn from_path_as(path: impl AsRef<Path>, block: &str) -> Result<Self> {
+        let path = path.as_ref();
+        let text = std::fs::read_to_string(path)
+            .with_context(|| format!("failed to read config: {}", path.display()))?;
+
+        let mut table: toml::Table = toml::from_str(&text)
+            .with_context(|| format!("failed to parse config: {}", path.display()))?;
+
+        let defaults = match table.remove("defaults") {
+            Some(value) => value.try_into().with_context(|| {
+                format!("failed to parse [defaults] in {}", path.display())
+            })?,
+            None => Defaults::default(),
+        };
+
+        let runs: Vec<RunBlock> = match table.remove(block) {
+            Some(value) => value.try_into().with_context(|| {
+                format!("failed to parse [[{block}]] in {}", path.display())
+            })?,
+            None => bail!("{} declares no [[{block}]] blocks", path.display()),
+        };
+
+        Ok(Config { defaults, runs })
+    }
+
     /// Every run in the config, with sweeps expanded.
     pub fn expand(&self) -> Result<Vec<Run>> {
         let mut out = Vec::new();

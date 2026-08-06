@@ -73,6 +73,7 @@ fn run_main(args: RunArgs) -> Result<()> {
         filter: args.filter,
         threads: args.threads,
         numa_node: args.numa_node,
+        jobs: 1,
         dry_run: args.dry_run,
     };
     let runs = run::plan(&config, &opts)?;
@@ -119,5 +120,5 @@ fn run_main(args: RunArgs) -> Result<()> {
         numa,
     };
 
-    run::execute(&config, &runs, &searches, &ctx)
+    run::execute(&config, &runs, &searches, &ctx, opts.jobs)
 }

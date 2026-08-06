@@ -297,11 +297,22 @@ fn secs(tv: libc::timeval) -> f64 {
 /// arrives, so rows are kept in memory and the whole file is rewritten after
 /// each run. The file on disk therefore stays complete and correctly aligned
 /// even if a long run is interrupted partway through.
+/// How often the table is rewritten while a run is in progress.
+///
+/// Column widths are not known until the last row, so every rewrite emits the
+/// whole file. Doing that per row is quadratic in bytes written, which a
+/// thousand-shard sweep already feels and a per-family calibration pass would
+/// make ruinous. Rewriting on a timer instead bounds the loss from a kill to
+/// whatever landed in the last few seconds.
+const FLUSH_EVERY: std::time::Duration = std::time::Duration::from_secs(5);
+
 pub struct RunsTable {
     path: PathBuf,
     sweep_columns: Vec<String>,
     header: Vec<String>,
     rows: Vec<Vec<String>>,
+    last_flush: Instant,
+    dirty: bool,
 }
 
 impl RunsTable {
@@ -326,11 +337,13 @@ impl RunsTable {
                 .map(|s| s.to_string()),
         );
 
-        let table = RunsTable {
+        let mut table = RunsTable {
             path,
             sweep_columns,
             header,
             rows: Vec::new(),
+            last_flush: Instant::now(),
+            dirty: false,
         };
 
         table.flush()?;
@@ -370,12 +383,29 @@ impl RunsTable {
         row.push(cmd.to_string());
 
         self.rows.push(row);
-        self.flush()
+        self.dirty = true;
+
+        if self.last_flush.elapsed() >= FLUSH_EVERY {
+            self.flush()?;
+        }
+
+        Ok(())
     }
 
-    fn flush(&self) -> Result<()> {
+    /// Write the table out unconditionally. Call this when the run ends, so the
+    /// file reflects every row rather than the last timed rewrite.
+    pub fn flush(&mut self) -> Result<()> {
         std::fs::write(&self.path, render(&self.header, &self.rows))
-            .with_context(|| format!("failed to write {}", self.path.display()))
+            .with_context(|| format!("failed to write {}", self.path.display()))?;
+
+        self.last_flush = Instant::now();
+        self.dirty = false;
+        Ok(())
+    }
+
+    /// Whether rows have been appended since the last write.
+    pub fn is_dirty(&self) -> bool {
+        self.dirty
     }
 
     pub fn path(&self) -> &Path {

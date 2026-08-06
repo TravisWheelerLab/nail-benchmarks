@@ -11,5 +11,6 @@ clap = { workspace = true }
 glob = { workspace = true }
 indexmap = { workspace = true }
 libc = { workspace = true }
+rayon = { workspace = true }
 serde = { workspace = true }
 toml = { workspace = true }

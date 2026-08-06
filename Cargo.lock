@@ -394,6 +394,7 @@ dependencies = [
  "glob",
  "indexmap",
  "libc",
+ "rayon",
  "serde",
  "toml",
 ]

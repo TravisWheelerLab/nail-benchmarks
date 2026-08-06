@@ -1,21 +1,19 @@
 use std::{
-    cell::RefCell,
     collections::{HashMap, HashSet},
     fs::{create_dir_all, File, OpenOptions},
     io::{BufWriter, Write},
     path::{Path, PathBuf},
-    sync::{atomic::AtomicUsize, Arc, Mutex},
+    sync::{atomic::AtomicUsize, Arc},
     time::Instant,
 };
 
-use anyhow::{bail, Context};
+use anyhow::Context;
 use bioio::tbl::{hmmer::HmmerDomainTable, BlastTable, HitTable, HmmerTable, NailTable};
 
 use clap::{Parser, Subcommand};
 use glob::glob;
 use rayon::iter::{IntoParallelRefIterator, ParallelIterator};
 use regex::Regex;
-use thread_local::ThreadLocal;
 
 mod util {
     use std::{
@@ -27,8 +25,8 @@ mod util {
     };
 
     use anyhow::Context;
-    use bioio::tbl::{BlastTable, HitTable, HmmerTable, NailTable};
-    use glob::glob;
+    
+    
     use rayon::ThreadPoolBuilder;
 
     pub trait Float: PartialOrd {}
@@ -37,10 +35,6 @@ mod util {
 
     pub fn float_cmp<F: Float>(a: &F, b: &F) -> std::cmp::Ordering {
         a.partial_cmp(b).expect("NaN encountered in float cmp")
-    }
-
-    pub fn hit_cmp(a: &bioio::tbl::Hit, b: &bioio::tbl::Hit) -> std::cmp::Ordering {
-        float_cmp(&a.e_value, &b.e_value)
     }
 
     pub fn set_threads(num_threads: usize) -> anyhow::Result<()> {
@@ -119,94 +113,6 @@ mod util {
         Ok((nail_cutoffs, mmseqs_cutoffs))
     }
 
-    pub fn parse_table_indices(
-        dir: impl AsRef<Path>,
-        n: Option<usize>,
-    ) -> anyhow::Result<Vec<usize>> {
-        let dir = dir.as_ref();
-        let mut indices = glob(dir.join("*.tbl").to_str().context("invalid *.tbl glob")?)?
-            .filter_map(Result::ok)
-            // the runs table shares the extension but is not a hit table
-            .filter(|p| p.file_name().is_some_and(|n| n != run::table::FILE_NAME))
-            .filter_map(|p| {
-                // the shard index is the last dot-separated token of the stem.
-                // It cannot be taken from the front: run names embed floating
-                // point parameters, so `nail-s12.0-prog.prf.7` has dots well
-                // before the index.
-                p.file_stem()
-                    .and_then(|n| n.to_str())
-                    .and_then(|s| s.rsplit('.').next())
-                    .and_then(|i| i.parse::<usize>().ok())
-            })
-            .collect::<Vec<_>>();
-
-        indices.sort();
-        indices.dedup();
-
-        if indices.is_empty() {
-            anyhow::bail!(
-                "found no shard-indexed hit tables in {}; \
-                 expected names like <run>.<shard>.tbl",
-                dir.display()
-            );
-        }
-
-        if let Some(n) = n {
-            Ok(indices.into_iter().take(n).collect())
-        } else {
-            Ok(indices)
-        }
-    }
-
-    pub struct Tables {
-        pub nail: bioio::tbl::HitTable,
-        pub nail_rev: bioio::tbl::HitTable,
-        pub mmseqs: bioio::tbl::HitTable,
-        pub mmseqs_rev: bioio::tbl::HitTable,
-        pub hmmer: bioio::tbl::HitTable,
-        pub hmmer_rev: bioio::tbl::HitTable,
-    }
-
-    impl Tables {
-        pub fn new(
-            nail_dir: impl AsRef<Path>,
-            mmseqs_dir: impl AsRef<Path>,
-            hmmer_dir: impl AsRef<Path>,
-            query: &str,
-        ) -> anyhow::Result<Self> {
-            let nail_dir = nail_dir.as_ref();
-            let mmseqs_dir = mmseqs_dir.as_ref();
-            let hmmer_dir = hmmer_dir.as_ref();
-
-            let path = nail_dir.join(format!("{query}.tbl"));
-            let nail = HitTable::from_path::<_, NailTable>(&path)?;
-
-            let path = nail_dir.join(format!("{query}.rev.tbl"));
-            let nail_rev = HitTable::from_path::<_, NailTable>(&path)?;
-
-            let path = mmseqs_dir.join(format!("{query}.tbl"));
-            let mmseqs = HitTable::from_path::<_, BlastTable>(&path)?;
-
-            let path = mmseqs_dir.join(format!("{query}.rev.tbl"));
-            let mmseqs_rev = HitTable::from_path::<_, BlastTable>(&path)?;
-
-            let path = hmmer_dir.join(format!("{query}.tbl"));
-            let hmmer = HitTable::from_path::<_, HmmerTable>(&path)?;
-
-            let path = hmmer_dir.join(format!("{query}.rev.tbl"));
-            let hmmer_rev = HitTable::from_path::<_, HmmerTable>(&path)?;
-
-            Ok(Self {
-                nail,
-                nail_rev,
-                mmseqs,
-                mmseqs_rev,
-                hmmer,
-                hmmer_rev,
-            })
-        }
-    }
-
     #[derive(Clone)]
     pub struct PathHandles {
         handles: Arc<HashMap<String, Mutex<PathBuf>>>,
@@ -247,19 +153,15 @@ mod util {
 #[derive(Subcommand)]
 pub enum Cmd {
     Recall(RecallArgs),
-    LearnCutoffs(LearnCutoffsArgs),
     CutoffsSweep(CutoffsSweepArgs),
     Params(ParamsArgs),
-    CheckRev(CheckRevArgs),
 }
 
 pub fn main(cmd: Cmd) -> anyhow::Result<()> {
     match cmd {
         Cmd::Recall(args) => recall(args),
         Cmd::Params(args) => params(args),
-        Cmd::LearnCutoffs(args) => learn_cutoffs(args),
         Cmd::CutoffsSweep(args) => cutoffs_sweep(args),
-        Cmd::CheckRev(args) => check_rev(args),
     }
 }
 
@@ -457,163 +359,6 @@ fn cutoffs_sweep(args: CutoffsSweepArgs) -> anyhow::Result<()> {
         .for_each(|d| println!("{:W$} {:5.1}s {:5.3}", d.name, d.time, d.saturation, W = w));
 
     println!("took {:.2}s", start.elapsed().as_secs_f32());
-
-    Ok(())
-}
-
-#[derive(Parser)]
-pub struct LearnCutoffsArgs {
-    #[arg(value_name = "nail/")]
-    nail_dir: PathBuf,
-
-    #[arg(value_name = "mmseqs/")]
-    mmseqs_dir: PathBuf,
-
-    #[arg(value_name = "hmmer/")]
-    hmmer_dir: PathBuf,
-
-    #[arg(value_name = "query.hmm")]
-    query_path: PathBuf,
-
-    #[arg(short, long, default_value = "cutoffs.txt", value_name = "cutoffs.txt")]
-    out_path: PathBuf,
-
-    #[arg(long, value_name = "figures/")]
-    figures_dir: Option<PathBuf>,
-
-    #[arg(short = 'e', default_value_t = 1e-3, value_name = "F")]
-    reverse_e_cutoff: f64,
-
-    #[arg(short = 'n', value_name = "N")]
-    num_tables: Option<usize>,
-
-    #[arg(short = 't', default_value_t = 4usize, value_name = "N")]
-    num_threads: usize,
-}
-
-fn learn_cutoffs(args: LearnCutoffsArgs) -> anyhow::Result<()> {
-    let start = Instant::now();
-
-    util::set_threads(args.num_threads)?;
-
-    // ---
-
-    let hmms = bioio::hmm::parse_stats(&args.query_path)
-        .with_context(|| format!("failed to open: {:?}", args.query_path))?;
-
-    let mut queries = hmms.keys().collect::<Vec<_>>();
-    queries.sort();
-
-    if let Some(parent) = args.out_path.parent() {
-        create_dir_all(parent)?;
-    }
-
-    let out = Arc::new(Mutex::new(BufWriter::new(File::create(&args.out_path)?)));
-
-    queries.par_iter().try_for_each(|q| -> anyhow::Result<()> {
-        let mut tables =
-            match util::Tables::new(&args.nail_dir, &args.mmseqs_dir, &args.hmmer_dir, q) {
-                Ok(t) => t,
-                Err(_) => return Ok(()),
-            };
-
-        // ---
-        // filter the real hits by E-value
-        tables
-            .nail
-            .hits
-            .retain(|h| h.e_value <= args.reverse_e_cutoff);
-
-        tables
-            .mmseqs
-            .hits
-            .retain(|h| h.e_value <= args.reverse_e_cutoff);
-
-        tables
-            .hmmer
-            .hits
-            .retain(|h| h.e_value <= args.reverse_e_cutoff);
-
-        // ---
-        // convert to (query, target)-keyed maps for easier comparison
-
-        let nail_map = tables.nail.to_map();
-        let mut nail_rev_map = tables.nail_rev.to_map();
-
-        let mmseqs_map = tables.mmseqs.to_map();
-        let mut mmseqs_rev_map = tables.mmseqs_rev.to_map();
-
-        let hmmer_map = tables.hmmer.to_map();
-        let mut hmmer_rev_map = tables.hmmer_rev.to_map();
-
-        // ---
-        // retain only reverse hits for pairs that don't
-        // remain in the real hits after filtering
-
-        nail_rev_map.retain(|k, _| !nail_map.contains_key(k));
-        mmseqs_rev_map.retain(|k, _| !mmseqs_map.contains_key(k));
-        hmmer_rev_map.retain(|k, _| !hmmer_map.contains_key(k));
-
-        let mut n = nail_rev_map.into_values().collect::<Vec<_>>();
-        let mut m = mmseqs_rev_map.into_values().collect::<Vec<_>>();
-        let mut h = hmmer_rev_map.into_values().collect::<Vec<_>>();
-
-        n.sort_by(util::hit_cmp);
-        m.sort_by(util::hit_cmp);
-        h.sort_by(util::hit_cmp);
-
-        const N_CUTOFF: usize = 5;
-
-        let nn = n
-            .iter()
-            .map(|t| t.score)
-            .chain(std::iter::repeat(0.0))
-            .take(N_CUTOFF)
-            .collect::<Vec<_>>();
-
-        let mm = m
-            .iter()
-            .map(|t| t.score)
-            .chain(std::iter::repeat(0.0))
-            .take(N_CUTOFF)
-            .collect::<Vec<_>>();
-
-        let hh = h
-            .iter()
-            .map(|t| t.score)
-            .chain(std::iter::repeat(0.0))
-            .take(N_CUTOFF)
-            .collect::<Vec<_>>();
-
-        match out.lock() {
-            Ok(mut guard) => {
-                writeln!(
-                    guard,
-                    "{q},(nail,{},{}),(mmseqs,{},{})(hmmer,{},{})",
-                    nn.iter()
-                        .map(|s| format!("{s:.1}"))
-                        .collect::<Vec<_>>()
-                        .join(","),
-                    n.len(),
-                    mm.iter()
-                        .map(|s| format!("{s:.1}"))
-                        .collect::<Vec<_>>()
-                        .join(","),
-                    m.len(),
-                    hh.iter()
-                        .map(|s| format!("{s:.1}"))
-                        .collect::<Vec<_>>()
-                        .join(","),
-                    h.len(),
-                )?;
-            }
-            Err(_) => panic!("poisoned"),
-        }
-
-        Ok(())
-    })?;
-
-    println!("{:?} took {:?}", args.out_path, start.elapsed());
 
     Ok(())
 }
@@ -1472,131 +1217,6 @@ fn recall(args: RecallArgs) -> anyhow::Result<()> {
     }
 
     stats.print();
-
-    Ok(())
-}
-
-#[derive(Parser)]
-pub struct CheckRevArgs {
-    #[arg(long, value_name = "nail/")]
-    nail_dir: PathBuf,
-
-    #[arg(long, value_name = "mmseqs/")]
-    mmseqs_dir: PathBuf,
-
-    #[arg(long, value_name = "query.hmm")]
-    query_path: PathBuf,
-
-    #[arg(long, value_name = "targets/")]
-    target_dir: PathBuf,
-
-    #[arg(short, long, default_value = "fwd-rev/", value_name = "fwd-rev/")]
-    out_path: PathBuf,
-
-    #[arg(short = 'n', value_name = "N")]
-    num_tables: Option<usize>,
-
-    #[arg(short = 't', default_value_t = 4usize, value_name = "N")]
-    num_threads: usize,
-}
-
-fn check_rev(args: CheckRevArgs) -> anyhow::Result<()> {
-    let start = Instant::now();
-
-    util::set_threads(args.num_threads)?;
-
-    // ---
-
-    let hmms = bioio::hmm::parse_stats(&args.query_path)
-        .with_context(|| format!("failed to open: {:?}", args.query_path))?;
-
-    let mut queries = hmms.keys().collect::<Vec<_>>();
-    queries.sort();
-
-    create_dir_all(&args.out_path)?;
-
-    let handles = util::PathHandles::new(queries, &args.out_path, "fa", |p| {
-        File::create(p)
-            .unwrap_or_else(|e| panic!("failed to create output file: {p:?}\n\terror: {e:?}"));
-    });
-
-    // ---
-
-    let tl_buf: ThreadLocal<RefCell<Vec<u8>>> = ThreadLocal::new();
-
-    let tbl_indices = util::parse_table_indices(&args.nail_dir, args.num_tables)?;
-    tbl_indices
-        .par_iter()
-        .panic_fuse()
-        .try_for_each(|&idx| -> anyhow::Result<()> {
-            let target_path = args.target_dir.join(format!("{idx}.fa"));
-            let target = bioio::fasta::Fasta::from_path(target_path)?;
-
-            // ---
-
-            let nail_tbl = bioio::tbl::HitTable::from_path::<_, NailTable>(
-                args.nail_dir.join(format!("nail.{idx}.rev.prf.tbl")),
-            )?;
-
-            let mmseqs_tbl = bioio::tbl::HitTable::from_path::<_, BlastTable>(
-                args.mmseqs_dir.join(format!("mmseqs.{idx}.rev.prf.tbl")),
-            )?;
-
-            // ---
-
-            fn map_fn(tbl: bioio::tbl::HitTable, map: &mut HashMap<String, Vec<String>>) {
-                tbl.to_query_map().into_iter().for_each(|(q, hits)| {
-                    let v = map.entry(q).or_default();
-                    hits.iter().for_each(|h| v.push(h.target.clone()));
-                });
-            }
-
-            let mut map: HashMap<String, Vec<String>> = HashMap::new();
-
-            map_fn(nail_tbl, &mut map);
-            map_fn(mmseqs_tbl, &mut map);
-
-            map.values_mut().for_each(|targets| {
-                targets.sort();
-                targets.dedup();
-            });
-
-            // ---
-
-            let mut buf = tl_buf.get_or(|| RefCell::new(vec![])).borrow_mut();
-
-            map.into_iter()
-                .try_for_each(|(query, targets)| -> anyhow::Result<()> {
-                    targets.iter().try_for_each(|t| -> anyhow::Result<()> {
-                        let seq = target.records.get(t).unwrap();
-                        writeln!(buf, "{seq}")?;
-                        Ok(())
-                    })?;
-
-                    match handles.get(&query).context("")?.lock() {
-                        Ok(path) => {
-                            let mut file = OpenOptions::new()
-                                .create(true)
-                                .append(true)
-                                .open(path.clone())?;
-
-                            file.write_all(&buf)?;
-                            buf.clear();
-                        }
-                        Err(_) => bail!("mutex poisoned"),
-                    }
-
-                    Ok(())
-                })?;
-
-            Ok(())
-        })?;
-
-    println!(
-        "{} took {:.2}s",
-        args.out_path.to_string_lossy(),
-        start.elapsed().as_secs_f32()
-    );
 
     Ok(())
 }

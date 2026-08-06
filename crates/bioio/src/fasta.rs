@@ -78,6 +78,87 @@ impl Fasta {
     }
 }
 
+/// Streaming reader: one record at a time, without holding the file in memory.
+///
+/// [`Fasta::from_path`] builds an index of every record, which is the wrong
+/// shape when a caller only wants a handful out of a large file and knows their
+/// names in advance.
+pub struct Reader<R: BufRead> {
+    reader: R,
+    /// The header line that ended the previous record, held back until the
+    /// record it opens is requested.
+    pending: Option<String>,
+    done: bool,
+}
+
+impl Reader<BufReader<std::fs::File>> {
+    pub fn from_path(path: impl AsRef<Path>) -> anyhow::Result<Self> {
+        let path = path.as_ref();
+        let file = std::fs::File::open(path)
+            .with_context(|| format!("failed to open {}", path.display()))?;
+        Ok(Reader::new(BufReader::new(file)))
+    }
+}
+
+impl<R: BufRead> Reader<R> {
+    pub fn new(reader: R) -> Self {
+        Reader {
+            reader,
+            pending: None,
+            done: false,
+        }
+    }
+
+    /// The next record, or `None` at end of file.
+    pub fn next_record(&mut self) -> anyhow::Result<Option<FastaRecord>> {
+        if self.done {
+            return Ok(None);
+        }
+
+        let mut rec = FastaRecord::default();
+        let mut started = false;
+
+        // a header carried over from the previous call opens this record
+        if let Some(header) = self.pending.take() {
+            set_header(&mut rec, &header)?;
+            started = true;
+        }
+
+        let mut line = String::new();
+        loop {
+            line.clear();
+            if self.reader.read_line(&mut line)? == 0 {
+                self.done = true;
+                break;
+            }
+
+            let trimmed = line.trim_end_matches(['\n', '\r']);
+
+            if let Some(rest) = trimmed.strip_prefix('>') {
+                if started {
+                    // this header belongs to the next record
+                    self.pending = Some(rest.to_string());
+                    return Ok(Some(rec));
+                }
+                set_header(&mut rec, rest)?;
+                started = true;
+            } else if started {
+                rec.seq.push_str(trimmed);
+            }
+            // leading junk before the first header is skipped
+        }
+
+        Ok(started.then_some(rec))
+    }
+}
+
+fn set_header(rec: &mut FastaRecord, header: &str) -> anyhow::Result<()> {
+    let mut tokens = header.splitn(2, char::is_whitespace);
+    rec.name = tokens.next().ok_or(anyhow!("no name"))?.to_string();
+    rec.extra = tokens.next().unwrap_or_default().trim().to_string();
+    Ok(())
+}
+
 pub struct ByteBlock<const L: usize> {
     pub byte_start: u64,
     pub byte_cnts: [u16; L],

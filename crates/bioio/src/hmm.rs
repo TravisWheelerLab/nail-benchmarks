@@ -149,6 +149,62 @@ pub fn subset(src: impl AsRef<Path>, n: usize, dst: impl AsRef<Path>) -> Result<
     Ok(names)
 }
 
+/// Write each model whose `NAME` is in `names` to its own `dst_dir/<name>.hmm`,
+/// returning how many were written.
+///
+/// Same single pass as [`subset`], fanning out instead of concatenating, and
+/// selecting by name rather than by count. Tools that take one profile per
+/// invocation need the models as separate files.
+pub fn explode(
+    src: impl AsRef<Path>,
+    names: &HashSet<String>,
+    dst_dir: impl AsRef<Path>,
+) -> Result<usize> {
+    let src = src.as_ref();
+    let dst_dir = dst_dir.as_ref();
+    std::fs::create_dir_all(dst_dir)?;
+    crate::check_file_names(names)?;
+
+    let mut reader = BufReader::new(
+        std::fs::File::open(src).with_context(|| format!("failed to open {}", src.display()))?,
+    );
+
+    let mut block: Vec<u8> = Vec::new();
+    let mut name: Option<String> = None;
+    let mut kept = 0usize;
+    let mut line = String::new();
+
+    loop {
+        line.clear();
+        if reader.read_line(&mut line)? == 0 {
+            break;
+        }
+
+        if let Some(rest) = line.strip_prefix("NAME") {
+            name = Some(rest.trim().to_string());
+        }
+
+        block.extend_from_slice(line.as_bytes());
+
+        // blocks are closed by `//`, not by the next NAME: stopping at the name
+        // would cut the model off before its emission lines and terminator
+        if line.starts_with("//") {
+            if let Some(name) = name.take().filter(|n| names.contains(n)) {
+                let path = dst_dir.join(format!("{name}.hmm"));
+                std::fs::write(&path, &block)
+                    .with_context(|| format!("failed to write {}", path.display()))?;
+                kept += 1;
+                if kept == names.len() {
+                    break;
+                }
+            }
+            block.clear();
+        }
+    }
+
+    Ok(kept)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -201,6 +257,39 @@ STATS LOCAL FORWARD -4.2 0.71
 
         let err = subset(&src, 5, &dst).unwrap_err().to_string();
         assert!(err.contains("only 2"), "unexpected: {err}");
+
+        std::fs::remove_dir_all(src.parent().unwrap()).ok();
+    }
+
+    #[test]
+    fn explode_writes_one_file_per_named_model() {
+        let src = tmp("explode", TWO);
+        let out = src.with_file_name("split");
+
+        let names: HashSet<String> = ["beta".to_string()].into_iter().collect();
+        let kept = explode(&src, &names, &out).unwrap();
+
+        assert_eq!(kept, 1);
+        assert!(!out.join("alpha.hmm").exists());
+
+        let text = std::fs::read_to_string(out.join("beta.hmm")).unwrap();
+        // the whole block travels, terminator included
+        assert!(text.starts_with("HMMER3/f"));
+        assert!(text.contains("LENG  250"));
+        assert!(text.trim_end().ends_with("//"));
+        assert!(!text.contains("alpha"));
+
+        std::fs::remove_dir_all(src.parent().unwrap()).ok();
+    }
+
+    #[test]
+    fn explode_rejects_names_that_escape_the_directory() {
+        let src = tmp("escape", TWO);
+        let out = src.with_file_name("split");
+
+        let names: HashSet<String> = ["../alpha".to_string()].into_iter().collect();
+        let err = explode(&src, &names, &out).unwrap_err().to_string();
+        assert!(err.contains("cannot be used as a file name"), "got: {err}");
 
         std::fs::remove_dir_all(src.parent().unwrap()).ok();
     }

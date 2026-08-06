@@ -5,6 +5,7 @@
 //! `run` library.
 
 mod build;
+mod cutoffs;
 mod parse;
 
 use std::path::PathBuf;
@@ -28,7 +29,10 @@ enum Command {
     Build(build::Args),
     /// Execute the runs declared in bench.toml against a range of shards.
     Run(RunArgs),
-    /// Turn results into tables and learned cutoffs.
+    /// Learn per-family false-positive score cutoffs from reversed decoys.
+    #[command(subcommand)]
+    Cutoffs(cutoffs::Cmd),
+    /// Turn results into tables and analyses.
     #[command(subcommand)]
     Parse(parse::Cmd),
 }
@@ -75,6 +79,7 @@ fn main() -> Result<()> {
     match Cli::parse().command {
         Command::Build(args) => build::main(args),
         Command::Run(args) => run_main(args),
+        Command::Cutoffs(cmd) => cutoffs::main(cmd),
         Command::Parse(cmd) => parse::main(cmd),
     }
 }
@@ -123,6 +128,7 @@ fn run_main(args: RunArgs) -> Result<()> {
         filter: args.filter,
         threads: args.threads,
         numa_node: args.numa_node,
+        jobs: 1,
         dry_run: args.dry_run,
     };
     let runs = run::plan(&config, &opts)?;
@@ -194,5 +200,5 @@ fn run_main(args: RunArgs) -> Result<()> {
         numa,
     };
 
-    run::execute(&config, &runs, &searches, &ctx)
+    run::execute(&config, &runs, &searches, &ctx, opts.jobs)
 }

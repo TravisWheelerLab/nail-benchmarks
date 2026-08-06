@@ -186,6 +186,19 @@ impl Ctx {
         Job::new(program).stderr_to(self.log_dir().join(format!("prep-{tool}.err")))
     }
 
+    /// A scratch key unique to one (run, search) pair.
+    ///
+    /// Keying on the run alone is only safe while searches are executed one at
+    /// a time. Once several are in flight they would share — and clear — the
+    /// same working directory underneath each other.
+    fn key(&self, run: &Run, search: &Search) -> String {
+        if search.label.is_empty() {
+            run.name.clone()
+        } else {
+            format!("{}.{}", run.name, search.label)
+        }
+    }
+
     /// Scratch directory scoped to a name, cleared before use.
     fn scratch(&self, name: &str) -> Result<PathBuf> {
         let dir = self.tmp.join(name);
@@ -203,13 +216,48 @@ impl Ctx {
     }
 }
 
+/// Serialize work keyed on the path it produces.
+///
+/// Every `prep` is "does this database exist, and build it if not". The paths
+/// are derived from the inputs, so two searches that share an input — the same
+/// query alignment against a forward and a reversed target, say — derive the
+/// same path. Run concurrently, both see it missing and both build it into the
+/// same place, leaving a database that is neither. The check and the build have
+/// to happen under one lock.
+fn path_lock(path: &Path) -> std::sync::Arc<std::sync::Mutex<()>> {
+    use std::collections::HashMap;
+    use std::sync::{Arc, Mutex, OnceLock};
+
+    static LOCKS: OnceLock<Mutex<HashMap<PathBuf, Arc<Mutex<()>>>>> = OnceLock::new();
+
+    let locks = LOCKS.get_or_init(|| Mutex::new(HashMap::new()));
+    let mut locks = locks.lock().expect("path lock registry poisoned");
+    Arc::clone(locks.entry(path.to_path_buf()).or_default())
+}
+
+/// Run `build` unless `exists` already reports the artifact at `key` is there,
+/// with the check and the build held under one lock.
+fn build_once(key: &Path, exists: impl Fn() -> bool, build: impl FnOnce() -> Result<()>) -> Result<()> {
+    let lock = path_lock(key);
+    let _guard = lock.lock().expect("path lock poisoned");
+
+    if exists() {
+        return Ok(());
+    }
+    build()
+}
+
 /// What a tool did for one run: how long it took and the command line used.
 pub struct Outcome {
     pub timing: Timing,
     pub cmd: String,
 }
 
-pub trait Tool {
+/// Tools are stateless: everything they need comes from `Ctx`, `Search`, and
+/// `Run`, and their scratch is keyed per (run, search). That makes them safe to
+/// invoke from several threads at once, which `execute` relies on when a
+/// benchmark asks for more than one job in flight.
+pub trait Tool: Send + Sync {
     /// Build databases or indices this tool needs for a given search. Called
     /// once per (tool, search); implementations skip work that already exists
     /// so a shared query set is not rebuilt for every shard.
@@ -218,7 +266,7 @@ pub trait Tool {
     fn run(&self, ctx: &Ctx, search: &Search, run: &Run) -> Result<Outcome>;
 }
 
-pub fn get(name: &str) -> Result<Box<dyn Tool>> {
+pub fn get(name: &str) -> Result<Box<dyn Tool + Send + Sync>> {
     Ok(match name {
         "nail" => Box::new(Nail),
         "hmmer" => Box::new(Hmmer),
@@ -294,7 +342,7 @@ impl Tool for Nail {
             Query::Sequence => search.asset(Asset::Fasta)?,
         };
 
-        let tmp = ctx.scratch(&format!("nail/{}", run.name))?;
+        let tmp = ctx.scratch(&format!("nail/{}", ctx.key(run, search)))?;
         let mmseqs = ctx.bin.get("mmseqs")?;
 
         let job = ctx
@@ -374,7 +422,7 @@ impl Tool for Hmmer {
             return Ok(Outcome { timing, cmd });
         }
 
-        let tmp = ctx.scratch(&format!("hmmer/{}", run.name))?;
+        let tmp = ctx.scratch(&format!("hmmer/{}", ctx.key(run, search)))?;
         let parts = split::write_splits(query, split_kind, splits, tmp.join("query"))?;
         let per = run.threads_per.expect("splits > 1 implies threads_per");
 
@@ -440,34 +488,34 @@ impl Tool for Mmseqs {
 
         // target db is per-target, so it is rebuilt for every shard
         let tdb = Self::target_db(ctx, search);
-        if !tdb.exists() {
+        build_once(&tdb, || tdb.exists(), || {
             std::fs::create_dir_all(tdb.parent().expect("db path has a parent"))?;
             let job = ctx
                 .prep_job(mmseqs.clone(), "mmseqs")
                 .arg("createdb")
                 .arg(search.target.display().to_string())
                 .arg(tdb.display().to_string());
-            check(&job, ctx.numa(), "mmseqs createdb (target)")?;
-        }
+            check(&job, ctx.numa(), "mmseqs createdb (target)")
+        })?;
 
         // query dbs are keyed by source path, so a query set shared across
         // shards is converted once rather than once per shard
         if let Ok(fasta) = search.asset(Asset::Fasta) {
             let qdb = Self::query_db(ctx, search, Query::Sequence)?;
-            if !qdb.exists() {
+            build_once(&qdb, || qdb.exists(), || {
                 std::fs::create_dir_all(qdb.parent().expect("db path has a parent"))?;
                 let job = ctx
                     .prep_job(mmseqs.clone(), "mmseqs")
                     .arg("createdb")
                     .arg(fasta.display().to_string())
                     .arg(qdb.display().to_string());
-                check(&job, ctx.numa(), "mmseqs createdb (query)")?;
-            }
+                check(&job, ctx.numa(), "mmseqs createdb (query)")
+            })?;
         }
 
         if let Ok(sto) = search.asset(Asset::Sto) {
             let qdb = Self::query_db(ctx, search, Query::Profile)?;
-            if !qdb.exists() {
+            build_once(&qdb, || qdb.exists(), || {
                 let dir = ctx.scratch_keep(&format!("mmseqs/query-prf-{}", slug(sto)))?;
                 let msa_db = dir.join("msaDB");
 
@@ -487,8 +535,8 @@ impl Tool for Mmseqs {
                     .arg(qdb.display().to_string())
                     .arg("--match-mode")
                     .arg("1");
-                check(&job, ctx.numa(), "mmseqs msa2profile")?;
-            }
+                check(&job, ctx.numa(), "mmseqs msa2profile")
+            })?;
         }
 
         Ok(())
@@ -501,13 +549,8 @@ impl Tool for Mmseqs {
 
         // mmseqs aborts rather than overwrite an existing alignment db, so both
         // it and the working directory live in scratch that is cleared per
-        // (run, search). Keying on the search too matters once a benchmark has
-        // more than one, as mgnify's shards do.
-        let key = if search.label.is_empty() {
-            run.name.clone()
-        } else {
-            format!("{}.{}", run.name, search.label)
-        };
+        // (run, search).
+        let key = ctx.key(run, search);
         let adb = ctx.scratch(&format!("mmseqs/align/{key}"))?.join("db");
         let work = ctx.scratch(&format!("mmseqs/work/{key}"))?;
 
@@ -561,20 +604,19 @@ impl Blast {
 impl Tool for Blast {
     fn prep(&self, ctx: &Ctx, search: &Search) -> Result<()> {
         let db = Self::db(ctx, search);
-        if db.with_extension("pdb").exists() {
-            return Ok(());
-        }
-        std::fs::create_dir_all(db.parent().expect("db path has a parent"))?;
+        build_once(&db, || db.with_extension("pdb").exists(), || {
+            std::fs::create_dir_all(db.parent().expect("db path has a parent"))?;
 
-        let job = ctx
-            .prep_job(ctx.bin.get("makeblastdb")?, "blast")
-            .arg("-in")
-            .arg(search.target.display().to_string())
-            .arg("-dbtype")
-            .arg("prot")
-            .arg("-out")
-            .arg(db.display().to_string());
-        check(&job, ctx.numa(), "makeblastdb")
+            let job = ctx
+                .prep_job(ctx.bin.get("makeblastdb")?, "blast")
+                .arg("-in")
+                .arg(search.target.display().to_string())
+                .arg("-dbtype")
+                .arg("prot")
+                .arg("-out")
+                .arg(db.display().to_string());
+            check(&job, ctx.numa(), "makeblastdb")
+        })
     }
 
     fn run(&self, ctx: &Ctx, search: &Search, run: &Run) -> Result<Outcome> {
@@ -672,17 +714,16 @@ impl Last {
 impl Tool for Last {
     fn prep(&self, ctx: &Ctx, search: &Search) -> Result<()> {
         let db = Self::db(ctx, search);
-        if db.with_extension("prj").exists() {
-            return Ok(());
-        }
-        std::fs::create_dir_all(db.parent().expect("db path has a parent"))?;
+        build_once(&db, || db.with_extension("prj").exists(), || {
+            std::fs::create_dir_all(db.parent().expect("db path has a parent"))?;
 
-        let job = ctx
-            .prep_job(ctx.bin.get("lastdb")?, "last")
-            .arg("-p")
-            .arg(db.display().to_string())
-            .arg(search.target.display().to_string());
-        check(&job, ctx.numa(), "lastdb")
+            let job = ctx
+                .prep_job(ctx.bin.get("lastdb")?, "last")
+                .arg("-p")
+                .arg(db.display().to_string())
+                .arg(search.target.display().to_string());
+            check(&job, ctx.numa(), "lastdb")
+        })
     }
 
     fn run(&self, ctx: &Ctx, search: &Search, run: &Run) -> Result<Outcome> {
@@ -720,19 +761,18 @@ impl Diamond {
 impl Tool for Diamond {
     fn prep(&self, ctx: &Ctx, search: &Search) -> Result<()> {
         let db = Self::db(ctx, search);
-        if db.with_extension("dmnd").exists() {
-            return Ok(());
-        }
-        std::fs::create_dir_all(db.parent().expect("db path has a parent"))?;
+        build_once(&db, || db.with_extension("dmnd").exists(), || {
+            std::fs::create_dir_all(db.parent().expect("db path has a parent"))?;
 
-        let job = ctx
-            .prep_job(ctx.bin.get("diamond")?, "diamond")
-            .arg("makedb")
-            .arg("--in")
-            .arg(search.target.display().to_string())
-            .arg("--db")
-            .arg(db.display().to_string());
-        check(&job, ctx.numa(), "diamond makedb")
+            let job = ctx
+                .prep_job(ctx.bin.get("diamond")?, "diamond")
+                .arg("makedb")
+                .arg("--in")
+                .arg(search.target.display().to_string())
+                .arg("--db")
+                .arg(db.display().to_string());
+            check(&job, ctx.numa(), "diamond makedb")
+        })
     }
 
     fn run(&self, ctx: &Ctx, search: &Search, run: &Run) -> Result<Outcome> {
