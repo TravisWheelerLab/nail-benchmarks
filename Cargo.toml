@@ -3,10 +3,11 @@ resolver = "2"
 
 members = [
     "crates/bioio",
+    "crates/feisty",
     "crates/run",
     "benchmarks/pct-id",
     "benchmarks/mgnify",
-    "benchmarks/long-seqs",
+    "benchmarks/long-seqs", "crates/feisty",
 ]
 
 [workspace.dependencies]
