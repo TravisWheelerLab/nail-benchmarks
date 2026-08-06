@@ -20,11 +20,6 @@ use rand::{Rng, SeedableRng};
 /// bytes per record and a lookup scans at most 64 records.
 pub const BLOCK: usize = 64;
 
-/// Concurrent readers used when indexing. Indexing is disk-bound and a typical
-/// NVMe saturates around four; more readers only take threads from the rest of
-/// the process.
-pub const INDEX_THREADS: usize = 4;
-
 const MAGIC: &[u8; 7] = b"BIOIDX\0";
 const VERSION: u16 = 1;
 
@@ -71,10 +66,11 @@ struct FileIndex {
     records: u64,
 }
 
-/// A directory of fasta files addressed as a single collection.
+/// A set of fasta files addressed as a single collection.
+#[derive(Debug)]
 pub struct AggregateFasta {
     paths: Vec<PathBuf>,
-    index: Option<Index>,
+    index: Index,
 }
 
 /// The built index: per-file sparse offsets plus the cumulative record counts
@@ -108,107 +104,190 @@ impl Index {
     }
 }
 
-impl AggregateFasta {
-    /// List the fasta files in `dir`. Does not read them.
-    pub fn from_dir(dir: impl AsRef<Path>) -> Result<Self> {
-        let dir = dir.as_ref().to_path_buf();
+/// Extensions treated as fasta when none are given.
+pub const DEFAULT_EXTENSIONS: [&str; 2] = ["fa", "fasta"];
 
-        let mut paths: Vec<PathBuf> = std::fs::read_dir(&dir)
-            .with_context(|| format!("failed to read {}", dir.display()))?
-            .filter_map(|e| e.ok().map(|e| e.path()))
-            .filter(|p| {
-                p.is_file()
-                    && p.extension()
-                        .is_some_and(|e| e == "fa" || e == "fasta" || e == "faa")
-            })
-            .collect();
+/// Assembles an [`AggregateFasta`].
+///
+/// Sources accumulate: `dir` and `path` may each be called any number of times
+/// and mixed, so a collection can span directories. Duplicates are removed, so
+/// naming a file both directly and via its directory is harmless.
+pub struct AggregateFastaBuilder {
+    dirs: Vec<PathBuf>,
+    paths: Vec<PathBuf>,
+    extensions: Vec<String>,
+    index_path: Option<PathBuf>,
+    allow_overwrite: bool,
+}
 
-        // deterministic order: global record numbering depends on it
-        paths.sort();
+impl AggregateFastaBuilder {
+    fn new() -> Self {
+        AggregateFastaBuilder {
+            dirs: Vec::new(),
+            paths: Vec::new(),
+            extensions: DEFAULT_EXTENSIONS.iter().map(|s| s.to_string()).collect(),
+            index_path: None,
+            allow_overwrite: false,
+        }
+    }
 
-        if paths.is_empty() {
-            bail!("no fasta files in {}", dir.display());
+    /// Add every fasta in a directory. Not recursive.
+    pub fn dir(mut self, dir: impl Into<PathBuf>) -> Self {
+        self.dirs.push(dir.into());
+        self
+    }
+
+    /// Add one file, whatever its extension.
+    pub fn path(mut self, path: impl Into<PathBuf>) -> Self {
+        self.paths.push(path.into());
+        self
+    }
+
+    /// Add extensions that count as fasta when scanning a directory.
+    ///
+    /// Additive: `fa` and `fasta` are always recognised. A leading dot is
+    /// optional, and everything is lowercased before comparison, so `pep`,
+    /// `.pep` and `.PEP` are one extension rather than three.
+    pub fn extensions<I, S>(mut self, exts: I) -> Self
+    where
+        I: IntoIterator<Item = S>,
+        S: AsRef<str>,
+    {
+        self.extensions.extend(
+            exts.into_iter()
+                .map(|e| e.as_ref().trim_start_matches('.').to_ascii_lowercase()),
+        );
+        self.extensions.sort();
+        self.extensions.dedup();
+        self
+    }
+
+    /// Read the index from `path` if it is there and still matches the sources,
+    /// otherwise build it and write it there.
+    ///
+    /// Omit this and the index is built in memory and never written.
+    pub fn index(mut self, path: impl Into<PathBuf>) -> Self {
+        self.index_path = Some(path.into());
+        self
+    }
+
+    /// Rebuild and replace an index that no longer matches its sources.
+    /// Without this, a mismatch is an error.
+    pub fn allow_overwrite(mut self) -> Self {
+        self.allow_overwrite = true;
+        self
+    }
+
+    /// Extensions currently recognised, sorted and deduplicated.
+    pub fn extensions_list(&self) -> &[String] {
+        &self.extensions
+    }
+
+    /// Resolve the sources and produce an indexed collection.
+    pub fn build(self) -> Result<AggregateFasta> {
+        let paths = self.collect_paths()?;
+
+        let index = match &self.index_path {
+            None => build(index_all(&paths)?),
+            Some(cache) if cache.exists() => {
+                let stored = read_index(cache)
+                    .with_context(|| format!("failed to read index {}", cache.display()))?;
+
+                if stamps_match(&stored, &paths)? {
+                    stored
+                } else if self.allow_overwrite {
+                    eprintln!(
+                        "warning: index {} no longer matches its sources; rebuilding it",
+                        cache.display()
+                    );
+                    let fresh = build(index_all(&paths)?);
+                    write_index(cache, &fresh)?;
+                    fresh
+                } else {
+                    bail!(
+                        "index {} no longer matches its sources; \
+                         pass allow_overwrite to rebuild it",
+                        cache.display()
+                    );
+                }
+            }
+            Some(cache) => {
+                let fresh = build(index_all(&paths)?);
+                write_index(cache, &fresh)?;
+                fresh
+            }
+        };
+
+        Ok(AggregateFasta { paths, index })
+    }
+
+    /// Expand directories, keep explicit paths, then sort and deduplicate.
+    fn collect_paths(&self) -> Result<Vec<PathBuf>> {
+        let mut out: Vec<PathBuf> = Vec::new();
+
+        for dir in &self.dirs {
+            let entries = std::fs::read_dir(dir)
+                .with_context(|| format!("failed to read directory {}", dir.display()))?;
+
+            for entry in entries {
+                let path = entry?.path();
+                let matches = path.extension().is_some_and(|e| {
+                    let e = e.to_string_lossy().to_ascii_lowercase();
+                    self.extensions.iter().any(|want| *want == e)
+                });
+
+                if path.is_file() && matches {
+                    out.push(path);
+                }
+            }
         }
 
-        Ok(AggregateFasta { paths, index: None })
+        for path in &self.paths {
+            if !path.is_file() {
+                bail!("{} is not a readable file", path.display());
+            }
+            out.push(path.clone());
+        }
+
+        // canonicalise before deduplicating, so the same file reached by two
+        // routes is not counted twice, which would double its records in the
+        // global numbering
+        let mut canonical: Vec<PathBuf> = out
+            .iter()
+            .map(|p| {
+                p.canonicalize()
+                    .with_context(|| format!("failed to resolve {}", p.display()))
+            })
+            .collect::<Result<_>>()?;
+
+        // global record numbering depends on a stable order
+        canonical.sort();
+        canonical.dedup();
+
+        if canonical.is_empty() {
+            bail!("no fasta files found; add a dir() or a path()");
+        }
+
+        Ok(canonical)
+    }
+}
+
+impl AggregateFasta {
+    pub fn builder() -> AggregateFastaBuilder {
+        AggregateFastaBuilder::new()
     }
 
     pub fn files(&self) -> &[PathBuf] {
         &self.paths
     }
 
-    /// Total records, once indexed.
-    pub fn len(&self) -> Option<u64> {
-        self.index.as_ref().map(Index::total)
+    /// Total records across the collection.
+    pub fn len(&self) -> u64 {
+        self.index.total()
     }
 
-    pub fn is_indexed(&self) -> bool {
-        self.index.is_some()
-    }
-
-    /// Build the index by reading every file once, serially.
-    pub fn index(&mut self) -> Result<()> {
-        let mut files = Vec::with_capacity(self.paths.len());
-        for path in &self.paths {
-            files.push(index_file(path)?);
-        }
-        self.index = Some(build(files));
-        Ok(())
-    }
-
-    /// Build the index concurrently.
-    ///
-    /// Scanning is cheap enough that indexing is disk-bound, so this uses a
-    /// small dedicated pool rather than the global one: measured on a 528GB
-    /// collection, throughput rises 3.1 -> 5.8 -> 8.5 GB/s at 1, 2 and 4
-    /// readers and is then flat through 20. Taking one thread per file would
-    /// occupy the whole machine to reach a ceiling four readers already hit.
-    pub fn index_parallel(&mut self) -> Result<()> {
-        self.index_parallel_with(INDEX_THREADS)
-    }
-
-    /// Build the index with an explicit number of concurrent readers.
-    pub fn index_parallel_with(&mut self, threads: usize) -> Result<()> {
-        use rayon::prelude::*;
-
-        let pool = rayon::ThreadPoolBuilder::new()
-            .num_threads(threads.max(1))
-            .thread_name(|i| format!("bioio-index-{i}"))
-            .build()
-            .context("failed to build the indexing thread pool")?;
-
-        // collect preserves order, which global record numbering depends on
-        let files: Vec<FileIndex> = pool.install(|| {
-            self.paths
-                .par_iter()
-                .map(|p| index_file(p))
-                .collect::<Result<Vec<_>>>()
-        })?;
-
-        self.index = Some(build(files));
-        Ok(())
-    }
-
-    /// Load a persisted index, rebuilding it if it is missing or stale.
-    pub fn index_cached(&mut self, path: impl AsRef<Path>) -> Result<()> {
-        let path = path.as_ref();
-
-        if let Ok(index) = read_index(path) {
-            let current: Vec<Stamp> = self
-                .paths
-                .iter()
-                .map(|p| Stamp::of(p))
-                .collect::<Result<_>>()?;
-            let stored: Vec<Stamp> = index.files.iter().map(|f| f.stamp.clone()).collect();
-
-            if current == stored {
-                self.index = Some(index);
-                return Ok(());
-            }
-        }
-
-        self.index_parallel()?;
-        write_index(path, self.index.as_ref().expect("just indexed"))
+    pub fn is_empty(&self) -> bool {
+        self.len() == 0
     }
 
     /// Draw `n` records uniformly at random without replacement and write them
@@ -217,11 +296,7 @@ impl AggregateFasta {
     /// Returns how many were written, which is fewer than `n` only when the
     /// collection is smaller than the request.
     pub fn sample(&self, n: usize, seed: u64, out: &mut impl Write) -> Result<usize> {
-        let index = self
-            .index
-            .as_ref()
-            .context("collection has not been indexed")?;
-
+        let index = &self.index;
         let total = index.total();
         let n = if n as u64 > total {
             eprintln!(
@@ -234,13 +309,18 @@ impl AggregateFasta {
 
         let mut rng = StdRng::seed_from_u64(seed);
 
-        // Draw without replacement, then sort: reading in file order turns
-        // scattered seeks into a forward pass.
+        // Draw without replacement, in random order.
+        //
+        // The order is deliberately not sorted: the emitted records must be a
+        // random permutation, not the collection's own order with gaps. Reads
+        // are scattered either way — draws over a large collection land far
+        // apart no matter how they are ordered — so there is little to reclaim
+        // by sorting, and doing so would make the output non-random.
         //
         // Two strategies, because materialising 0..total is untenable at scale
-        // — a 2e9-record collection would want a 15GB vector to draw a few
+        // — a 2e9-record collection would want a 20GB vector to draw a few
         // thousand records.
-        let mut draw: Vec<u64> = if (n as u64).saturating_mul(3) >= total {
+        let draw: Vec<u64> = if (n as u64).saturating_mul(3) >= total {
             // taking a large fraction: shuffling everything is cheapest
             let mut all: Vec<u64> = (0..total).collect();
             all.shuffle(&mut rng);
@@ -252,25 +332,30 @@ impl AggregateFasta {
             while seen.len() < n {
                 seen.insert(rng.random_range(0..total));
             }
-            seen.into_iter().collect()
+            // hash order is not reproducible, so impose the seeded one
+            let mut v: Vec<u64> = seen.into_iter().collect();
+            v.sort_unstable();
+            v.shuffle(&mut rng);
+            v
         };
-        draw.sort_unstable();
 
+        // one reader per file, opened on first use and kept: draws arrive in
+        // random order, so reopening on every file change would thrash
+        let mut readers: Vec<Option<BufReader<File>>> = (0..self.paths.len()).map(|_| None).collect();
         let mut written = 0usize;
-        let mut current: Option<(usize, BufReader<File>)> = None;
 
         for global in draw {
             let (file_idx, local) = index
                 .locate(global)
                 .context("drew a record outside the collection")?;
 
-            if current.as_ref().is_none_or(|(i, _)| *i != file_idx) {
+            if readers[file_idx].is_none() {
                 let f = File::open(&self.paths[file_idx])
                     .with_context(|| format!("failed to open {}", self.paths[file_idx].display()))?;
-                current = Some((file_idx, BufReader::new(f)));
+                readers[file_idx] = Some(BufReader::new(f));
             }
 
-            let (_, reader) = current.as_mut().expect("reader was just set");
+            let reader = readers[file_idx].as_mut().expect("reader was just opened");
             let bytes = read_record(reader, &index.files[file_idx], local)?;
             out.write_all(&bytes)?;
             written += 1;
@@ -330,6 +415,34 @@ fn index_file(path: &Path) -> Result<FileIndex> {
     })
 }
 
+/// Index every file, concurrently.
+///
+/// Uses rayon's global pool, so a binary that sizes it from a `--threads` flag
+/// controls this too. Indexing is disk-bound: on a 528GB collection throughput
+/// went 3.1 -> 5.8 -> 8.5 GB/s at 1, 2 and 4 readers, then stayed flat through
+/// 20, so there is nothing to gain past a handful.
+fn index_all(paths: &[PathBuf]) -> Result<Vec<FileIndex>> {
+    use rayon::prelude::*;
+
+    // collect preserves order, which global record numbering depends on
+    paths.par_iter().map(|p| index_file(p)).collect()
+}
+
+/// Whether a stored index still describes these files unchanged.
+fn stamps_match(index: &Index, paths: &[PathBuf]) -> Result<bool> {
+    if index.files.len() != paths.len() {
+        return Ok(false);
+    }
+
+    for (stored, path) in index.files.iter().zip(paths) {
+        if stored.stamp != Stamp::of(path)? {
+            return Ok(false);
+        }
+    }
+
+    Ok(true)
+}
+
 fn build(files: Vec<FileIndex>) -> Index {
     let mut starts = Vec::with_capacity(files.len() + 1);
     let mut acc = 0u64;
@@ -343,9 +456,14 @@ fn build(files: Vec<FileIndex>) -> Index {
 }
 
 /// Read record `local` out of an indexed file, verbatim.
+///
+/// Blocks begin and end on record boundaries, so the next block's start is
+/// exactly where this block ends. Reading that span gets the whole block in one
+/// go — about 17KB at the default block length — rather than scanning forward
+/// through arbitrarily sized buffers.
 fn read_record(reader: &mut BufReader<File>, index: &FileIndex, local: u64) -> Result<Vec<u8>> {
     let block = (local / BLOCK as u64) as usize;
-    let within = local % BLOCK as u64;
+    let within = (local % BLOCK as u64) as usize;
 
     let start = *index
         .block_starts
@@ -354,56 +472,36 @@ fn read_record(reader: &mut BufReader<File>, index: &FileIndex, local: u64) -> R
 
     reader.seek(SeekFrom::Start(start))?;
 
-    // scan forward past `within` record boundaries to reach the record, then
-    // one more to find where it ends
-    let mut buf = vec![0u8; BUF];
-    let mut seen = 0u64;
-    let mut record_start: Option<u64> = None;
-    let mut out: Vec<u8> = Vec::new();
-    let mut pos = start;
-    let mut at_line_start = true;
-
-    loop {
-        let n = reader.read(&mut buf)?;
-        if n == 0 {
-            break;
+    // read exactly this block, or to the end of the file for the last one
+    let mut buf = Vec::new();
+    match index.block_starts.get(block + 1) {
+        Some(&next) => {
+            buf.resize((next - start) as usize, 0);
+            reader.read_exact(&mut buf)?;
         }
-
-        for i in 0..n {
-            let is_header = at_line_start && buf[i] == b'>';
-            at_line_start = buf[i] == b'\n';
-
-            if !is_header {
-                continue;
-            }
-
-            match record_start {
-                None => {
-                    if seen == within {
-                        record_start = Some(pos + i as u64);
-                    }
-                    seen += 1;
-                }
-                // the next header ends the record we wanted
-                Some(begin) => {
-                    let end = pos + i as u64;
-                    out.reserve((end - begin) as usize);
-                    reader.seek(SeekFrom::Start(begin))?;
-                    let mut take = reader.take(end - begin);
-                    take.read_to_end(&mut out)?;
-                    return Ok(out);
-                }
-            }
+        None => {
+            reader.read_to_end(&mut buf)?;
         }
-
-        pos += n as u64;
     }
 
-    // the record we wanted is the last one in the file
-    let begin = record_start.context("record not found in its block")?;
-    reader.seek(SeekFrom::Start(begin))?;
-    reader.read_to_end(&mut out)?;
-    Ok(out)
+    // record starts within the block: the first byte, then every '>' opening a
+    // line after it
+    let mut starts = Vec::with_capacity(BLOCK);
+    starts.push(0usize);
+    for i in memchr::memchr_iter(b'\n', &buf) {
+        if i + 1 < buf.len() && buf[i + 1] == b'>' {
+            starts.push(i + 1);
+        }
+    }
+
+    let begin = *starts
+        .get(within)
+        .context("record not found in its block; the index may not match the file")?;
+    let end = starts.get(within + 1).copied().unwrap_or(buf.len());
+
+    buf.truncate(end);
+    buf.drain(..begin);
+    Ok(buf)
 }
 
 // ------------------------------------------------------------- persistence
@@ -539,13 +637,10 @@ mod tests {
     #[test]
     fn indexes_every_record_across_files() {
         let dir = collection("count", 3, 150);
-        let mut agg = AggregateFasta::from_dir(&dir).unwrap();
+        let agg = AggregateFasta::builder().dir(&dir).build().unwrap();
 
         assert_eq!(agg.files().len(), 3);
-        assert_eq!(agg.len(), None, "from_dir must not index");
-
-        agg.index().unwrap();
-        assert_eq!(agg.len(), Some(450));
+        assert_eq!(agg.len(), 450);
 
         std::fs::remove_dir_all(&dir).ok();
     }
@@ -553,8 +648,7 @@ mod tests {
     #[test]
     fn sample_draws_whole_records_without_replacement() {
         let dir = collection("draw", 3, 100);
-        let mut agg = AggregateFasta::from_dir(&dir).unwrap();
-        agg.index().unwrap();
+        let agg = AggregateFasta::builder().dir(&dir).build().unwrap();
 
         let mut out = Vec::new();
         let n = agg.sample(120, 42, &mut out).unwrap();
@@ -578,8 +672,7 @@ mod tests {
     #[test]
     fn sample_reaches_every_file_and_both_ends() {
         let dir = collection("spread", 4, 100);
-        let mut agg = AggregateFasta::from_dir(&dir).unwrap();
-        agg.index().unwrap();
+        let agg = AggregateFasta::builder().dir(&dir).build().unwrap();
 
         let mut out = Vec::new();
         agg.sample(400, 7, &mut out).unwrap();
@@ -599,8 +692,7 @@ mod tests {
     fn records_spanning_block_boundaries_read_intact() {
         // more records than one block, so lookups must scan within a block
         let dir = collection("blocks", 1, BLOCK * 3 + 7);
-        let mut agg = AggregateFasta::from_dir(&dir).unwrap();
-        agg.index().unwrap();
+        let agg = AggregateFasta::builder().dir(&dir).build().unwrap();
 
         let mut out = Vec::new();
         agg.sample(BLOCK * 3 + 7, 1, &mut out).unwrap();
@@ -620,8 +712,7 @@ mod tests {
     #[test]
     fn asking_for_too_many_clamps() {
         let dir = collection("clamp", 2, 10);
-        let mut agg = AggregateFasta::from_dir(&dir).unwrap();
-        agg.index().unwrap();
+        let agg = AggregateFasta::builder().dir(&dir).build().unwrap();
 
         let mut out = Vec::new();
         let n = agg.sample(500, 3, &mut out).unwrap();
@@ -631,27 +722,152 @@ mod tests {
     }
 
     #[test]
-    fn a_cached_index_round_trips_and_is_rejected_when_stale() {
+    fn an_index_file_round_trips() {
         let dir = collection("cache", 2, 80);
         let idx = dir.join(".index");
 
-        let mut agg = AggregateFasta::from_dir(&dir).unwrap();
-        agg.index_cached(&idx).unwrap();
-        assert!(idx.exists());
-        assert_eq!(agg.len(), Some(160));
+        let agg = AggregateFasta::builder().dir(&dir).index(&idx).build().unwrap();
+        assert!(idx.exists(), "index() should have written the file");
+        assert_eq!(agg.len(), 160);
 
         // reloading must reuse the file rather than rebuild
-        let mut again = AggregateFasta::from_dir(&dir).unwrap();
-        again.index_cached(&idx).unwrap();
-        assert_eq!(again.len(), Some(160));
+        let again = AggregateFasta::builder().dir(&dir).index(&idx).build().unwrap();
+        assert_eq!(again.len(), 160);
 
-        // touching a source file invalidates the stamp
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn a_stale_index_errors_unless_overwrite_is_allowed() {
+        let dir = collection("stale", 2, 80);
+        let idx = dir.join(".index");
+
+        AggregateFasta::builder().dir(&dir).index(&idx).build().unwrap();
+
+        // changing a source leaves the stored stamp behind
         std::thread::sleep(std::time::Duration::from_millis(10));
         std::fs::write(dir.join("00.fa"), ">new\nAAAA\n").unwrap();
 
-        let mut stale = AggregateFasta::from_dir(&dir).unwrap();
-        stale.index_cached(&idx).unwrap();
-        assert_eq!(stale.len(), Some(81), "stale index should have been rebuilt");
+        let err = AggregateFasta::builder()
+            .dir(&dir)
+            .index(&idx)
+            .build()
+            .unwrap_err()
+            .to_string();
+        assert!(err.contains("no longer matches"), "unexpected: {err}");
+
+        let rebuilt = AggregateFasta::builder()
+            .dir(&dir)
+            .index(&idx)
+            .allow_overwrite()
+            .build()
+            .unwrap();
+        assert_eq!(rebuilt.len(), 81, "should have rebuilt from the changed sources");
+
+        // and the replacement must load cleanly without the flag
+        let reloaded = AggregateFasta::builder().dir(&dir).index(&idx).build().unwrap();
+        assert_eq!(reloaded.len(), 81);
+
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn sources_accumulate_and_deduplicate() {
+        let dir = collection("sources", 3, 10);
+        let extra = dir.join("other");
+        std::fs::create_dir_all(&extra).unwrap();
+        std::fs::write(extra.join("x.fasta"), ">x0\nAAAA\n>x1\nCCCC\n").unwrap();
+
+        // the same file by two routes, plus a second directory
+        let agg = AggregateFasta::builder()
+            .dir(&dir)
+            .path(dir.join("00.fa"))
+            .dir(&extra)
+            .build()
+            .unwrap();
+
+        assert_eq!(agg.files().len(), 4, "00.fa must not be counted twice");
+        assert_eq!(agg.len(), 32, "3 x 10 records plus the 2 in x.fasta");
+
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn extensions_append_to_the_defaults_and_ignore_case() {
+        let dir = collection("exts", 1, 5);
+        std::fs::write(dir.join("upper.FA"), ">u0\nAAAA\n").unwrap();
+        std::fs::write(dir.join("odd.pep"), ">p0\nAAAA\n>p1\nCCCC\n").unwrap();
+
+        // .FA counts by default, .pep does not
+        let agg = AggregateFasta::builder().dir(&dir).build().unwrap();
+        assert_eq!(agg.len(), 6);
+
+        // adding .pep keeps the defaults rather than replacing them
+        let agg = AggregateFasta::builder()
+            .dir(&dir)
+            .extensions([".pep"])
+            .build()
+            .unwrap();
+        assert_eq!(agg.len(), 8, "the 6 default-matched plus the 2 in .pep");
+
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn extension_spellings_collapse_to_one() {
+        let agg = AggregateFasta::builder()
+            .extensions([".PEP", "pep"])
+            .extensions(["Pep", "fa", ".FASTA"]);
+
+        // dots, case and repeats across calls all fold together
+        assert_eq!(agg.extensions_list(), ["fa", "fasta", "pep"]);
+    }
+
+    #[test]
+    fn a_missing_path_is_an_error() {
+        let dir = collection("missing", 1, 4);
+
+        let err = AggregateFasta::builder()
+            .path(dir.join("nope.fa"))
+            .build()
+            .unwrap_err()
+            .to_string();
+        assert!(err.contains("not a readable file"), "unexpected: {err}");
+
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn building_with_no_sources_is_an_error() {
+        let err = AggregateFasta::builder().build().unwrap_err().to_string();
+        assert!(err.contains("no fasta files"), "unexpected: {err}");
+    }
+
+    #[test]
+    fn output_order_is_a_random_permutation_not_collection_order() {
+        let dir = collection("order", 4, 200);
+        let agg = AggregateFasta::builder().dir(&dir).build().unwrap();
+
+        let mut out = Vec::new();
+        agg.sample(200, 5, &mut out).unwrap();
+        let got = names(&String::from_utf8(out).unwrap());
+
+        // sorted draws would emit every record of file 0 before any of file 1,
+        // and each file's records in increasing order
+        let file_of = |n: &String| n[1..n.find('r').unwrap()].parse::<usize>().unwrap();
+        let files: Vec<usize> = got.iter().map(file_of).collect();
+        assert!(
+            files.windows(2).any(|w| w[0] > w[1]),
+            "files appear in collection order, so the output was not shuffled"
+        );
+
+        // and within one file, record numbers must not be ascending either
+        let rec_of = |n: &String| n[n.find('r').unwrap() + 1..].parse::<usize>().unwrap();
+        let first: Vec<usize> = got.iter().filter(|n| file_of(n) == 0).map(rec_of).collect();
+        assert!(
+            first.windows(2).any(|w| w[0] > w[1]),
+            "records within a file are ascending, so the output was not shuffled"
+        );
 
         std::fs::remove_dir_all(&dir).ok();
     }
@@ -659,8 +875,7 @@ mod tests {
     #[test]
     fn sampling_is_reproducible_for_a_seed() {
         let dir = collection("seed", 2, 50);
-        let mut agg = AggregateFasta::from_dir(&dir).unwrap();
-        agg.index().unwrap();
+        let agg = AggregateFasta::builder().dir(&dir).build().unwrap();
 
         let mut a = Vec::new();
         let mut b = Vec::new();

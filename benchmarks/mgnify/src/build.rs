@@ -1,8 +1,11 @@
+use std::fs::File;
+use std::io::{BufWriter, Write};
 use std::path::PathBuf;
 
 use anyhow::{bail, Result};
 use clap::Parser;
 
+use bioio::aggregate::AggregateFasta;
 use bioio::{fasta, hmm, stockholm};
 
 /// This benchmark's directory, fixed at compile time.
@@ -17,6 +20,9 @@ pub fn repo() -> PathBuf {
 
 /// Name of the benchmark directory when none is given.
 pub const DEFAULT_NAME: &str = "benchmark";
+
+/// Where the collection index is cached, beside the source fastas.
+const INDEX_NAME: &str = "mgnify.afi";
 
 #[derive(Parser, Debug)]
 pub struct Args {
@@ -46,11 +52,11 @@ pub struct Args {
 pub fn main(args: Args) -> Result<()> {
     let repo = repo();
 
-    let src_fa = repo.join("data/mgnify.fa");
+    let src_dir = repo.join("data/mgnify");
     let src_hmm = repo.join("data/pfam.hmm");
     let src_sto = repo.join("data/pfam.sto");
 
-    for path in [&src_fa, &src_hmm, &src_sto] {
+    for path in [&src_dir, &src_hmm, &src_sto] {
         if !path.exists() {
             bail!(
                 "missing source data {}; run `make setup` from the repo root",
@@ -98,26 +104,36 @@ pub fn main(args: Args) -> Result<()> {
     // ---- targets ----
 
     let mgy = bench.join("mgy");
-    let source = match args.n_seqs {
-        None => {
-            println!("splitting all of MGnify into {} shards...", args.shards);
-            src_fa.clone()
-        }
+    let sampled = bench.join("target.fa");
+
+    match args.n_seqs {
         Some(n) => {
-            println!("sampling {n} MGnify sequences...");
-            let sampled = bench.join("target.fa");
-            fasta::sample_to(&src_fa, n, &sampled)?;
-            sampled
+            // indexing the whole collection is the expensive part, so the index
+            // is kept beside the source and reused by later builds
+            let collection = AggregateFasta::builder()
+                .dir(&src_dir)
+                .index(src_dir.join(INDEX_NAME))
+                .allow_overwrite()
+                .build()?;
+
+            println!(
+                "sampling {n} of {} sequences across {} files...",
+                collection.len(),
+                collection.files().len()
+            );
+
+            let mut out = BufWriter::new(File::create(&sampled)?);
+            collection.sample(n, args.seed, &mut out)?;
+            out.flush()?;
         }
-    };
+        None => todo!("sharding the whole collection needs the streaming splitter"),
+    }
 
     println!("splitting into {} shards...", args.shards);
-    fasta::split(&source, args.shards, &mgy, args.seed)?;
+    fasta::split(&sampled, args.shards, &mgy, args.seed)?;
 
     // the sampled intermediate is redundant once it has been sharded
-    if args.n_seqs.is_some() {
-        std::fs::remove_file(bench.join("target.fa")).ok();
-    }
+    std::fs::remove_file(&sampled).ok();
 
     println!("\nbuilt {}", bench.display());
     Ok(())
