@@ -1,235 +1,201 @@
-pub mod a {
-    const ROUNDS: usize = 5;
+mod splitmix64;
 
-    pub trait RoundFunction {
-        fn new(seed: u64, rounds: usize) -> Self;
-        fn apply(&self, round: usize, x: u64) -> u64;
-    }
+pub const DEFAULT_ROUNDS: usize = 5;
 
-    #[derive(Clone, Debug)]
-    pub struct IntegerMixer {
-        round_keys: Vec<u64>,
-    }
+pub trait RoundFunction {
+    fn new(seed: u64, rounds: usize) -> Self;
+    fn apply(&self, round: usize, x: u64) -> u64;
+}
 
-    impl IntegerMixer {}
+#[derive(Clone, Debug)]
+pub struct IntegerMixer {
+    round_keys: Vec<u64>,
+}
 
-    impl RoundFunction for IntegerMixer {
-        fn new(seed: u64, rounds: usize) -> Self {
-            let mut state = seed;
-            let round_keys = (0..rounds).map(|_| splitmix64_next(&mut state)).collect();
-
-            Self { round_keys }
-        }
-
-        #[inline]
-        fn apply(&self, round: usize, x: u64) -> u64 {
-            mix64(x ^ self.round_keys[round])
+impl RoundFunction for IntegerMixer {
+    fn new(seed: u64, rounds: usize) -> Self {
+        Self {
+            round_keys: splitmix64::generate(rounds, seed),
         }
     }
 
     #[inline]
-    fn mix64(mut x: u64) -> u64 {
-        x ^= x >> 30;
-        x = x.wrapping_mul(0xbf58_476d_1ce4_e5b9);
-        x ^= x >> 27;
-        x = x.wrapping_mul(0x94d0_49bb_1331_11eb);
-        x ^= x >> 31;
-        x
-    }
-
-    #[inline]
-    fn splitmix64_next(state: &mut u64) -> u64 {
-        *state = state.wrapping_add(0x9e37_79b9_7f4a_7c15);
-        mix64(*state)
-    }
-
-    pub struct Feistel<R>
-    where
-        R: RoundFunction,
-    {
-        round_fn: R,
-        bits: usize,
-    }
-
-    impl<R> Feistel<R>
-    where
-        R: RoundFunction,
-    {
-        pub fn new(bits: usize, seed: u64) -> Feistel<R> {
-            assert!(bits.is_multiple_of(2));
-            assert!(bits <= 64);
-            Feistel {
-                round_fn: R::new(seed, ROUNDS),
-                bits,
-            }
-        }
-
-        pub fn permute(&self, x: u64) -> u64 {
-            let (mut l, mut r) = Self::split(x, self.bits);
-
-            let n = self.bits >> 1;
-            let mask = (1u64 << n) - 1;
-            for round in 0..ROUNDS {
-                l ^= self.round_fn.apply(round, r) & mask;
-                (l, r) = (r, l);
-            }
-            Self::combine(r, l, self.bits)
-        }
-
-        fn split(x: u64, bits: usize) -> (u64, u64) {
-            let n = bits >> 1;
-            let m = (1u64 << n) - 1;
-            let hi = x >> n;
-            let lo = x & m;
-            (hi, lo)
-        }
-
-        fn combine(hi: u64, lo: u64, bits: usize) -> u64 {
-            let n = bits >> 1;
-            (hi << n) | lo
-        }
-    }
-
-    pub struct Permutation<R>
-    where
-        R: RoundFunction,
-    {
-        n: u64,
-        feistel: Feistel<R>,
-    }
-
-    impl<R> Permutation<R>
-    where
-        R: RoundFunction,
-    {
-        pub fn new(n: u64, seed: u64) -> Permutation<R> {
-            let z = 64 - n.leading_zeros() as usize;
-            let bits = z + (z & 1);
-
-            Permutation {
-                n,
-                feistel: Feistel::new(bits, seed),
-            }
-        }
-
-        pub fn get(&self, x: u64) -> u64 {
-            assert!(x < self.n);
-            let mut res = self.feistel.permute(x);
-            while res >= self.n {
-                res = self.feistel.permute(res);
-            }
-            res
-        }
+    fn apply(&self, round: usize, x: u64) -> u64 {
+        splitmix64::mix(x ^ self.round_keys[round])
     }
 }
 
-pub mod b {
-    use std::hash::{BuildHasher, Hasher};
+pub struct Feistel<R>
+where
+    R: RoundFunction,
+{
+    round_fn: R,
+    half: u32,
+    mask: u64,
+    rounds: usize,
+}
 
-    pub struct Feistel<B>
-    where
-        B: BuildHasher,
-    {
-        hash_builder: B,
-        bits: usize,
-        keys: Vec<u64>,
+impl<R> Feistel<R>
+where
+    R: RoundFunction,
+{
+    pub fn new(bits: usize, seed: u64) -> Feistel<R> {
+        Self::with_rounds(bits, seed, DEFAULT_ROUNDS)
     }
 
-    impl<B> Feistel<B>
-    where
-        B: BuildHasher,
-    {
-        pub fn new(hash_builder: B, bits: usize, keys: &[u64]) -> Feistel<B> {
-            assert!(bits.is_multiple_of(2));
-            assert!(bits <= 64);
-            Feistel {
-                hash_builder,
-                bits,
-                keys: Vec::from(keys),
-            }
-        }
+    pub fn with_rounds(bits: usize, seed: u64, rounds: usize) -> Feistel<R> {
+        assert!(bits.is_multiple_of(2));
+        assert!(bits <= 64);
 
-        pub fn encrypt(&self, x: u64) -> u64 {
-            let (mut l, mut r) = self.split(x);
-            for k in self.keys.iter() {
-                l ^= self.hash(*k, r);
-                (l, r) = (r, l);
-            }
-            self.combine(r, l)
-        }
-
-        pub fn decrypt(&self, x: u64) -> u64 {
-            let (mut l, mut r) = self.split(x);
-            for k in self.keys.iter().rev() {
-                l ^= self.hash(*k, r);
-                (l, r) = (r, l);
-            }
-            self.combine(r, l)
-        }
-
-        fn split(&self, x: u64) -> (u64, u64) {
-            let n = self.bits >> 1;
-            let m = (1u64 << n) - 1;
-            let hi = x >> n;
-            let lo = x & m;
-            (hi, lo)
-        }
-
-        fn combine(&self, hi: u64, lo: u64) -> u64 {
-            let n = self.bits >> 1;
-            (hi << n) | lo
-        }
-
-        fn hash(&self, k: u64, x: u64) -> u64 {
-            let mut h: <B as BuildHasher>::Hasher = self.hash_builder.build_hasher();
-            h.write_u64(k);
-            h.write_u64(x);
-            let res = h.finish();
-            let n = self.bits >> 1;
-            let m = (1u64 << n) - 1;
-            res & m
+        let half = (bits >> 1) as u32;
+        Feistel {
+            round_fn: R::new(seed, rounds),
+            half,
+            mask: (1u64 << half) - 1,
+            rounds,
         }
     }
 
-    pub struct Permutation<B>
-    where
-        B: BuildHasher,
-    {
-        n: u64,
-        feistel: Feistel<B>,
+    pub fn permute(&self, x: u64) -> u64 {
+        let (mut l, mut r) = self.split(x);
+
+        for round in 0..self.rounds {
+            l ^= self.round_fn.apply(round, r) & self.mask;
+            (l, r) = (r, l);
+        }
+
+        self.combine(r, l)
     }
 
-    impl<B> Permutation<B>
-    where
-        B: BuildHasher,
-    {
-        pub fn new(n: u64, seed: u64, bob: B) -> Permutation<B> {
-            let mut keys = Vec::new();
-            let mut k = seed;
-            for _i in 0..5 {
-                k = bob.hash_one(k);
-                keys.push(k);
-            }
+    #[inline]
+    fn split(&self, x: u64) -> (u64, u64) {
+        (x >> self.half, x & self.mask)
+    }
 
-            // Code assumes an even number of bits. Rounding up
-            // increases the constant factor in [`get`] but doesn't
-            // alter the big-O complexity.
-            let z = 64 - n.leading_zeros() as usize;
-            let bits = z + (z & 1);
+    #[inline]
+    fn combine(&self, hi: u64, lo: u64) -> u64 {
+        (hi << self.half) | lo
+    }
+}
 
-            Permutation {
-                n,
-                feistel: Feistel::new(bob, bits, &keys),
-            }
+pub struct Permutation<R>
+where
+    R: RoundFunction,
+{
+    n: u64,
+    feistel: Feistel<R>,
+}
+
+impl<R> Permutation<R>
+where
+    R: RoundFunction,
+{
+    pub fn new(n: u64, seed: u64) -> Permutation<R> {
+        Self::with_rounds(n, seed, DEFAULT_ROUNDS)
+    }
+
+    pub fn with_rounds(n: u64, seed: u64, rounds: usize) -> Permutation<R> {
+        assert!(n > 0);
+
+        // what: compute the smallest even number
+        //       of bits required to store n - 1
+        //
+        // why:  since we are permuting 0..n, we
+        //       never actually need to represent n
+        //
+        //       we want to use fewer bits since it
+        //       constrains the output range of the
+        //       Feistel network, which means we need
+        //       fewer permute() cycles on average to
+        //       produce an output in the correct range
+        let z = 64 - (n - 1).leading_zeros() as usize;
+        let bits = z.next_multiple_of(2);
+
+        Permutation {
+            n,
+            feistel: Feistel::with_rounds(bits, seed, rounds),
+        }
+    }
+
+    pub fn get(&self, x: u64) -> u64 {
+        assert!(x < self.n);
+
+        let mut res = self.feistel.permute(x);
+
+        while res >= self.n {
+            res = self.feistel.permute(res);
         }
 
-        pub fn get(&self, x: u64) -> u64 {
-            assert!(x < self.n);
-            let mut res = self.feistel.encrypt(x);
-            while res >= self.n {
-                res = self.feistel.encrypt(res);
-            }
-            res
+        res
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn assert_bijection(n: u64, seed: u64) {
+        let perm = Permutation::<IntegerMixer>::new(n, seed);
+        let mut seen = vec![false; n as usize];
+
+        for x in 0..n {
+            let y = perm.get(x);
+            assert!(y < n, "n={n} seed={seed}: get({x}) = {y} out of range");
+            assert!(!seen[y as usize], "n={n} seed={seed}: {y} seen twice");
+            seen[y as usize] = true;
         }
+
+        for x in 0..n {
+            assert!(seen[x as usize], "n={n} seed={seed}: {x} missed");
+        }
+    }
+
+    #[test]
+    fn permutes_every_small_n() {
+        for n in 1..=1024 {
+            for seed in [0, 1, 67779] {
+                assert_bijection(n, seed);
+            }
+        }
+    }
+
+    #[test]
+    fn permutes_powers_of_two() {
+        for k in 0..=16 {
+            assert_bijection(1 << k, 67779);
+        }
+    }
+
+    #[test]
+    fn single_element_is_identity() {
+        assert_eq!(Permutation::<IntegerMixer>::new(1, 67779).get(0), 0);
+    }
+
+    #[test]
+    fn seeds_give_different_permutations() {
+        let n = 1000;
+        let a = Permutation::<IntegerMixer>::new(n, 1);
+        let b = Permutation::<IntegerMixer>::new(n, 2);
+        assert!((0..n).any(|x| a.get(x) != b.get(x)));
+    }
+
+    #[test]
+    fn is_deterministic() {
+        let n = 1000;
+        let a = Permutation::<IntegerMixer>::new(n, 67779);
+        let b = Permutation::<IntegerMixer>::new(n, 67779);
+        assert!((0..n).all(|x| a.get(x) == b.get(x)));
+    }
+
+    #[test]
+    #[should_panic]
+    fn rejects_empty_range() {
+        Permutation::<IntegerMixer>::new(0, 67779);
+    }
+
+    #[test]
+    #[should_panic]
+    fn rejects_out_of_range_input() {
+        Permutation::<IntegerMixer>::new(10, 67779).get(10);
     }
 }
