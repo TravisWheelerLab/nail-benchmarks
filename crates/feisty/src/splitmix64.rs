@@ -40,15 +40,6 @@ pub fn next(state: &mut u64) -> u64 {
     mix(*state)
 }
 
-/// Generate `n` random numbers using `seed`.
-///
-/// This does NOT use any global state, so repeated calls with
-/// the same arguments will always return the same numbers.
-pub fn generate(n: usize, seed: u64) -> Vec<u64> {
-    let mut state = seed;
-    (0..n).map(|_| next(&mut state)).collect()
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
