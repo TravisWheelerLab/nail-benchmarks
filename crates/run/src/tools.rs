@@ -1,283 +1,162 @@
-use std::collections::BTreeMap;
+//! What each search tool has to be told to do.
+//!
+//! Nothing here runs a process or touches the filesystem, apart from HMMER,
+//! which has to read its query set to know how many ways to split it. Tools
+//! describe work; [`crate::measure`] and [`crate::batch`] carry it out.
+
 use std::path::{Path, PathBuf};
 
 use anyhow::{bail, Context};
 
 use crate::config::Run;
-use crate::exec::{self, Job, Numa, Timing};
+use crate::exec::Cmd;
+use crate::{Paths, Search};
 use bioio::split::{self, Kind};
 
-/// A query artifact a benchmark can offer.
-///
-/// Tools ask for what they need and fail cleanly when a benchmark does not
-/// provide it.
-#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Debug)]
-pub enum Asset {
-    /// HMMER3 profiles.
-    Hmm,
-    /// Stockholm alignments.
-    Sto,
-    /// Unaligned query sequences.
-    Fasta,
-    /// Directory of per-family aligned fasta.
-    Afa,
+/// The tools a benchmark can invoke.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum Tool {
+    Nail,
+    Hmmer,
+    Mmseqs,
+    Blast,
+    Last,
+    Diamond,
 }
 
-impl Asset {
-    fn describe(&self) -> &'static str {
+/// A database or index built once and reused by every search that needs it.
+pub struct Setup {
+    /// The file whose existence proves this step already ran.
+    pub marker: PathBuf,
+    /// Directories to create before the commands run.
+    pub dirs: Vec<PathBuf>,
+    pub cmds: Vec<Cmd>,
+    /// Named in the error when a command fails.
+    pub what: String,
+}
+
+/// How the commands that make up a measurement are run.
+pub enum Shape {
+    One(Cmd),
+    /// All at once, timings summed. HMMER scales poorly past a few threads, so
+    /// its query set is split.
+    Together(Vec<Cmd>),
+    /// In turn, timings summed. psiblast takes one alignment at a time.
+    Each(Vec<Cmd>),
+}
+
+/// Bookkeeping once the measured commands have finished.
+pub enum After {
+    /// Join split outputs into the one table the analysis expects.
+    Concat { parts: Vec<PathBuf>, into: PathBuf },
+    /// Move a file the tool wrote where it wanted it. Missing sources are
+    /// ignored, since a tool may not produce one on every run.
+    Move { from: PathBuf, to: PathBuf },
+    /// A command that is not part of the measurement.
+    Run { cmd: Cmd, what: String },
+    Remove(PathBuf),
+}
+
+/// Everything one (run, search) pair does.
+pub struct Work {
+    /// Directories to create before the search runs, for tools that will not
+    /// make their own.
+    pub dirs: Vec<PathBuf>,
+    pub search: Shape,
+    pub after: Vec<After>,
+}
+
+impl Tool {
+    pub fn parse(name: &str) -> anyhow::Result<Tool> {
+        Ok(match name {
+            "nail" => Tool::Nail,
+            "hmmer" => Tool::Hmmer,
+            "mmseqs" => Tool::Mmseqs,
+            "blast" => Tool::Blast,
+            "last" => Tool::Last,
+            "diamond" => Tool::Diamond,
+            other => bail!(
+                "unknown tool {other:?}; known tools: nail, hmmer, mmseqs, blast, last, diamond"
+            ),
+        })
+    }
+
+    pub fn name(self) -> &'static str {
         match self {
-            Asset::Hmm => "an hmm profile file",
-            Asset::Sto => "a stockholm alignment file",
-            Asset::Fasta => "a query fasta file",
-            Asset::Afa => "a directory of aligned fasta",
+            Tool::Nail => "nail",
+            Tool::Hmmer => "hmmer",
+            Tool::Mmseqs => "mmseqs",
+            Tool::Blast => "blast",
+            Tool::Last => "last",
+            Tool::Diamond => "diamond",
+        }
+    }
+
+    /// Whether this tool wants a working directory of its own, emptied before
+    /// each search.
+    pub fn uses_scratch(self) -> bool {
+        matches!(self, Tool::Nail | Tool::Hmmer | Tool::Mmseqs)
+    }
+
+    /// Databases this tool needs before it can search. Nail and HMMER read
+    /// their inputs directly and need none.
+    pub fn setup(self, search: &Search, paths: &Paths) -> anyhow::Result<Vec<Setup>> {
+        match self {
+            Tool::Nail | Tool::Hmmer => Ok(Vec::new()),
+            Tool::Mmseqs => mmseqs_setup(search, paths),
+            Tool::Blast => Ok(vec![makedb(
+                paths.tool("makeblastdb")?,
+                blast_db(search, paths),
+                "pdb",
+                |bin, db| {
+                    Cmd::new(bin)
+                        .arg("-in")
+                        .path(&search.target)
+                        .arg("-dbtype")
+                        .arg("prot")
+                        .arg("-out")
+                        .path(db)
+                },
+                "makeblastdb",
+            )]),
+            Tool::Last => Ok(vec![makedb(
+                paths.tool("lastdb")?,
+                last_db(search, paths),
+                "prj",
+                |bin, db| Cmd::new(bin).arg("-p").path(db).path(&search.target),
+                "lastdb",
+            )]),
+            Tool::Diamond => Ok(vec![makedb(
+                paths.tool("diamond")?,
+                diamond_db(search, paths),
+                "dmnd",
+                |bin, db| {
+                    Cmd::new(bin)
+                        .arg("makedb")
+                        .arg("--in")
+                        .path(&search.target)
+                        .arg("--db")
+                        .path(db)
+                },
+                "diamond makedb",
+            )]),
+        }
+    }
+
+    /// The commands one run of one search consists of.
+    pub fn work(self, run: &Run, search: &Search, paths: &Paths) -> anyhow::Result<Work> {
+        match self {
+            Tool::Nail => nail(run, search, paths),
+            Tool::Hmmer => hmmer(run, search, paths),
+            Tool::Mmseqs => mmseqs(run, search, paths),
+            Tool::Blast => blast(run, search, paths),
+            Tool::Last => last(run, search, paths),
+            Tool::Diamond => diamond(run, search, paths),
         }
     }
 }
 
-/// One unit of work: a set of query artifacts searched against one target.
-///
-/// The benchmark builds this list, so the runner never has to guess at a
-/// directory layout.
-#[derive(Clone, Debug)]
-pub struct Search {
-    /// Distinguishes outputs when a benchmark has more than one search;
-    /// empty when there is only one.
-    pub label: String,
-    pub target: PathBuf,
-    assets: BTreeMap<Asset, PathBuf>,
-}
-
-impl Search {
-    pub fn new(label: impl Into<String>, target: impl Into<PathBuf>) -> Self {
-        Search {
-            label: label.into(),
-            target: target.into(),
-            assets: BTreeMap::new(),
-        }
-    }
-
-    pub fn with(mut self, asset: Asset, path: impl Into<PathBuf>) -> Self {
-        self.assets.insert(asset, path.into());
-        self
-    }
-
-    pub fn asset(&self, asset: Asset) -> anyhow::Result<&Path> {
-        self.assets
-            .get(&asset)
-            .map(PathBuf::as_path)
-            .with_context(|| {
-                format!(
-                    "this benchmark provides no {}, which the requested tool and query mode need",
-                    asset.describe()
-                )
-            })
-    }
-
-    /// How this search is identified in the runs table: the target's file name,
-    /// which says more than a bare shard number.
-    pub fn display(&self) -> String {
-        self.target
-            .file_name()
-            .map(|n| n.to_string_lossy().to_string())
-            .unwrap_or_else(|| self.target.display().to_string())
-    }
-
-    /// The token used to distinguish this search's output files. It is the
-    /// stem of what `display` reports, so a row in the runs table and the file
-    /// it refers to always agree.
-    pub fn key(&self) -> String {
-        if self.label.is_empty() {
-            return String::new();
-        }
-        self.target
-            .file_stem()
-            .map(|n| n.to_string_lossy().to_string())
-            .unwrap_or_else(|| self.label.clone())
-    }
-}
-
-/// Resolved paths into tools/bin.
-pub struct Bin {
-    root: PathBuf,
-}
-
-impl Bin {
-    /// Canonicalized so the `cmd` column of the runs table shows a path you can
-    /// paste into a shell.
-    pub fn new(root: impl Into<PathBuf>) -> Self {
-        let root = root.into();
-        let root = root.canonicalize().unwrap_or(root);
-        Bin { root }
-    }
-
-    pub fn get(&self, name: &str) -> anyhow::Result<PathBuf> {
-        let path = self.root.join(name);
-        if !path.exists() {
-            bail!(
-                "missing tool binary {}; run `make {}` from the repo root",
-                path.display(),
-                suggest_make_target(name)
-            );
-        }
-        Ok(path)
-    }
-}
-
-fn suggest_make_target(bin: &str) -> &'static str {
-    match bin {
-        "nail" => "nail",
-        "hmmsearch" | "phmmer" | "hmmbuild" | "hmmemit" | "esl-seqstat" | "create-profmark" => {
-            "hmmer"
-        }
-        "mmseqs" => "mmseqs",
-        "blastp" | "psiblast" | "makeblastdb" => "blast",
-        "lastal" | "lastdb" => "last",
-        "diamond" => "diamond",
-        _ => "setup",
-    }
-}
-
-pub struct Ctx {
-    pub bin: Bin,
-    pub tmp: PathBuf,
-    pub results: PathBuf,
-    /// Where the runs table is written. Usually inside `results`, but a
-    /// benchmark may keep it above so clearing results does not remove it.
-    pub runs_table: PathBuf,
-    pub numa: Option<Numa>,
-}
-
-impl Ctx {
-    fn numa(&self) -> Option<&Numa> {
-        self.numa.as_ref()
-    }
-
-    pub fn log_dir(&self) -> PathBuf {
-        self.results.join(".logs")
-    }
-
-    /// Output path for one run of one search.
-    pub fn out(&self, run: &Run, search: &Search, ext: &str) -> PathBuf {
-        let key = search.key();
-        if key.is_empty() {
-            self.results.join(format!("{}.{ext}", run.name))
-        } else {
-            self.results.join(format!("{}.{key}.{ext}", run.name))
-        }
-    }
-
-    pub fn log_path(&self, run: &Run, search: &Search) -> PathBuf {
-        let key = search.key();
-        let stem = if key.is_empty() {
-            run.name.clone()
-        } else {
-            format!("{}.{key}", run.name)
-        };
-        self.log_dir().join(format!("{stem}.err"))
-    }
-
-    /// A job for one benchmark run, with stderr captured to that run's log.
-    fn job(&self, program: PathBuf, run: &Run, search: &Search) -> Job {
-        Job::new(program).stderr_to(self.log_path(run, search))
-    }
-
-    /// A job for a setup step, attributed to the tool rather than to any run.
-    fn prep_job(&self, program: PathBuf, tool: &str) -> Job {
-        Job::new(program).stderr_to(self.log_dir().join(format!("prep-{tool}.err")))
-    }
-
-    /// A scratch key unique to one (run, search) pair.
-    ///
-    /// Keying on the run alone is only safe while searches are executed one at
-    /// a time. Once several are in flight they would share — and clear — the
-    /// same working directory underneath each other.
-    fn key(&self, run: &Run, search: &Search) -> String {
-        if search.label.is_empty() {
-            run.name.clone()
-        } else {
-            format!("{}.{}", run.name, search.label)
-        }
-    }
-
-    /// Scratch directory scoped to a name, cleared before use.
-    fn scratch(&self, name: &str) -> anyhow::Result<PathBuf> {
-        let dir = self.tmp.join(name);
-        if dir.exists() {
-            std::fs::remove_dir_all(&dir)?;
-        }
-        std::fs::create_dir_all(&dir)?;
-        Ok(dir)
-    }
-
-    fn scratch_keep(&self, name: &str) -> anyhow::Result<PathBuf> {
-        let dir = self.tmp.join(name);
-        std::fs::create_dir_all(&dir)?;
-        Ok(dir)
-    }
-}
-
-/// Serialize work keyed on the path it produces.
-///
-/// Every `prep` asks whether a database exists and builds it if not. Paths are
-/// derived from the inputs, so two searches sharing an input derive the same
-/// path — the same query alignment against a forward and a reversed target,
-/// say. Run concurrently, both see it missing and both build into the same
-/// place, leaving a database that is neither. The check and the build have to
-/// happen under one lock.
-fn path_lock(path: &Path) -> std::sync::Arc<std::sync::Mutex<()>> {
-    use std::collections::HashMap;
-    use std::sync::{Arc, Mutex, OnceLock};
-
-    static LOCKS: OnceLock<Mutex<HashMap<PathBuf, Arc<Mutex<()>>>>> = OnceLock::new();
-
-    let locks = LOCKS.get_or_init(|| Mutex::new(HashMap::new()));
-    let mut locks = locks.lock().expect("path lock registry poisoned");
-    Arc::clone(locks.entry(path.to_path_buf()).or_default())
-}
-
-/// Run `build` unless `exists` already reports the artifact at `key` is there,
-/// with the check and the build held under one lock.
-fn build_once(key: &Path, exists: impl Fn() -> bool, build: impl FnOnce() -> anyhow::Result<()>) -> anyhow::Result<()> {
-    let lock = path_lock(key);
-    let _guard = lock.lock().expect("path lock poisoned");
-
-    if exists() {
-        return Ok(());
-    }
-    build()
-}
-
-/// What a tool did for one run: how long it took and the command line used.
-pub struct Outcome {
-    pub timing: Timing,
-    pub cmd: String,
-}
-
-/// Tools are stateless. Everything they need comes from `Ctx`, `Search` and
-/// `Run`, and their scratch is keyed per (run, search), so they are safe to
-/// invoke from several threads at once.
-pub trait Tool: Send + Sync {
-    /// Build databases or indices this tool needs for a given search. Called
-    /// once per (tool, search); implementations skip work that already exists
-    /// so a shared query set is not rebuilt for every shard.
-    fn prep(&self, ctx: &Ctx, search: &Search) -> anyhow::Result<()>;
-
-    fn run(&self, ctx: &Ctx, search: &Search, run: &Run) -> anyhow::Result<Outcome>;
-}
-
-pub fn get(name: &str) -> anyhow::Result<Box<dyn Tool + Send + Sync>> {
-    Ok(match name {
-        "nail" => Box::new(Nail),
-        "hmmer" => Box::new(Hmmer),
-        "mmseqs" => Box::new(Mmseqs),
-        "blast" => Box::new(Blast),
-        "last" => Box::new(Last),
-        "diamond" => Box::new(Diamond),
-        other => {
-            bail!("unknown tool {other:?}; known tools: nail, hmmer, mmseqs, blast, last, diamond")
-        }
-    })
-}
+// ------------------------------------------------------------------- shared
 
 /// Which side of a tool to invoke. Every tool here has a profile mode and a
 /// sequence mode; each maps `prf`/`seq` onto its own inputs and binaries.
@@ -315,7 +194,15 @@ fn sequence_only(run: &Run, tool: &str) -> anyhow::Result<()> {
     Ok(())
 }
 
-/// A stable scratch name for a path, so databases derived from a shared query
+/// A query artifact the run needs, or a message naming what the benchmark did
+/// not provide.
+fn need<'a>(path: &'a Option<PathBuf>, what: &str) -> anyhow::Result<&'a Path> {
+    path.as_deref().with_context(|| {
+        format!("this benchmark provides no {what}, which the requested tool and query mode need")
+    })
+}
+
+/// A stable directory name for a path, so databases derived from a shared query
 /// set are built once rather than once per shard.
 fn slug(path: &Path) -> String {
     path.to_string_lossy()
@@ -326,353 +213,320 @@ fn slug(path: &Path) -> String {
         .to_string()
 }
 
-// ---------------------------------------------------------------- nail
-
-struct Nail;
-
-impl Tool for Nail {
-    fn prep(&self, _ctx: &Ctx, _search: &Search) -> anyhow::Result<()> {
-        Ok(())
+/// The single-command shape the three sequence-only tools share.
+fn makedb(
+    bin: PathBuf,
+    db: PathBuf,
+    marker_ext: &str,
+    build: impl FnOnce(PathBuf, &Path) -> Cmd,
+    what: &str,
+) -> Setup {
+    Setup {
+        marker: db.with_extension(marker_ext),
+        dirs: db.parent().map(Path::to_path_buf).into_iter().collect(),
+        cmds: vec![build(bin, &db)],
+        what: what.to_string(),
     }
+}
 
-    fn run(&self, ctx: &Ctx, search: &Search, run: &Run) -> anyhow::Result<Outcome> {
-        let query = match query_kind(run)? {
-            Query::Profile => search.asset(Asset::Hmm)?,
-            Query::Sequence => search.asset(Asset::Fasta)?,
-        };
+// --------------------------------------------------------------------- nail
 
-        let tmp = ctx.scratch(&format!("nail/{}", ctx.key(run, search)))?;
-        let mmseqs = ctx.bin.get("mmseqs")?;
+fn nail(run: &Run, search: &Search, paths: &Paths) -> anyhow::Result<Work> {
+    let query = match query_kind(run)? {
+        Query::Profile => need(&search.hmm, "an hmm profile file")?,
+        Query::Sequence => need(&search.fasta, "a query fasta file")?,
+    };
 
-        let job = ctx
-            .job(ctx.bin.get("nail")?, run, search)
-            .arg("search")
-            .arg("--mmseqs-path")
-            .arg(mmseqs.display().to_string())
-            .arg("-t")
-            .arg(run.threads.to_string())
-            .arg("--tmp-dir")
-            .arg(tmp.display().to_string())
-            .arg("--tbl-out")
-            .arg(ctx.out(run, search, "tbl").display().to_string())
-            .args(run.args.clone())
-            .arg(query.display().to_string())
-            .arg(search.target.display().to_string());
+    let scratch = paths.scratch(Tool::Nail, run, search);
 
-        let cmd = job.display(ctx.numa());
-        let timing = exec::run(&job, ctx.numa())?;
+    let cmd = Cmd::new(paths.tool("nail")?)
+        .arg("search")
+        .arg("--mmseqs-path")
+        .path(paths.tool("mmseqs")?)
+        .arg("-t")
+        .arg(run.threads.to_string())
+        .arg("--tmp-dir")
+        .path(&scratch)
+        .arg("--tbl-out")
+        .path(paths.out(run, search, "tbl"))
+        .args(run.args.clone())
+        .path(query)
+        .path(&search.target)
+        .stderr_to(paths.log(run, search));
 
+    Ok(Work {
+        dirs: Vec::new(),
+        search: Shape::One(cmd),
         // nail drops seeds in its tmp dir; keep them beside the other outputs
-        let seeds = tmp.join("seeds.tsv");
-        if seeds.exists() {
-            std::fs::rename(&seeds, ctx.out(run, search, "seeds"))?;
-        }
-
-        Ok(Outcome { timing, cmd })
-    }
+        after: vec![After::Move {
+            from: scratch.join("seeds.tsv"),
+            to: paths.out(run, search, "seeds"),
+        }],
+    })
 }
 
-// --------------------------------------------------------------- hmmer
+// -------------------------------------------------------------------- hmmer
 
-struct Hmmer;
+fn hmmer(run: &Run, search: &Search, paths: &Paths) -> anyhow::Result<Work> {
+    let (program, query, split_kind) = match query_kind(run)? {
+        Query::Profile => ("hmmsearch", need(&search.hmm, "an hmm profile file")?, Kind::Hmm),
+        Query::Sequence => ("phmmer", need(&search.fasta, "a query fasta file")?, Kind::Fasta),
+    };
 
-impl Tool for Hmmer {
-    fn prep(&self, _ctx: &Ctx, _search: &Search) -> anyhow::Result<()> {
-        Ok(())
+    let program = paths.tool(program)?;
+    let tbl = paths.out(run, search, "tbl");
+    // per-domain output as well as per-sequence, since analysis needs domain
+    // scores
+    let dom = paths.out(run, search, "domtbl");
+    let log = paths.log(run, search);
+
+    let invoke = |cpus: usize, query: &Path, tbl: &Path, dom: &Path| {
+        Cmd::new(&program)
+            .arg("--cpu")
+            .arg(cpus.to_string())
+            .args(run.args.clone())
+            .arg("-o")
+            .arg("/dev/null")
+            .arg("--tblout")
+            .path(tbl)
+            .arg("--domtblout")
+            .path(dom)
+            .path(query)
+            .path(&search.target)
+            .stderr_to(&log)
+    };
+
+    // hmmsearch/phmmer scale poorly past a few threads, so the query set is
+    // split and run as several concurrent processes when threads_per is set
+    let splits = match run.threads_per {
+        Some(per) if per < run.threads => run.threads / per,
+        _ => 1,
+    };
+
+    if splits <= 1 {
+        return Ok(Work {
+            dirs: Vec::new(),
+            search: Shape::One(invoke(run.threads, query, &tbl, &dom)),
+            after: Vec::new(),
+        });
     }
 
-    fn run(&self, ctx: &Ctx, search: &Search, run: &Run) -> anyhow::Result<Outcome> {
-        let (program, query, split_kind) = match query_kind(run)? {
-            Query::Profile => ("hmmsearch", search.asset(Asset::Hmm)?, Kind::Hmm),
-            Query::Sequence => ("phmmer", search.asset(Asset::Fasta)?, Kind::Fasta),
-        };
+    // the one place a tool reads anything: how many parts a query set actually
+    // yields is not known until it has been indexed, and the count decides how
+    // many processes to spawn
+    let scratch = paths.scratch(Tool::Hmmer, run, search);
+    let parts = split::write_splits(query, split_kind, splits, scratch.join("query"))?;
+    let per = run.threads_per.expect("splits > 1 implies threads_per");
 
-        let program = ctx.bin.get(program)?;
-        let tbl = ctx.out(run, search, "tbl");
-        // per-domain output as well as per-sequence, since analysis needs
-        // domain scores
-        let dom = ctx.out(run, search, "domtbl");
+    let mut cmds = Vec::with_capacity(parts.len());
+    let mut part_tbls = Vec::with_capacity(parts.len());
+    let mut part_doms = Vec::with_capacity(parts.len());
 
-        // hmmsearch/phmmer scale poorly past a few threads, so the query set is
-        // split and run as several concurrent processes when threads_per is set
-        let splits = match run.threads_per {
-            Some(per) if per < run.threads => run.threads / per,
-            _ => 1,
-        };
-
-        if splits <= 1 {
-            let job = ctx
-                .job(program.clone(), run, search)
-                .arg("--cpu")
-                .arg(run.threads.to_string())
-                .args(run.args.clone())
-                .arg("-o")
-                .arg("/dev/null")
-                .arg("--tblout")
-                .arg(tbl.display().to_string())
-                .arg("--domtblout")
-                .arg(dom.display().to_string())
-                .arg(query.display().to_string())
-                .arg(search.target.display().to_string());
-
-            let cmd = job.display(ctx.numa());
-            let timing = exec::run(&job, ctx.numa())?;
-            return Ok(Outcome { timing, cmd });
-        }
-
-        let tmp = ctx.scratch(&format!("hmmer/{}", ctx.key(run, search)))?;
-        let parts = split::write_splits(query, split_kind, splits, tmp.join("query"))?;
-        let per = run.threads_per.expect("splits > 1 implies threads_per");
-
-        let mut jobs = Vec::with_capacity(parts.len());
-        let mut part_tbls = Vec::with_capacity(parts.len());
-        let mut part_doms = Vec::with_capacity(parts.len());
-
-        for part in &parts {
-            let part_tbl = part.with_extension("tbl");
-            let part_dom = part.with_extension("domtbl");
-            jobs.push(
-                ctx.job(program.clone(), run, search)
-                    .arg("--cpu")
-                    .arg(per.to_string())
-                    .args(run.args.clone())
-                    .arg("-o")
-                    .arg("/dev/null")
-                    .arg("--tblout")
-                    .arg(part_tbl.display().to_string())
-                    .arg("--domtblout")
-                    .arg(part_dom.display().to_string())
-                    .arg(part.display().to_string())
-                    .arg(search.target.display().to_string()),
-            );
-            part_tbls.push(part_tbl);
-            part_doms.push(part_dom);
-        }
-
-        let cmd = format!("[{} x] {}", jobs.len(), jobs[0].display(ctx.numa()));
-        let timing = exec::run_concurrent(&jobs, ctx.numa())?;
-
-        concat(&part_tbls, &tbl)?;
-        concat(&part_doms, &dom)?;
-
-        Ok(Outcome { timing, cmd })
+    for part in &parts {
+        let part_tbl = part.with_extension("tbl");
+        let part_dom = part.with_extension("domtbl");
+        cmds.push(invoke(per, part, &part_tbl, &part_dom));
+        part_tbls.push(part_tbl);
+        part_doms.push(part_dom);
     }
+
+    Ok(Work {
+        dirs: Vec::new(),
+        search: Shape::Together(cmds),
+        after: vec![
+            After::Concat { parts: part_tbls, into: tbl },
+            After::Concat { parts: part_doms, into: dom },
+        ],
+    })
 }
 
-// -------------------------------------------------------------- mmseqs
+// ------------------------------------------------------------------- mmseqs
 
-struct Mmseqs;
-
-impl Mmseqs {
-    fn target_db(ctx: &Ctx, search: &Search) -> PathBuf {
-        ctx.tmp
-            .join(format!("mmseqs/target-{}/db", slug(&search.target)))
-    }
-
-    fn query_db(ctx: &Ctx, search: &Search, query: Query) -> anyhow::Result<PathBuf> {
-        let (kind, source) = match query {
-            Query::Profile => ("prf", search.asset(Asset::Sto)?),
-            Query::Sequence => ("seq", search.asset(Asset::Fasta)?),
-        };
-        Ok(ctx
-            .tmp
-            .join(format!("mmseqs/query-{kind}-{}/db", slug(source))))
-    }
+fn mmseqs_target_db(search: &Search, paths: &Paths) -> PathBuf {
+    paths
+        .tmp
+        .join(format!("mmseqs/target-{}/db", slug(&search.target)))
 }
 
-impl Tool for Mmseqs {
-    fn prep(&self, ctx: &Ctx, search: &Search) -> anyhow::Result<()> {
-        let mmseqs = ctx.bin.get("mmseqs")?;
+fn mmseqs_query_db(search: &Search, paths: &Paths, query: Query) -> anyhow::Result<PathBuf> {
+    let (kind, source) = match query {
+        Query::Profile => ("prf", need(&search.sto, "a stockholm alignment file")?),
+        Query::Sequence => ("seq", need(&search.fasta, "a query fasta file")?),
+    };
+    Ok(paths.tmp.join(format!("mmseqs/query-{kind}-{}/db", slug(source))))
+}
 
-        // target db is per-target, so it is rebuilt for every shard
-        let tdb = Self::target_db(ctx, search);
-        build_once(&tdb, || tdb.exists(), || {
-            std::fs::create_dir_all(tdb.parent().expect("db path has a parent"))?;
-            let job = ctx
-                .prep_job(mmseqs.clone(), "mmseqs")
+fn mmseqs_setup(search: &Search, paths: &Paths) -> anyhow::Result<Vec<Setup>> {
+    let mmseqs = paths.tool("mmseqs")?;
+    let mut out = Vec::new();
+
+    // one target db per shard; query dbs are keyed by source path, so a query
+    // set shared across shards is converted once rather than once per shard
+    let tdb = mmseqs_target_db(search, paths);
+    out.push(Setup {
+        dirs: tdb.parent().map(Path::to_path_buf).into_iter().collect(),
+        cmds: vec![Cmd::new(&mmseqs)
+            .arg("createdb")
+            .path(&search.target)
+            .path(&tdb)],
+        marker: tdb,
+        what: "mmseqs createdb (target)".to_string(),
+    });
+
+    if search.fasta.is_some() {
+        let qdb = mmseqs_query_db(search, paths, Query::Sequence)?;
+        out.push(Setup {
+            dirs: qdb.parent().map(Path::to_path_buf).into_iter().collect(),
+            cmds: vec![Cmd::new(&mmseqs)
                 .arg("createdb")
-                .arg(search.target.display().to_string())
-                .arg(tdb.display().to_string());
-            check(&job, ctx.numa(), "mmseqs createdb (target)")
-        })?;
+                .path(need(&search.fasta, "a query fasta file")?)
+                .path(&qdb)],
+            marker: qdb,
+            what: "mmseqs createdb (query)".to_string(),
+        });
+    }
 
-        // query dbs are keyed by source path, so a query set shared across
-        // shards is converted once rather than once per shard
-        if let Ok(fasta) = search.asset(Asset::Fasta) {
-            let qdb = Self::query_db(ctx, search, Query::Sequence)?;
-            build_once(&qdb, || qdb.exists(), || {
-                std::fs::create_dir_all(qdb.parent().expect("db path has a parent"))?;
-                let job = ctx
-                    .prep_job(mmseqs.clone(), "mmseqs")
-                    .arg("createdb")
-                    .arg(fasta.display().to_string())
-                    .arg(qdb.display().to_string());
-                check(&job, ctx.numa(), "mmseqs createdb (query)")
-            })?;
-        }
+    if let Some(sto) = &search.sto {
+        let qdb = mmseqs_query_db(search, paths, Query::Profile)?;
+        let dir = qdb.parent().expect("db path has a parent").to_path_buf();
+        let msa_db = dir.join("msaDB");
 
-        if let Ok(sto) = search.asset(Asset::Sto) {
-            let qdb = Self::query_db(ctx, search, Query::Profile)?;
-            build_once(&qdb, || qdb.exists(), || {
-                let dir = ctx.scratch_keep(&format!("mmseqs/query-prf-{}", slug(sto)))?;
-                let msa_db = dir.join("msaDB");
-
-                let job = ctx
-                    .prep_job(mmseqs.clone(), "mmseqs")
+        out.push(Setup {
+            cmds: vec![
+                Cmd::new(&mmseqs)
                     .arg("convertmsa")
-                    .arg(sto.display().to_string())
-                    .arg(msa_db.display().to_string())
+                    .path(sto)
+                    .path(&msa_db)
                     .arg("--identifier-field")
-                    .arg("0");
-                check(&job, ctx.numa(), "mmseqs convertmsa")?;
-
-                let job = ctx
-                    .prep_job(mmseqs.clone(), "mmseqs")
+                    .arg("0"),
+                Cmd::new(&mmseqs)
                     .arg("msa2profile")
-                    .arg(msa_db.display().to_string())
-                    .arg(qdb.display().to_string())
+                    .path(&msa_db)
+                    .path(&qdb)
                     .arg("--match-mode")
-                    .arg("1");
-                check(&job, ctx.numa(), "mmseqs msa2profile")
-            })?;
-        }
-
-        Ok(())
+                    .arg("1"),
+            ],
+            dirs: vec![dir],
+            marker: qdb,
+            what: "mmseqs msa2profile".to_string(),
+        });
     }
 
-    fn run(&self, ctx: &Ctx, search: &Search, run: &Run) -> anyhow::Result<Outcome> {
-        let mmseqs = ctx.bin.get("mmseqs")?;
-        let qdb = Self::query_db(ctx, search, query_kind(run)?)?;
-        let tdb = Self::target_db(ctx, search);
-
-        // mmseqs aborts rather than overwrite an existing alignment db, so both
-        // it and the working directory live in scratch that is cleared per
-        // (run, search).
-        let key = ctx.key(run, search);
-        let adb = ctx.scratch(&format!("mmseqs/align/{key}"))?.join("db");
-        let work = ctx.scratch(&format!("mmseqs/work/{key}"))?;
-
-        let job = ctx
-            .job(mmseqs.clone(), run, search)
-            // mmseqs reports failures on stdout, not stderr, so it shares the
-            // run log; the log is discarded when the run succeeds
-            .stdout_append(ctx.log_path(run, search))
-            .arg("search")
-            .arg(qdb.display().to_string())
-            .arg(tdb.display().to_string())
-            .arg(adb.display().to_string())
-            .arg(work.display().to_string())
-            .arg("--threads")
-            .arg(run.threads.to_string())
-            .args(run.args.clone());
-
-        let cmd = job.display(ctx.numa());
-        let timing = exec::run(&job, ctx.numa())?;
-
-        // convertalis is bookkeeping, not part of the measured search
-        let job = ctx
-            .job(mmseqs, run, search)
-            .stdout_append(ctx.log_path(run, search))
-            .arg("convertalis")
-            .arg(qdb.display().to_string())
-            .arg(tdb.display().to_string())
-            .arg(adb.display().to_string())
-            .arg(ctx.out(run, search, "tbl").display().to_string())
-            .arg("--format-mode")
-            .arg("0");
-        check(&job, ctx.numa(), "mmseqs convertalis")?;
-
-        std::fs::remove_dir_all(&work).ok();
-
-        Ok(Outcome { timing, cmd })
-    }
+    Ok(out)
 }
 
-// --------------------------------------------------------------- blast
+fn mmseqs(run: &Run, search: &Search, paths: &Paths) -> anyhow::Result<Work> {
+    let mmseqs = paths.tool("mmseqs")?;
+    let qdb = mmseqs_query_db(search, paths, query_kind(run)?)?;
+    let tdb = mmseqs_target_db(search, paths);
+    let log = paths.log(run, search);
 
-struct Blast;
+    // mmseqs aborts rather than overwrite an existing alignment db, so both it
+    // and the working directory live in scratch, which is emptied per search
+    let scratch = paths.scratch(Tool::Mmseqs, run, search);
+    let adb = scratch.join("align/db");
+    let work = scratch.join("work");
 
-impl Blast {
-    fn db(ctx: &Ctx, search: &Search) -> PathBuf {
-        ctx.tmp
-            .join(format!("blast/{}/target_db", slug(&search.target)))
-    }
+    let cmd = Cmd::new(&mmseqs)
+        // mmseqs reports failures on stdout, not stderr, so it shares the run
+        // log; the log is discarded when the run succeeds
+        .stdout_append(&log)
+        .arg("search")
+        .path(&qdb)
+        .path(&tdb)
+        .path(&adb)
+        .path(&work)
+        .arg("--threads")
+        .arg(run.threads.to_string())
+        .args(run.args.clone())
+        .stderr_to(&log);
+
+    let convert = Cmd::new(&mmseqs)
+        .stdout_append(&log)
+        .arg("convertalis")
+        .path(&qdb)
+        .path(&tdb)
+        .path(&adb)
+        .path(paths.out(run, search, "tbl"))
+        .arg("--format-mode")
+        .arg("0")
+        .stderr_to(&log);
+
+    Ok(Work {
+        // mmseqs writes its alignment db and its working files into
+        // directories it expects to find already there
+        dirs: vec![
+            adb.parent().expect("db path has a parent").to_path_buf(),
+            work.clone(),
+        ],
+        search: Shape::One(cmd),
+        after: vec![
+            After::Run { cmd: convert, what: "mmseqs convertalis".to_string() },
+            After::Remove(work),
+        ],
+    })
 }
 
-impl Tool for Blast {
-    fn prep(&self, ctx: &Ctx, search: &Search) -> anyhow::Result<()> {
-        let db = Self::db(ctx, search);
-        build_once(&db, || db.with_extension("pdb").exists(), || {
-            std::fs::create_dir_all(db.parent().expect("db path has a parent"))?;
+// -------------------------------------------------------------------- blast
 
-            let job = ctx
-                .prep_job(ctx.bin.get("makeblastdb")?, "blast")
-                .arg("-in")
-                .arg(search.target.display().to_string())
-                .arg("-dbtype")
-                .arg("prot")
-                .arg("-out")
-                .arg(db.display().to_string());
-            check(&job, ctx.numa(), "makeblastdb")
-        })
-    }
+fn blast_db(search: &Search, paths: &Paths) -> PathBuf {
+    paths
+        .tmp
+        .join(format!("blast/{}/target_db", slug(&search.target)))
+}
 
-    fn run(&self, ctx: &Ctx, search: &Search, run: &Run) -> anyhow::Result<Outcome> {
-        let tbl = ctx.out(run, search, "tbl");
+fn blast(run: &Run, search: &Search, paths: &Paths) -> anyhow::Result<Work> {
+    let tbl = paths.out(run, search, "tbl");
+    let log = paths.log(run, search);
+    let db = blast_db(search, paths);
 
-        match query_kind(run)? {
-            Query::Sequence => {
-                let job = ctx
-                    .job(ctx.bin.get("blastp")?, run, search)
+    match query_kind(run)? {
+        Query::Sequence => Ok(Work {
+            dirs: Vec::new(),
+            search: Shape::One(
+                Cmd::new(paths.tool("blastp")?)
                     .arg("-query")
-                    .arg(search.asset(Asset::Fasta)?.display().to_string())
+                    .path(need(&search.fasta, "a query fasta file")?)
                     .arg("-db")
-                    .arg(Self::db(ctx, search).display().to_string())
+                    .path(&db)
                     .arg("-out")
-                    .arg(tbl.display().to_string())
+                    .path(&tbl)
                     .arg("-outfmt")
                     .arg("6")
                     .arg("-num_threads")
                     .arg(run.threads.to_string())
-                    .args(run.args.clone());
+                    .args(run.args.clone())
+                    .stderr_to(&log),
+            ),
+            after: Vec::new(),
+        }),
 
-                let cmd = job.display(ctx.numa());
-                let timing = exec::run(&job, ctx.numa())?;
-                Ok(Outcome { timing, cmd })
+        // psiblast takes one alignment at a time, so a profile run is one
+        // invocation per family with output collected into a single table
+        Query::Profile => {
+            let psiblast = paths.tool("psiblast")?;
+            let afa_dir = need(&search.afa, "a directory of aligned fasta")?;
+
+            let mut msas: Vec<PathBuf> = std::fs::read_dir(afa_dir)
+                .with_context(|| format!("failed to read {}", afa_dir.display()))?
+                .filter_map(|e| e.ok().map(|e| e.path()))
+                .filter(|p| p.extension().is_some_and(|e| e == "afa"))
+                .collect();
+            msas.sort();
+
+            if msas.is_empty() {
+                bail!("no .afa files in {}", afa_dir.display());
             }
-            // psiblast takes one MSA at a time, so a profile run is one
-            // invocation per family with output appended to a single table
-            Query::Profile => {
-                let psiblast = ctx.bin.get("psiblast")?;
-                let afa_dir = search.asset(Asset::Afa)?;
 
-                let mut msas: Vec<PathBuf> = std::fs::read_dir(afa_dir)
-                    .with_context(|| format!("failed to read {}", afa_dir.display()))?
-                    .filter_map(|e| e.ok().map(|e| e.path()))
-                    .filter(|p| p.extension().is_some_and(|e| e == "afa"))
-                    .collect();
-                msas.sort();
-
-                if msas.is_empty() {
-                    bail!("no .afa files in {}", afa_dir.display());
-                }
-
-                std::fs::remove_file(&tbl).ok();
-                if let Some(dir) = tbl.parent() {
-                    std::fs::create_dir_all(dir)?;
-                }
-
-                let mut parts = Vec::with_capacity(msas.len());
-                let mut first_cmd = None;
-                let start = std::time::Instant::now();
-
-                for msa in &msas {
-                    let job = ctx
-                        .job(psiblast.clone(), run, search)
+            let cmds = msas
+                .iter()
+                .enumerate()
+                .map(|(i, msa)| {
+                    let cmd = Cmd::new(&psiblast)
                         .arg("-in_msa")
-                        .arg(msa.display().to_string())
+                        .path(msa)
                         .arg("-db")
-                        .arg(Self::db(ctx, search).display().to_string())
+                        .path(&db)
                         .arg("-outfmt")
                         .arg("6")
                         .arg("-num_threads")
@@ -682,149 +536,86 @@ impl Tool for Blast {
                         .arg("-num_iterations")
                         .arg("1")
                         .args(run.args.clone())
-                        .stdout_append(&tbl);
+                        .stderr_to(&log);
 
-                    if first_cmd.is_none() {
-                        first_cmd = Some(job.display(ctx.numa()));
+                    // the first invocation truncates whatever an earlier run
+                    // left behind; the rest append to it
+                    if i == 0 {
+                        cmd.stdout_to(&tbl)
+                    } else {
+                        cmd.stdout_append(&tbl)
                     }
-                    parts.push(exec::run(&job, ctx.numa())?);
-                }
+                })
+                .collect();
 
-                let timing = Timing::combine(&parts, start.elapsed().as_secs_f64());
-                let cmd = format!("[{} x] {}", msas.len(), first_cmd.unwrap_or_default());
-                Ok(Outcome { timing, cmd })
-            }
+            Ok(Work {
+                dirs: Vec::new(),
+                search: Shape::Each(cmds),
+                after: Vec::new(),
+            })
         }
     }
 }
 
-// ---------------------------------------------------------------- last
+// --------------------------------------------------------------------- last
 
-struct Last;
-
-impl Last {
-    fn db(ctx: &Ctx, search: &Search) -> PathBuf {
-        ctx.tmp
-            .join(format!("last/{}/target_db", slug(&search.target)))
-    }
+fn last_db(search: &Search, paths: &Paths) -> PathBuf {
+    paths
+        .tmp
+        .join(format!("last/{}/target_db", slug(&search.target)))
 }
 
-impl Tool for Last {
-    fn prep(&self, ctx: &Ctx, search: &Search) -> anyhow::Result<()> {
-        let db = Self::db(ctx, search);
-        build_once(&db, || db.with_extension("prj").exists(), || {
-            std::fs::create_dir_all(db.parent().expect("db path has a parent"))?;
+fn last(run: &Run, search: &Search, paths: &Paths) -> anyhow::Result<Work> {
+    sequence_only(run, "last")?;
 
-            let job = ctx
-                .prep_job(ctx.bin.get("lastdb")?, "last")
-                .arg("-p")
-                .arg(db.display().to_string())
-                .arg(search.target.display().to_string());
-            check(&job, ctx.numa(), "lastdb")
-        })
-    }
+    // lastal writes its table to stdout
+    let cmd = Cmd::new(paths.tool("lastal")?)
+        .path(last_db(search, paths))
+        .path(need(&search.fasta, "a query fasta file")?)
+        .arg("-f")
+        .arg("BlastTab")
+        .arg("-P")
+        .arg(run.threads.to_string())
+        .args(run.args.clone())
+        .stdout_to(paths.out(run, search, "tbl"))
+        .stderr_to(paths.log(run, search));
 
-    fn run(&self, ctx: &Ctx, search: &Search, run: &Run) -> anyhow::Result<Outcome> {
-        sequence_only(run, "last")?;
-
-        // lastal writes its table to stdout
-        let job = ctx
-            .job(ctx.bin.get("lastal")?, run, search)
-            .arg(Self::db(ctx, search).display().to_string())
-            .arg(search.asset(Asset::Fasta)?.display().to_string())
-            .arg("-f")
-            .arg("BlastTab")
-            .arg("-P")
-            .arg(run.threads.to_string())
-            .args(run.args.clone())
-            .stdout_to(ctx.out(run, search, "tbl"));
-
-        let cmd = job.display(ctx.numa());
-        let timing = exec::run(&job, ctx.numa())?;
-        Ok(Outcome { timing, cmd })
-    }
+    Ok(Work {
+        dirs: Vec::new(),
+        search: Shape::One(cmd),
+        after: Vec::new(),
+    })
 }
 
-// ------------------------------------------------------------- diamond
+// ------------------------------------------------------------------ diamond
 
-struct Diamond;
-
-impl Diamond {
-    fn db(ctx: &Ctx, search: &Search) -> PathBuf {
-        ctx.tmp
-            .join(format!("diamond/{}/target_db", slug(&search.target)))
-    }
+fn diamond_db(search: &Search, paths: &Paths) -> PathBuf {
+    paths
+        .tmp
+        .join(format!("diamond/{}/target_db", slug(&search.target)))
 }
 
-impl Tool for Diamond {
-    fn prep(&self, ctx: &Ctx, search: &Search) -> anyhow::Result<()> {
-        let db = Self::db(ctx, search);
-        build_once(&db, || db.with_extension("dmnd").exists(), || {
-            std::fs::create_dir_all(db.parent().expect("db path has a parent"))?;
+fn diamond(run: &Run, search: &Search, paths: &Paths) -> anyhow::Result<Work> {
+    sequence_only(run, "diamond")?;
 
-            let job = ctx
-                .prep_job(ctx.bin.get("diamond")?, "diamond")
-                .arg("makedb")
-                .arg("--in")
-                .arg(search.target.display().to_string())
-                .arg("--db")
-                .arg(db.display().to_string());
-            check(&job, ctx.numa(), "diamond makedb")
-        })
-    }
+    let cmd = Cmd::new(paths.tool("diamond")?)
+        .arg("blastp")
+        .arg("--query")
+        .path(need(&search.fasta, "a query fasta file")?)
+        .arg("--db")
+        .path(diamond_db(search, paths))
+        .arg("--out")
+        .path(paths.out(run, search, "tbl"))
+        .arg("--outfmt")
+        .arg("6")
+        .arg("--threads")
+        .arg(run.threads.to_string())
+        .args(run.args.clone())
+        .stderr_to(paths.log(run, search));
 
-    fn run(&self, ctx: &Ctx, search: &Search, run: &Run) -> anyhow::Result<Outcome> {
-        sequence_only(run, "diamond")?;
-
-        let job = ctx
-            .job(ctx.bin.get("diamond")?, run, search)
-            .arg("blastp")
-            .arg("--query")
-            .arg(search.asset(Asset::Fasta)?.display().to_string())
-            .arg("--db")
-            .arg(Self::db(ctx, search).display().to_string())
-            .arg("--out")
-            .arg(ctx.out(run, search, "tbl").display().to_string())
-            .arg("--outfmt")
-            .arg("6")
-            .arg("--threads")
-            .arg(run.threads.to_string())
-            .args(run.args.clone());
-
-        let cmd = job.display(ctx.numa());
-        let timing = exec::run(&job, ctx.numa())?;
-        Ok(Outcome { timing, cmd })
-    }
-}
-
-// -------------------------------------------------------------- shared
-
-/// Run a setup step and fail loudly if it does not succeed. Prep steps are not
-/// part of the measured search, so their timing is discarded.
-fn check(job: &Job, numa: Option<&Numa>, what: &str) -> anyhow::Result<()> {
-    let timing = exec::run(job, numa)?;
-    if timing.exit != 0 {
-        bail!(
-            "{what} failed with exit code {}: {}",
-            timing.exit,
-            job.display(numa)
-        );
-    }
-    Ok(())
-}
-
-fn concat(parts: &[PathBuf], out: &Path) -> anyhow::Result<()> {
-    if let Some(dir) = out.parent() {
-        std::fs::create_dir_all(dir)?;
-    }
-    let mut dst =
-        std::fs::File::create(out).with_context(|| format!("failed to create {}", out.display()))?;
-
-    for part in parts {
-        let mut src = std::fs::File::open(part)
-            .with_context(|| format!("failed to open {}", part.display()))?;
-        std::io::copy(&mut src, &mut dst)?;
-    }
-
-    Ok(())
+    Ok(Work {
+        dirs: Vec::new(),
+        search: Shape::One(cmd),
+        after: Vec::new(),
+    })
 }

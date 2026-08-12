@@ -838,8 +838,8 @@ fn recall(args: RecallArgs) -> anyhow::Result<()> {
 
     #[allow(clippy::too_many_arguments)]
     fn process(
-        // the target file name, as it appears in the runs table; deriving it
-        // from the hit table's path is what produced "0-prog" out of
+        // the search label from the runs table; deriving it from the hit
+        // table's path is what produced "0-prog" out of
         // nail-s12.0-prog.prf.1.tbl
         shard: &str,
         nail_path: impl AsRef<Path>,
@@ -945,7 +945,6 @@ fn recall(args: RecallArgs) -> anyhow::Result<()> {
                 mmseqs_cutoff: *mmseqs_cutoffs
                     .get(query)
                     .expect("no mmseqs cutoff for query"),
-                // shard is already the target file name from the runs table
                 file: shard.to_string(),
                 ..Default::default()
             };
@@ -1155,7 +1154,7 @@ fn recall(args: RecallArgs) -> anyhow::Result<()> {
     let pick = |explicit: Option<String>, tool: &str| -> anyhow::Result<String> {
         match explicit {
             Some(name) => {
-                if runs.targets(&name).is_empty() {
+                if runs.searches(&name).is_empty() {
                     anyhow::bail!(
                         "no run named {name:?} in {}; available: {}",
                         runs_path.display(),
@@ -1177,7 +1176,7 @@ fn recall(args: RecallArgs) -> anyhow::Result<()> {
     println!("hmmer:  {hmmer_run}");
 
     // only shards all three tools completed are comparable
-    let mut shards = runs.shared_targets(&[&nail_run, &mmseqs_run, &hmmer_run]);
+    let mut shards = runs.shared_searches(&[&nail_run, &mmseqs_run, &hmmer_run]);
     if shards.is_empty() {
         anyhow::bail!("no shard was completed by all three of nail, mmseqs and hmmer");
     }

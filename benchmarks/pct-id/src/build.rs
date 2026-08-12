@@ -13,8 +13,7 @@ use rand::rngs::StdRng;
 use rand::seq::IndexedRandom;
 use rand::SeedableRng;
 
-use run::exec::Job;
-use run::Bin;
+use run::exec::{self, Cmd};
 
 /// Decoys per true pair in the target database.
 const DECOY_RATIO: usize = 100;
@@ -81,7 +80,7 @@ pub fn main(args: Args) -> anyhow::Result<()> {
     let repo = run::repo(env!("CARGO_MANIFEST_DIR"));
     let dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
 
-    let bin = Bin::new(repo.join("tools/bin"));
+    let bin = repo.join("tools/bin");
 
     let src_sto = repo.join("data/pfam.sto");
     let src_fa = repo.join("data/swissprot.fa");
@@ -133,30 +132,30 @@ pub fn main(args: Args) -> anyhow::Result<()> {
     // ---- profile construction ----
 
     println!("building query.hmm...");
-    let job = Job::new(bin.get("hmmbuild")?)
+    let cmd = Cmd::new(run::tool(&bin, "hmmbuild")?)
         .arg("--cpu")
         .arg(args.threads.to_string())
-        .arg(bench_dir.join("query.hmm").display().to_string())
-        .arg(bench_dir.join("query.sto").display().to_string());
-    check(&job, "hmmbuild")?;
+        .path(bench_dir.join("query.hmm"))
+        .path(bench_dir.join("query.sto"));
+    exec::check(&cmd, None, "hmmbuild")?;
 
     println!("building query.cons.fa...");
-    let job = Job::new(bin.get("hmmemit")?)
+    let cmd = Cmd::new(run::tool(&bin, "hmmemit")?)
         .arg("-c")
-        .arg(bench_dir.join("query.hmm").display().to_string())
+        .path(bench_dir.join("query.hmm"))
         .stdout_to(bench_dir.join("query.cons.fa"));
-    check(&job, "hmmemit")?;
+    exec::check(&cmd, None, "hmmemit")?;
 
     println!("\nbuilt {}", bench_dir.display());
     Ok(())
 }
 
-fn run_profmark(bin: &Bin, pm_dir: &Path, src_sto: &Path, args: &Args) -> anyhow::Result<()> {
+fn run_profmark(bin: &Path, pm_dir: &Path, src_sto: &Path, args: &Args) -> anyhow::Result<()> {
     println!("running create-profmark (this takes a while)...");
     fs::create_dir_all(pm_dir)?;
 
     let name = pm_dir.join("benchmark");
-    let job = Job::new(bin.get("create-profmark")?)
+    let cmd = Cmd::new(run::tool(bin, "create-profmark")?)
         .arg("-S")
         .arg(args.seed.to_string())
         .arg("-1")
@@ -167,22 +166,14 @@ fn run_profmark(bin: &Bin, pm_dir: &Path, src_sto: &Path, args: &Args) -> anyhow
         .arg(args.min_test.to_string())
         .arg("--maxtest")
         .arg(args.max_test.to_string())
-        .arg(name.display().to_string())
-        .arg(src_sto.display().to_string());
-    check(&job, "create-profmark")?;
+        .path(&name)
+        .path(src_sto);
+    exec::check(&cmd, None, "create-profmark")?;
 
     fs::rename(name.with_extension("train.msa"), pm_dir.join("query.sto"))?;
     fs::rename(name.with_extension("test.msa"), pm_dir.join("target.sto"))?;
     fs::remove_file(name.with_extension("tbl")).ok();
 
-    Ok(())
-}
-
-fn check(job: &Job, what: &str) -> anyhow::Result<()> {
-    let timing = run::exec::run(job, None)?;
-    if timing.exit != 0 {
-        bail!("{what} failed with exit code {}", timing.exit);
-    }
     Ok(())
 }
 

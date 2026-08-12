@@ -11,7 +11,7 @@ use std::path::PathBuf;
 use anyhow::bail;
 use clap::{Parser, Subcommand};
 
-use run::{Asset, Bin, Ctx, Numa, Options, Search};
+use run::{Numa, Options, Paths, Search};
 
 /// This benchmark's directory, fixed at compile time.
 pub fn dir() -> PathBuf {
@@ -73,7 +73,6 @@ fn run_main(args: RunArgs) -> anyhow::Result<()> {
         filter: args.filter,
         threads: args.threads,
         numa_node: args.numa_node,
-        jobs: 1,
         dry_run: args.dry_run,
     };
     let runs = run::plan(&config, &opts)?;
@@ -85,7 +84,7 @@ fn run_main(args: RunArgs) -> anyhow::Result<()> {
                 i.to_string(),
                 dir.join(format!("target/{i}.target.fa")),
             )
-            .with(Asset::Fasta, dir.join(format!("query/{i}.query.fa")))
+            .with_fasta(dir.join(format!("query/{i}.query.fa")))
         })
         .collect();
 
@@ -112,13 +111,13 @@ fn run_main(args: RunArgs) -> anyhow::Result<()> {
         None => None,
     };
 
-    let ctx = Ctx {
-        bin: Bin::new(repo.join("tools/bin")),
+    let paths = Paths {
+        bin: repo.join("tools/bin"),
         tmp: dir.join("tmp"),
-        runs_table: results.join("runs.tbl"),
+        runs_table: results.join(run::table::FILE_NAME),
         results,
         numa,
     };
 
-    run::execute(&config, &runs, &searches, &ctx, opts.jobs)
+    run::measure(&config, &runs, &searches, &paths)
 }

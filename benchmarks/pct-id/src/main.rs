@@ -9,7 +9,7 @@ use std::path::PathBuf;
 use anyhow::bail;
 use clap::{Parser, Subcommand};
 
-use run::{Asset, Bin, Ctx, Numa, Options, Search};
+use run::{Numa, Options, Paths, Search};
 
 #[derive(Parser)]
 #[command(name = "pct-id", about = "percent-identity benchmark")]
@@ -70,7 +70,6 @@ fn run_main(args: RunArgs) -> anyhow::Result<()> {
         filter: args.filter,
         threads: args.threads,
         numa_node: args.numa_node,
-        jobs: 1,
         dry_run: args.dry_run,
     };
 
@@ -97,10 +96,10 @@ fn run_main(args: RunArgs) -> anyhow::Result<()> {
     // one target, so no label is needed to disambiguate outputs
     let searches = vec![
         Search::new("", bench_dir.join("target.fa"))
-            .with(Asset::Hmm, bench_dir.join("query.hmm"))
-            .with(Asset::Sto, bench_dir.join("query.sto"))
-            .with(Asset::Fasta, bench_dir.join("query.fa"))
-            .with(Asset::Afa, bench_dir.join("afa")),
+            .with_hmm(bench_dir.join("query.hmm"))
+            .with_sto(bench_dir.join("query.sto"))
+            .with_fasta(bench_dir.join("query.fa"))
+            .with_afa(bench_dir.join("afa")),
     ];
 
     let results = bench_dir.join("results");
@@ -115,13 +114,13 @@ fn run_main(args: RunArgs) -> anyhow::Result<()> {
         None => None,
     };
 
-    let ctx = Ctx {
-        bin: Bin::new(root.join("tools/bin")),
+    let paths = Paths {
+        bin: root.join("tools/bin"),
         tmp: bench_dir.join("tmp"),
-        runs_table: results.join("runs.tbl"),
+        runs_table: results.join(run::table::FILE_NAME),
         results,
         numa,
     };
 
-    run::execute(&config, &runs, &searches, &ctx, opts.jobs)
+    run::measure(&config, &runs, &searches, &paths)
 }

@@ -54,8 +54,7 @@ fn cells(args: CellsArgs) -> anyhow::Result<()> {
     let runs = run::Runs::from_dir(&results)?;
 
     for i in 1..=PAIRS {
-        let target = format!("{i}.target.fa");
-        let tbl = runs.table_path(&args.run, &target);
+        let tbl = runs.table_path(&args.run, &i.to_string());
         let cell_frac = last_cell_frac(&tbl)
             .with_context(|| format!("failed to read a hit from {}", tbl.display()))?;
 

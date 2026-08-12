@@ -33,7 +33,7 @@ use clap::{Parser, Subcommand};
 use rayon::iter::{IntoParallelRefIterator, ParallelIterator};
 
 use bioio::tbl::{BlastTable, HitTable, HmmerTable, NailTable};
-use run::{Asset, Bin, Ctx, Numa, Options, Search};
+use run::{Numa, Options, Paths, Search};
 
 use crate::build;
 
@@ -352,14 +352,13 @@ fn recruit(args: StageArgs) -> anyhow::Result<()> {
         .into_iter()
         .map(|(i, path)| {
             Search::new(i.to_string(), path)
-                .with(Asset::Hmm, layout.query_hmm())
-                .with(Asset::Sto, layout.query_sto())
+                .with_hmm(layout.query_hmm())
+                .with_sto(layout.query_sto())
         })
         .collect();
 
-    // one search per shard is already large enough to use every core
     let into = layout.recruit();
-    stage(RECRUIT_BLOCK, searches, &args, into, 1)
+    stage(RECRUIT_BLOCK, searches, &args, into, How::Whole)
 }
 
 // ------------------------------------------------------------------ decoys
@@ -383,29 +382,29 @@ fn decoys(args: DecoysArgs) -> anyhow::Result<()> {
         None => runs.only_for_tool("mmseqs")?,
     };
 
-    let targets = runs.shared_targets(&[nail, mmseqs]);
-    if targets.is_empty() {
+    let shards = runs.shared_searches(&[nail, mmseqs]);
+    if shards.is_empty() {
         bail!("nail and mmseqs have no successfully recruited shards in common");
     }
 
-    println!("reading {} recruited shards...", targets.len());
+    println!("reading {} recruited shards...", shards.len());
 
     let pool = pool(args.threads)?;
 
     // per shard, which families each recruited sequence hit. Only names travel
     // here; the sequences themselves are read in the second pass.
     let wanted: Vec<(String, HashMap<String, Vec<String>>)> = pool.install(|| {
-        targets
+        shards
             .par_iter()
-            .map(|target| -> anyhow::Result<(String, HashMap<String, Vec<String>>)> {
+            .map(|shard| -> anyhow::Result<(String, HashMap<String, Vec<String>>)> {
                 let mut map: HashMap<String, Vec<String>> = HashMap::new();
 
-                let path = runs.table_path(nail, target);
+                let path = runs.table_path(nail, shard);
                 let tbl = HitTable::from_path::<_, NailTable>(&path)
                     .with_context(|| format!("failed to read {}", path.display()))?;
                 collect(tbl, &mut map);
 
-                let path = runs.table_path(mmseqs, target);
+                let path = runs.table_path(mmseqs, shard);
                 let tbl = HitTable::from_path::<_, BlastTable>(&path)
                     .with_context(|| format!("failed to read {}", path.display()))?;
                 collect(tbl, &mut map);
@@ -415,7 +414,7 @@ fn decoys(args: DecoysArgs) -> anyhow::Result<()> {
                     v.dedup();
                 }
 
-                Ok((target.clone(), map))
+                Ok((shard.clone(), map))
             })
             .collect::<anyhow::Result<Vec<_>>>()
     })?;
@@ -450,7 +449,7 @@ fn decoys(args: DecoysArgs) -> anyhow::Result<()> {
 
     let mgy = layout.mgy();
     pool.install(|| {
-        wanted.par_iter().try_for_each(|(target, map)| -> anyhow::Result<()> {
+        wanted.par_iter().try_for_each(|(shard, map)| -> anyhow::Result<()> {
             // invert to a name lookup so the shard is read once, streaming,
             // rather than held in memory
             let mut by_target: HashMap<&str, Vec<&str>> = HashMap::new();
@@ -463,7 +462,7 @@ fn decoys(args: DecoysArgs) -> anyhow::Result<()> {
                 }
             }
 
-            let path = mgy.join(target);
+            let path = mgy.join(format!("{shard}.fa"));
             let mut reader = bioio::fasta::Reader::from_path(&path)
                 .with_context(|| format!("failed to open {}", path.display()))?;
 
@@ -578,16 +577,16 @@ fn search(args: StageArgs) -> anyhow::Result<()> {
 
         searches.push(
             Search::new(family.clone(), decoy_dir.join(format!("{family}.fa")))
-                .with(Asset::Hmm, &hmm)
-                .with(Asset::Sto, &sto),
+                .with_hmm(&hmm)
+                .with_sto(&sto),
         );
         searches.push(
             Search::new(
                 format!("{family}.rev"),
                 rev_dir.join(format!("{family}.rev.fa")),
             )
-            .with(Asset::Hmm, &hmm)
-            .with(Asset::Sto, &sto),
+            .with_hmm(&hmm)
+            .with_sto(&sto),
         );
     }
 
@@ -596,26 +595,27 @@ fn search(args: StageArgs) -> anyhow::Result<()> {
         .jobs
         .unwrap_or_else(|| std::thread::available_parallelism().map_or(4, |n| n.get()));
 
-    stage(DECOY_BLOCK, searches, &args, layout.root.clone(), jobs)
+    stage(DECOY_BLOCK, searches, &args, layout.root.clone(), How::Split(jobs))
 }
 
 // ------------------------------------------------------- shared stage setup
 
+/// How a stage spends the machine.
+enum How {
+    /// One search at a time, each large enough to use every core.
+    Whole,
+    /// Several small searches at once.
+    Split(usize),
+}
+
 /// Plan and execute one of the two search stages.
-fn stage(
-    block: &str,
-    searches: Vec<Search>,
-    args: &StageArgs,
-    into: PathBuf,
-    default_jobs: usize,
-) -> anyhow::Result<()> {
+fn stage(block: &str, searches: Vec<Search>, args: &StageArgs, into: PathBuf, how: How) -> anyhow::Result<()> {
     let config = run::Config::from_path_as(build::dir().join("cutoffs.toml"), block)?;
 
     let opts = Options {
         filter: args.filter.clone(),
         threads: args.threads,
         numa_node: args.numa_node,
-        jobs: args.jobs.unwrap_or(default_jobs),
         dry_run: args.dry_run,
     };
     let runs = run::plan(&config, &opts)?;
@@ -631,14 +631,18 @@ fn stage(
     }
     std::fs::create_dir_all(&results)?;
 
+    let jobs = match how {
+        How::Whole => 1,
+        How::Split(n) => n,
+    };
     let threads = runs.iter().map(|r| r.threads).max().unwrap_or(1);
     let numa = match args.numa_node.or(config.defaults.numa_node) {
-        Some(node) => Some(Numa::new(node, threads * opts.jobs)?),
+        Some(node) => Some(Numa::new(node, threads * jobs)?),
         None => None,
     };
 
-    let ctx = Ctx {
-        bin: Bin::new(build::repo().join("tools/bin")),
+    let paths = Paths {
+        bin: build::repo().join("tools/bin"),
         tmp: into.join("tmp"),
         results,
         // above results/, so it survives the wipe at the start of a stage
@@ -646,7 +650,10 @@ fn stage(
         numa,
     };
 
-    run::execute(&config, &runs, &searches, &ctx, opts.jobs)
+    match how {
+        How::Whole => run::measure(&config, &runs, &searches, &paths),
+        How::Split(jobs) => run::batch(&config, &runs, &searches, &paths, jobs),
+    }
 }
 
 // ------------------------------------------------------------------- learn

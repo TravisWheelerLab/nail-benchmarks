@@ -13,7 +13,7 @@ use std::path::PathBuf;
 use anyhow::{bail, Context};
 use clap::{Parser, Subcommand};
 
-use run::{Asset, Bin, Ctx, Numa, Options, Search};
+use run::{Numa, Options, Paths, Search};
 
 
 #[derive(Parser)]
@@ -128,7 +128,6 @@ fn run_main(args: RunArgs) -> anyhow::Result<()> {
         filter: args.filter,
         threads: args.threads,
         numa_node: args.numa_node,
-        jobs: 1,
         dry_run: args.dry_run,
     };
     let runs = run::plan(&config, &opts)?;
@@ -166,8 +165,8 @@ fn run_main(args: RunArgs) -> anyhow::Result<()> {
     let searches: Vec<Search> = (first..=last)
         .map(|i| {
             Search::new(i.to_string(), shard_dir.join(format!("{i}.fa")))
-                .with(Asset::Hmm, bench.join("query.hmm"))
-                .with(Asset::Sto, bench.join("query.sto"))
+                .with_hmm(bench.join("query.hmm"))
+                .with_sto(bench.join("query.sto"))
         })
         .collect();
 
@@ -191,8 +190,8 @@ fn run_main(args: RunArgs) -> anyhow::Result<()> {
         None => None,
     };
 
-    let ctx = Ctx {
-        bin: Bin::new(repo.join("tools/bin")),
+    let paths = Paths {
+        bin: repo.join("tools/bin"),
         tmp,
         results,
         // above results/, so it survives the wipe at the start of a run
@@ -200,5 +199,5 @@ fn run_main(args: RunArgs) -> anyhow::Result<()> {
         numa,
     };
 
-    run::execute(&config, &runs, &searches, &ctx, opts.jobs)
+    run::measure(&config, &runs, &searches, &paths)
 }
