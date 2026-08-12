@@ -1,30 +1,28 @@
 //! Random access and sampling across a directory of fasta files treated as one
 //! collection.
 //!
-//! The collection this was built for is ~500GB across 25 files, so nothing here
-//! reads more than it has to. Construction only lists files; indexing is
-//! explicit and can be persisted, and sampling reads only the records it draws.
+//! Nothing here reads more than it has to. Construction only lists files,
+//! indexing is explicit and can be persisted, and sampling reads only the
+//! records it draws.
 
 use std::fs::File;
 use std::io::{BufReader, Read, Seek, SeekFrom, Write};
 use std::path::{Path, PathBuf};
 use std::time::UNIX_EPOCH;
 
-use anyhow::{bail, Context, Result};
+use anyhow::{bail, Context};
 use rand::rngs::StdRng;
 use rand::seq::SliceRandom;
 use rand::{Rng, SeedableRng};
 
 /// Records per index block. A block stores one byte offset, so this trades
-/// index size against how far a lookup scans: at 64, an index costs 0.125
-/// bytes per record and a lookup scans at most 64 records.
+/// index size against how far a lookup has to scan.
 pub const BLOCK: usize = 64;
 
 const MAGIC: &[u8; 7] = b"BIOIDX\0";
 const VERSION: u16 = 1;
 
-/// Bytes read at a time when scanning. Records are small relative to this, so
-/// a lookup usually needs one read.
+/// Bytes read at a time when scanning.
 const BUF: usize = 1 << 20;
 
 /// What a file looked like when it was indexed. Any change invalidates the
@@ -37,7 +35,7 @@ struct Stamp {
 }
 
 impl Stamp {
-    fn of(path: &Path) -> Result<Self> {
+    fn of(path: &Path) -> anyhow::Result<Self> {
         let meta = std::fs::metadata(path)
             .with_context(|| format!("failed to stat {}", path.display()))?;
         let mtime_ns = meta
@@ -79,8 +77,7 @@ pub struct AggregateFasta {
 struct Index {
     files: Vec<FileIndex>,
     /// `starts[i]` is the global number of the first record in file `i`, and
-    /// `starts[n]` is the total. This is the virtual index: ranges, not a
-    /// per-record map.
+    /// `starts[n]` is the total.
     starts: Vec<u64>,
 }
 
@@ -184,7 +181,7 @@ impl AggregateFastaBuilder {
     }
 
     /// Resolve the sources and produce an indexed collection.
-    pub fn build(self) -> Result<AggregateFasta> {
+    pub fn build(self) -> anyhow::Result<AggregateFasta> {
         let paths = self.collect_paths()?;
 
         let index = match &self.index_path {
@@ -222,7 +219,7 @@ impl AggregateFastaBuilder {
     }
 
     /// Expand directories, keep explicit paths, then sort and deduplicate.
-    fn collect_paths(&self) -> Result<Vec<PathBuf>> {
+    fn collect_paths(&self) -> anyhow::Result<Vec<PathBuf>> {
         let mut out: Vec<PathBuf> = Vec::new();
 
         for dir in &self.dirs {
@@ -258,7 +255,7 @@ impl AggregateFastaBuilder {
                 p.canonicalize()
                     .with_context(|| format!("failed to resolve {}", p.display()))
             })
-            .collect::<Result<_>>()?;
+            .collect::<anyhow::Result<_>>()?;
 
         // global record numbering depends on a stable order
         canonical.sort();
@@ -295,7 +292,7 @@ impl AggregateFasta {
     ///
     /// Returns how many were written, which is fewer than `n` only when the
     /// collection is smaller than the request.
-    pub fn sample(&self, n: usize, seed: u64, out: &mut impl Write) -> Result<usize> {
+    pub fn sample(&self, n: usize, seed: u64, out: &mut impl Write) -> anyhow::Result<usize> {
         let index = &self.index;
         let total = index.total();
         let n = if n as u64 > total {
@@ -309,25 +306,17 @@ impl AggregateFasta {
 
         let mut rng = StdRng::seed_from_u64(seed);
 
-        // Draw without replacement, in random order.
-        //
-        // The order is deliberately not sorted: the emitted records must be a
-        // random permutation, not the collection's own order with gaps. Reads
-        // are scattered either way — draws over a large collection land far
-        // apart no matter how they are ordered — so there is little to reclaim
-        // by sorting, and doing so would make the output non-random.
-        //
-        // Two strategies, because materialising 0..total is untenable at scale
-        // — a 2e9-record collection would want a 20GB vector to draw a few
-        // thousand records.
+        // the draw is left in random order on purpose, so the output is a
+        // random permutation rather than collection order with gaps
         let draw: Vec<u64> = if (n as u64).saturating_mul(3) >= total {
-            // taking a large fraction: shuffling everything is cheapest
+            // taking a large fraction, so shuffling everything is cheapest
             let mut all: Vec<u64> = (0..total).collect();
             all.shuffle(&mut rng);
             all.truncate(n);
             all
         } else {
-            // taking a sparse subset: reject duplicates, ~1.5n draws expected
+            // taking a sparse subset, so draw and reject duplicates instead of
+            // building a list of every record
             let mut seen = std::collections::HashSet::with_capacity(n);
             while seen.len() < n {
                 seen.insert(rng.random_range(0..total));
@@ -339,34 +328,59 @@ impl AggregateFasta {
             v
         };
 
-        // one reader per file, opened on first use and kept: draws arrive in
-        // random order, so reopening on every file change would thrash
-        let mut readers: Vec<Option<BufReader<File>>> = (0..self.paths.len()).map(|_| None).collect();
+        let mut records = self.records();
         let mut written = 0usize;
 
         for global in draw {
-            let (file_idx, local) = index
-                .locate(global)
-                .context("drew a record outside the collection")?;
-
-            if readers[file_idx].is_none() {
-                let f = File::open(&self.paths[file_idx])
-                    .with_context(|| format!("failed to open {}", self.paths[file_idx].display()))?;
-                readers[file_idx] = Some(BufReader::new(f));
-            }
-
-            let reader = readers[file_idx].as_mut().expect("reader was just opened");
-            let bytes = read_record(reader, &index.files[file_idx], local)?;
-            out.write_all(&bytes)?;
+            out.write_all(&records.get(global)?)?;
             written += 1;
         }
 
         Ok(written)
     }
+
+    /// A cursor for pulling out records by their global number.
+    pub fn records(&self) -> Records<'_> {
+        Records {
+            collection: self,
+            readers: (0..self.paths.len()).map(|_| None).collect(),
+        }
+    }
+}
+
+/// Reads records out of a collection one at a time, by global number.
+///
+/// Holds one reader per file, opened on first use and kept afterwards, since
+/// lookups arrive in whatever order the caller wants them.
+pub struct Records<'a> {
+    collection: &'a AggregateFasta,
+    readers: Vec<Option<BufReader<File>>>,
+}
+
+impl Records<'_> {
+    /// Record `global`, byte for byte as it appears in its source file.
+    pub fn get(&mut self, global: u64) -> anyhow::Result<Vec<u8>> {
+        let index = &self.collection.index;
+        let (file_idx, local) = index
+            .locate(global)
+            .context("asked for a record outside the collection")?;
+
+        if self.readers[file_idx].is_none() {
+            let path = &self.collection.paths[file_idx];
+            let f =
+                File::open(path).with_context(|| format!("failed to open {}", path.display()))?;
+            self.readers[file_idx] = Some(BufReader::new(f));
+        }
+
+        let reader = self.readers[file_idx]
+            .as_mut()
+            .expect("reader was just opened");
+        read_record(reader, &index.files[file_idx], local)
+    }
 }
 
 /// Index one file, recording the byte offset of every `BLOCK`th record.
-fn index_file(path: &Path) -> Result<FileIndex> {
+fn index_file(path: &Path) -> anyhow::Result<FileIndex> {
     let stamp = Stamp::of(path)?;
     let mut reader = BufReader::new(
         File::open(path).with_context(|| format!("failed to open {}", path.display()))?,
@@ -418,10 +432,9 @@ fn index_file(path: &Path) -> Result<FileIndex> {
 /// Index every file, concurrently.
 ///
 /// Uses rayon's global pool, so a binary that sizes it from a `--threads` flag
-/// controls this too. Indexing is disk-bound: on a 528GB collection throughput
-/// went 3.1 -> 5.8 -> 8.5 GB/s at 1, 2 and 4 readers, then stayed flat through
-/// 20, so there is nothing to gain past a handful.
-fn index_all(paths: &[PathBuf]) -> Result<Vec<FileIndex>> {
+/// controls this too. Indexing is disk-bound, so a handful of readers saturates
+/// it and more do not help.
+fn index_all(paths: &[PathBuf]) -> anyhow::Result<Vec<FileIndex>> {
     use rayon::prelude::*;
 
     // collect preserves order, which global record numbering depends on
@@ -429,7 +442,7 @@ fn index_all(paths: &[PathBuf]) -> Result<Vec<FileIndex>> {
 }
 
 /// Whether a stored index still describes these files unchanged.
-fn stamps_match(index: &Index, paths: &[PathBuf]) -> Result<bool> {
+fn stamps_match(index: &Index, paths: &[PathBuf]) -> anyhow::Result<bool> {
     if index.files.len() != paths.len() {
         return Ok(false);
     }
@@ -459,9 +472,8 @@ fn build(files: Vec<FileIndex>) -> Index {
 ///
 /// Blocks begin and end on record boundaries, so the next block's start is
 /// exactly where this block ends. Reading that span gets the whole block in one
-/// go — about 17KB at the default block length — rather than scanning forward
-/// through arbitrarily sized buffers.
-fn read_record(reader: &mut BufReader<File>, index: &FileIndex, local: u64) -> Result<Vec<u8>> {
+/// go rather than scanning forward through arbitrarily sized buffers.
+fn read_record(reader: &mut BufReader<File>, index: &FileIndex, local: u64) -> anyhow::Result<Vec<u8>> {
     let block = (local / BLOCK as u64) as usize;
     let within = (local % BLOCK as u64) as usize;
 
@@ -506,7 +518,7 @@ fn read_record(reader: &mut BufReader<File>, index: &FileIndex, local: u64) -> R
 
 // ------------------------------------------------------------- persistence
 
-fn write_index(path: &Path, index: &Index) -> Result<()> {
+fn write_index(path: &Path, index: &Index) -> anyhow::Result<()> {
     if let Some(dir) = path.parent() {
         std::fs::create_dir_all(dir)?;
     }
@@ -533,7 +545,7 @@ fn write_index(path: &Path, index: &Index) -> Result<()> {
     Ok(())
 }
 
-fn read_index(path: &Path) -> Result<Index> {
+fn read_index(path: &Path) -> anyhow::Result<Index> {
     let mut r = BufReader::new(File::open(path)?);
 
     let mut magic = [0u8; 7];
@@ -580,25 +592,25 @@ fn read_index(path: &Path) -> Result<Index> {
     Ok(build(files))
 }
 
-fn read_u16(r: &mut impl Read) -> Result<u16> {
+fn read_u16(r: &mut impl Read) -> anyhow::Result<u16> {
     let mut b = [0u8; 2];
     r.read_exact(&mut b)?;
     Ok(u16::from_le_bytes(b))
 }
 
-fn read_u32(r: &mut impl Read) -> Result<u32> {
+fn read_u32(r: &mut impl Read) -> anyhow::Result<u32> {
     let mut b = [0u8; 4];
     r.read_exact(&mut b)?;
     Ok(u32::from_le_bytes(b))
 }
 
-fn read_u64(r: &mut impl Read) -> Result<u64> {
+fn read_u64(r: &mut impl Read) -> anyhow::Result<u64> {
     let mut b = [0u8; 8];
     r.read_exact(&mut b)?;
     Ok(u64::from_le_bytes(b))
 }
 
-fn read_u128(r: &mut impl Read) -> Result<u128> {
+fn read_u128(r: &mut impl Read) -> anyhow::Result<u128> {
     let mut b = [0u8; 16];
     r.read_exact(&mut b)?;
     Ok(u128::from_le_bytes(b))
@@ -608,8 +620,8 @@ fn read_u128(r: &mut impl Read) -> Result<u128> {
 mod tests {
     use super::*;
 
-    /// A collection whose records are individually identifiable, so a sample
-    /// can be checked for correctness rather than just for size.
+    /// A collection whose records name themselves, so a sample can be checked
+    /// for what it drew rather than just how much.
     fn collection(name: &str, files: usize, per_file: usize) -> PathBuf {
         let dir = std::env::temp_dir().join(format!("bioio-agg-{}-{name}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();

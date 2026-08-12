@@ -1,15 +1,12 @@
 //! Reading back the runs table this crate writes.
 //!
-//! Analysis code used to rediscover what had been run by globbing result files
-//! and picking filenames apart. That is fragile — run names embed floats, so a
-//! parameter like `s12.0` puts a dot in the middle of a name that was being
-//! split on dots. The runs table already records every name, target, and
-//! timing, so it is the authoritative index of a results directory.
+//! The table records every name, target and timing, so it is the authoritative
+//! index of a results directory.
 
 use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
 
-use anyhow::{bail, Context, Result};
+use anyhow::{bail, Context};
 
 pub const FILE_NAME: &str = "runs.tbl";
 
@@ -31,13 +28,13 @@ pub struct Runs {
 
 impl Runs {
     /// Read `<dir>/runs.tbl`, with the hit tables alongside it.
-    pub fn from_dir(dir: impl AsRef<Path>) -> Result<Self> {
+    pub fn from_dir(dir: impl AsRef<Path>) -> anyhow::Result<Self> {
         let dir = dir.as_ref();
         Self::load(dir.join(FILE_NAME), dir)
     }
 
     /// Read a runs table that does not sit beside the hit tables it indexes.
-    pub fn load(table: impl AsRef<Path>, results_dir: impl AsRef<Path>) -> Result<Self> {
+    pub fn load(table: impl AsRef<Path>, results_dir: impl AsRef<Path>) -> anyhow::Result<Self> {
         let dir = results_dir.as_ref().to_path_buf();
         let path = table.as_ref().to_path_buf();
         let text = std::fs::read_to_string(&path).with_context(|| {
@@ -64,7 +61,7 @@ impl Runs {
                 continue;
             }
 
-            let idx = |name: &str| -> Result<usize> {
+            let idx = |name: &str| -> anyhow::Result<usize> {
                 columns
                     .iter()
                     .position(|c| c == name)
@@ -74,7 +71,7 @@ impl Runs {
             // cmd is last and contains spaces, but every column read here comes
             // before it, so positional splitting is safe
             let f: Vec<&str> = line.split_whitespace().collect();
-            let get = |i: usize| -> Result<&str> {
+            let get = |i: usize| -> anyhow::Result<&str> {
                 f.get(i).copied().context("short row in runs table")
             };
 
@@ -112,7 +109,7 @@ impl Runs {
 
     /// The single run name belonging to `tool`, erroring if the config swept
     /// more than one so the caller has to say which it means.
-    pub fn only_for_tool(&self, tool: &str) -> Result<&str> {
+    pub fn only_for_tool(&self, tool: &str) -> anyhow::Result<&str> {
         let names: Vec<&str> = {
             let mut seen = BTreeSet::new();
             self.rows
@@ -171,11 +168,10 @@ impl Runs {
         out
     }
 
-    /// Where a run's hit table for one target lives, matching how the runner
-    /// names its outputs.
+    /// Where a run's hit table for one target lives.
     ///
-    /// The `target` column holds a file name; outputs are keyed by its stem, so
-    /// a row and the file it refers to always agree.
+    /// The `target` column holds a file name and outputs are keyed by its stem,
+    /// so a row and the file it refers to always agree.
     pub fn table_path(&self, name: &str, target: &str) -> PathBuf {
         self.output_path(name, target, "tbl")
     }
@@ -247,7 +243,7 @@ mmseqs-s7.5-ms2000.prf  mmseqs prf   7.5  24      2.fa   7.03   161.6  0.4   635
         let dir = write("names", BODY);
         let runs = Runs::from_dir(&dir).unwrap();
 
-        // the old code split filenames on '.', which mangled s12.0
+        // splitting these on '.' would mangle s12.0
         assert_eq!(
             runs.names(),
             vec!["nail-s12.0-prog.prf", "mmseqs-s7.5-ms2000.prf"]

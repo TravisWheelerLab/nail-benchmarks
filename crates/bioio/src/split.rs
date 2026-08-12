@@ -2,7 +2,7 @@ use std::fs::File;
 use std::io::{BufRead, BufReader, BufWriter, Read, Seek, SeekFrom, Write};
 use std::path::{Path, PathBuf};
 
-use anyhow::{bail, Context, Result};
+use anyhow::{bail, Context};
 
 /// One indexed record (an HMM block or a FASTA entry) as a byte range plus the
 /// weight used to balance splits.
@@ -31,7 +31,7 @@ impl Kind {
 /// Index records without retaining file contents. Query sets get large (the
 /// mgnify benchmark's query.hmm is the full 1.6GB Pfam), so this pass keeps
 /// only byte offsets and writes splits by seeking back over the original.
-pub fn index(path: impl AsRef<Path>, kind: Kind) -> Result<Vec<Record>> {
+pub fn index(path: impl AsRef<Path>, kind: Kind) -> anyhow::Result<Vec<Record>> {
     let path = path.as_ref();
     let file =
         File::open(path).with_context(|| format!("failed to open {}", path.display()))?;
@@ -124,8 +124,7 @@ fn parse_field(line: &[u8], idx: usize) -> Option<u64> {
 }
 
 /// Distribute records into `n` bins, heaviest first onto the lightest bin
-/// (longest-processing-time). Replaces the sort-then-round-robin deal in
-/// util/scripts/common.py, which balanced the same quantity slightly worse.
+/// (longest-processing-time).
 pub fn balance(records: &[Record], n: usize) -> Vec<Vec<usize>> {
     let mut order: Vec<usize> = (0..records.len()).collect();
     order.sort_by(|&a, &b| {
@@ -166,7 +165,7 @@ pub fn write_splits(
     kind: Kind,
     n: usize,
     out_dir: impl AsRef<Path>,
-) -> Result<Vec<PathBuf>> {
+) -> anyhow::Result<Vec<PathBuf>> {
     let path = path.as_ref();
     let out_dir = out_dir.as_ref();
 

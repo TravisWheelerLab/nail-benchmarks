@@ -28,7 +28,7 @@ use std::io::{BufWriter, Write};
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 
-use anyhow::{bail, Context, Result};
+use anyhow::{bail, Context};
 use clap::{Parser, Subcommand};
 use rayon::iter::{IntoParallelRefIterator, ParallelIterator};
 
@@ -57,7 +57,7 @@ struct Layout {
 }
 
 impl Layout {
-    fn new(name: &str, out: &str) -> Result<Self> {
+    fn new(name: &str, out: &str) -> anyhow::Result<Self> {
         let bench = build::dir().join(name);
         if !bench.is_dir() {
             bail!(
@@ -252,7 +252,7 @@ pub struct AllArgs {
     pub numa_node: Option<usize>,
 }
 
-pub fn main(cmd: Cmd) -> Result<()> {
+pub fn main(cmd: Cmd) -> anyhow::Result<()> {
     match cmd {
         Cmd::Reverse(args) => reverse(args),
         Cmd::Recruit(args) => recruit(args),
@@ -270,7 +270,7 @@ pub fn main(cmd: Cmd) -> Result<()> {
 /// The index has to come off the stem as a whole: run names embed floating
 /// point parameters, so splitting on dots is not safe elsewhere and is not
 /// worth doing differently here.
-fn shards(dir: &Path) -> Result<Vec<(usize, PathBuf)>> {
+fn shards(dir: &Path) -> anyhow::Result<Vec<(usize, PathBuf)>> {
     let entries = std::fs::read_dir(dir)
         .with_context(|| format!("failed to read {}", dir.display()))?;
 
@@ -293,7 +293,7 @@ fn shards(dir: &Path) -> Result<Vec<(usize, PathBuf)>> {
     Ok(out)
 }
 
-fn reverse(args: ReverseArgs) -> Result<()> {
+fn reverse(args: ReverseArgs) -> anyhow::Result<()> {
     let layout = Layout::new(&args.place.name, &args.place.out)?;
     let src = layout.mgy();
     let dst = layout.mgy_rev();
@@ -322,7 +322,7 @@ fn reverse(args: ReverseArgs) -> Result<()> {
 
     let pool = pool(args.threads)?;
     pool.install(|| {
-        found.par_iter().try_for_each(|(i, path)| -> Result<()> {
+        found.par_iter().try_for_each(|(i, path)| -> anyhow::Result<()> {
             // plain `<n>.fa`, not `<n>.rev.fa`: the directory already says
             // these are reversed, and the shard index has to stay readable off
             // the stem for the stages downstream
@@ -337,7 +337,7 @@ fn reverse(args: ReverseArgs) -> Result<()> {
 
 // ----------------------------------------------------------------- recruit
 
-fn recruit(args: StageArgs) -> Result<()> {
+fn recruit(args: StageArgs) -> anyhow::Result<()> {
     let layout = Layout::new(&args.place.name, &args.place.out)?;
     let rev = layout.mgy_rev();
 
@@ -364,7 +364,7 @@ fn recruit(args: StageArgs) -> Result<()> {
 
 // ------------------------------------------------------------------ decoys
 
-fn decoys(args: DecoysArgs) -> Result<()> {
+fn decoys(args: DecoysArgs) -> anyhow::Result<()> {
     let layout = Layout::new(&args.place.name, &args.place.out)?;
     let recruit_dir = layout.recruit();
 
@@ -397,7 +397,7 @@ fn decoys(args: DecoysArgs) -> Result<()> {
     let wanted: Vec<(String, HashMap<String, Vec<String>>)> = pool.install(|| {
         targets
             .par_iter()
-            .map(|target| -> Result<(String, HashMap<String, Vec<String>>)> {
+            .map(|target| -> anyhow::Result<(String, HashMap<String, Vec<String>>)> {
                 let mut map: HashMap<String, Vec<String>> = HashMap::new();
 
                 let path = runs.table_path(nail, target);
@@ -417,7 +417,7 @@ fn decoys(args: DecoysArgs) -> Result<()> {
 
                 Ok((target.clone(), map))
             })
-            .collect::<Result<Vec<_>>>()
+            .collect::<anyhow::Result<Vec<_>>>()
     })?;
 
     let families: HashSet<String> = wanted
@@ -450,7 +450,7 @@ fn decoys(args: DecoysArgs) -> Result<()> {
 
     let mgy = layout.mgy();
     pool.install(|| {
-        wanted.par_iter().try_for_each(|(target, map)| -> Result<()> {
+        wanted.par_iter().try_for_each(|(target, map)| -> anyhow::Result<()> {
             // invert to a name lookup so the shard is read once, streaming,
             // rather than held in memory
             let mut by_target: HashMap<&str, Vec<&str>> = HashMap::new();
@@ -504,7 +504,7 @@ fn decoys(args: DecoysArgs) -> Result<()> {
     println!("reversing decoys...");
     let names: Vec<&String> = families.iter().collect();
     pool.install(|| {
-        names.par_iter().try_for_each(|f| -> Result<()> {
+        names.par_iter().try_for_each(|f| -> anyhow::Result<()> {
             bioio::fasta::reverse(
                 &decoy_dir.join(format!("{f}.fa")),
                 &rev_dir.join(format!("{f}.rev.fa")),
@@ -541,7 +541,7 @@ fn collect(tbl: HitTable, map: &mut HashMap<String, Vec<String>>) {
 
 // ------------------------------------------------------------------ search
 
-fn search(args: StageArgs) -> Result<()> {
+fn search(args: StageArgs) -> anyhow::Result<()> {
     let layout = Layout::new(&args.place.name, &args.place.out)?;
     let decoy_dir = layout.decoys();
 
@@ -608,7 +608,7 @@ fn stage(
     args: &StageArgs,
     into: PathBuf,
     default_jobs: usize,
-) -> Result<()> {
+) -> anyhow::Result<()> {
     let config = run::Config::from_path_as(build::dir().join("cutoffs.toml"), block)?;
 
     let opts = Options {
@@ -654,7 +654,7 @@ fn stage(
 /// How many decoy scores are recorded per family per tool.
 const N_SCORES: usize = 5;
 
-fn learn(args: LearnArgs) -> Result<()> {
+fn learn(args: LearnArgs) -> anyhow::Result<()> {
     let layout = Layout::new(&args.place.name, &args.place.out)?;
     let results = layout.results();
 
@@ -690,7 +690,7 @@ fn learn(args: LearnArgs) -> Result<()> {
 
     let pool = pool(args.threads)?;
     pool.install(|| {
-        families.par_iter().try_for_each(|family| -> Result<()> {
+        families.par_iter().try_for_each(|family| -> anyhow::Result<()> {
             let nail_scores = decoy_scores::<NailTable>(&results, &nail, family, args.reverse_e_cutoff)?;
             let mmseqs_scores =
                 decoy_scores::<BlastTable>(&results, &mmseqs, family, args.reverse_e_cutoff)?;
@@ -741,7 +741,7 @@ fn decoy_scores<T>(
     run: &str,
     family: &str,
     e_cutoff: f64,
-) -> Result<Option<(Vec<f32>, usize)>>
+) -> anyhow::Result<Option<(Vec<f32>, usize)>>
 where
     T: bioio::tbl::HitColumns,
 {
@@ -797,7 +797,7 @@ fn group(tool: &str, (scores, count): &(Vec<f32>, usize)) -> String {
 
 // --------------------------------------------------------------------- all
 
-fn all(args: AllArgs) -> Result<()> {
+fn all(args: AllArgs) -> anyhow::Result<()> {
     let stage_args = |jobs: Option<usize>| StageArgs {
         place: args.place.clone(),
         filter: None,
@@ -837,7 +837,7 @@ fn all(args: AllArgs) -> Result<()> {
 // ------------------------------------------------------------------- utils
 
 /// A thread pool scoped to one phase, so it does not fight with any global one.
-fn pool(threads: usize) -> Result<rayon::ThreadPool> {
+fn pool(threads: usize) -> anyhow::Result<rayon::ThreadPool> {
     rayon::ThreadPoolBuilder::new()
         .num_threads(threads.max(1))
         .build()

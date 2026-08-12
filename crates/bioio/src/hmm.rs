@@ -10,7 +10,7 @@ use std::collections::HashSet;
 use std::io::{BufRead, BufReader, BufWriter, Write};
 use std::path::Path;
 
-use anyhow::{bail, Context, Result};
+use anyhow::{bail, Context};
 
 /// Per-model statistics needed to turn a bit score into a P-value.
 pub struct Gumbel {
@@ -32,7 +32,7 @@ impl Gumbel {
 }
 
 /// Read each model's name, gathering threshold, and forward-score distribution.
-pub fn parse_stats(path: impl AsRef<Path>) -> Result<HashMap<String, Gumbel>> {
+pub fn parse_stats(path: impl AsRef<Path>) -> anyhow::Result<HashMap<String, Gumbel>> {
     let path = path.as_ref();
     let reader = BufReader::new(
         std::fs::File::open(path).with_context(|| format!("failed to open {}", path.display()))?,
@@ -53,7 +53,7 @@ pub fn parse_stats(path: impl AsRef<Path>) -> Result<HashMap<String, Gumbel>> {
             let x = rest
                 .split_whitespace()
                 .map(|s| s.parse::<f32>())
-                .collect::<Result<Vec<_>, _>>()
+                .collect::<anyhow::Result<Vec<_>, _>>()
                 .with_context(|| format!("unparseable GA line in {}", path.display()))?;
 
             gathering_thresholds.push((x[0], x[1]));
@@ -63,7 +63,7 @@ pub fn parse_stats(path: impl AsRef<Path>) -> Result<HashMap<String, Gumbel>> {
             let x = rest
                 .split_whitespace()
                 .map(|s| s.parse::<f64>())
-                .collect::<Result<Vec<_>, _>>()
+                .collect::<anyhow::Result<Vec<_>, _>>()
                 .with_context(|| format!("unparseable STATS line in {}", path.display()))?;
 
             gumbels.push((x[0], x[1]))
@@ -106,7 +106,7 @@ pub fn parse_stats(path: impl AsRef<Path>) -> Result<HashMap<String, Gumbel>> {
 ///
 /// Completion is counted by `//`, not by `NAME`: stopping at the nth name would
 /// truncate that model before its emission lines and terminator.
-pub fn subset(src: impl AsRef<Path>, n: usize, dst: impl AsRef<Path>) -> Result<HashSet<String>> {
+pub fn subset(src: impl AsRef<Path>, n: usize, dst: impl AsRef<Path>) -> anyhow::Result<HashSet<String>> {
     let src = src.as_ref();
     let mut reader = BufReader::new(
         std::fs::File::open(src).with_context(|| format!("failed to open {}", src.display()))?,
@@ -159,7 +159,7 @@ pub fn explode(
     src: impl AsRef<Path>,
     names: &HashSet<String>,
     dst_dir: impl AsRef<Path>,
-) -> Result<usize> {
+) -> anyhow::Result<usize> {
     let src = src.as_ref();
     let dst_dir = dst_dir.as_ref();
     std::fs::create_dir_all(dst_dir)?;

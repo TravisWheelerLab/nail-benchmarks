@@ -2,7 +2,7 @@ use std::fs::File;
 use std::io::{BufWriter, Write};
 use std::path::{Path, PathBuf};
 
-use anyhow::{Context, Result};
+use anyhow::Context;
 use clap::{Parser, Subcommand};
 
 use crate::{dir, PAIRS};
@@ -32,13 +32,13 @@ pub struct CellsArgs {
 
 }
 
-pub fn main(cmd: Cmd) -> Result<()> {
+pub fn main(cmd: Cmd) -> anyhow::Result<()> {
     match cmd {
         Cmd::Cells(args) => cells(args),
     }
 }
 
-fn cells(args: CellsArgs) -> Result<()> {
+fn cells(args: CellsArgs) -> anyhow::Result<()> {
     let dir = dir();
 
     let results = args.results.unwrap_or_else(|| dir.join("results"));
@@ -59,8 +59,6 @@ fn cells(args: CellsArgs) -> Result<()> {
         let cell_frac = last_cell_frac(&tbl)
             .with_context(|| format!("failed to read a hit from {}", tbl.display()))?;
 
-        // the sequences are read rather than measured with esl-seqstat, which
-        // is what the old shell pipeline shelled out to
         let q_len = bioio::fasta::residue_len(dir.join(format!("query/{i}.query.fa")))?;
         let t_len = bioio::fasta::residue_len(dir.join(format!("target/{i}.target.fa")))?;
 
@@ -74,7 +72,7 @@ fn cells(args: CellsArgs) -> Result<()> {
 
 /// Cell fraction of the last hit in a nail table, which is the one these
 /// single-pair searches are about.
-fn last_cell_frac(path: &Path) -> Result<f64> {
+fn last_cell_frac(path: &Path) -> anyhow::Result<f64> {
     let tbl = bioio::tbl::nail::NailTable::from_path(path)
         .with_context(|| format!("failed to read {}", path.display()))?;
 

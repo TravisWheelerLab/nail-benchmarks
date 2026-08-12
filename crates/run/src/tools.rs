@@ -1,15 +1,16 @@
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
-use anyhow::{bail, Context, Result};
+use anyhow::{bail, Context};
 
 use crate::config::Run;
 use crate::exec::{self, Job, Numa, Timing};
 use bioio::split::{self, Kind};
 
-/// A query artifact a benchmark can offer. Tools ask for what they need and
-/// fail cleanly when a benchmark does not provide it — mgnify has no unaligned
-/// query fasta, long-seqs has no profiles.
+/// A query artifact a benchmark can offer.
+///
+/// Tools ask for what they need and fail cleanly when a benchmark does not
+/// provide it.
 #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Debug)]
 pub enum Asset {
     /// HMMER3 profiles.
@@ -36,8 +37,7 @@ impl Asset {
 /// One unit of work: a set of query artifacts searched against one target.
 ///
 /// The benchmark builds this list, so the runner never has to guess at a
-/// directory layout. pct-id yields one, mgnify one per shard, and long-seqs
-/// six zipped query/target pairs.
+/// directory layout.
 #[derive(Clone, Debug)]
 pub struct Search {
     /// Distinguishes outputs when a benchmark has more than one search;
@@ -61,7 +61,7 @@ impl Search {
         self
     }
 
-    pub fn asset(&self, asset: Asset) -> Result<&Path> {
+    pub fn asset(&self, asset: Asset) -> anyhow::Result<&Path> {
         self.assets
             .get(&asset)
             .map(PathBuf::as_path)
@@ -110,7 +110,7 @@ impl Bin {
         Bin { root }
     }
 
-    pub fn get(&self, name: &str) -> Result<PathBuf> {
+    pub fn get(&self, name: &str) -> anyhow::Result<PathBuf> {
         let path = self.root.join(name);
         if !path.exists() {
             bail!(
@@ -200,7 +200,7 @@ impl Ctx {
     }
 
     /// Scratch directory scoped to a name, cleared before use.
-    fn scratch(&self, name: &str) -> Result<PathBuf> {
+    fn scratch(&self, name: &str) -> anyhow::Result<PathBuf> {
         let dir = self.tmp.join(name);
         if dir.exists() {
             std::fs::remove_dir_all(&dir)?;
@@ -209,7 +209,7 @@ impl Ctx {
         Ok(dir)
     }
 
-    fn scratch_keep(&self, name: &str) -> Result<PathBuf> {
+    fn scratch_keep(&self, name: &str) -> anyhow::Result<PathBuf> {
         let dir = self.tmp.join(name);
         std::fs::create_dir_all(&dir)?;
         Ok(dir)
@@ -218,12 +218,12 @@ impl Ctx {
 
 /// Serialize work keyed on the path it produces.
 ///
-/// Every `prep` is "does this database exist, and build it if not". The paths
-/// are derived from the inputs, so two searches that share an input — the same
-/// query alignment against a forward and a reversed target, say — derive the
-/// same path. Run concurrently, both see it missing and both build it into the
-/// same place, leaving a database that is neither. The check and the build have
-/// to happen under one lock.
+/// Every `prep` asks whether a database exists and builds it if not. Paths are
+/// derived from the inputs, so two searches sharing an input derive the same
+/// path — the same query alignment against a forward and a reversed target,
+/// say. Run concurrently, both see it missing and both build into the same
+/// place, leaving a database that is neither. The check and the build have to
+/// happen under one lock.
 fn path_lock(path: &Path) -> std::sync::Arc<std::sync::Mutex<()>> {
     use std::collections::HashMap;
     use std::sync::{Arc, Mutex, OnceLock};
@@ -237,7 +237,7 @@ fn path_lock(path: &Path) -> std::sync::Arc<std::sync::Mutex<()>> {
 
 /// Run `build` unless `exists` already reports the artifact at `key` is there,
 /// with the check and the build held under one lock.
-fn build_once(key: &Path, exists: impl Fn() -> bool, build: impl FnOnce() -> Result<()>) -> Result<()> {
+fn build_once(key: &Path, exists: impl Fn() -> bool, build: impl FnOnce() -> anyhow::Result<()>) -> anyhow::Result<()> {
     let lock = path_lock(key);
     let _guard = lock.lock().expect("path lock poisoned");
 
@@ -253,20 +253,19 @@ pub struct Outcome {
     pub cmd: String,
 }
 
-/// Tools are stateless: everything they need comes from `Ctx`, `Search`, and
-/// `Run`, and their scratch is keyed per (run, search). That makes them safe to
-/// invoke from several threads at once, which `execute` relies on when a
-/// benchmark asks for more than one job in flight.
+/// Tools are stateless. Everything they need comes from `Ctx`, `Search` and
+/// `Run`, and their scratch is keyed per (run, search), so they are safe to
+/// invoke from several threads at once.
 pub trait Tool: Send + Sync {
     /// Build databases or indices this tool needs for a given search. Called
     /// once per (tool, search); implementations skip work that already exists
     /// so a shared query set is not rebuilt for every shard.
-    fn prep(&self, ctx: &Ctx, search: &Search) -> Result<()>;
+    fn prep(&self, ctx: &Ctx, search: &Search) -> anyhow::Result<()>;
 
-    fn run(&self, ctx: &Ctx, search: &Search, run: &Run) -> Result<Outcome>;
+    fn run(&self, ctx: &Ctx, search: &Search, run: &Run) -> anyhow::Result<Outcome>;
 }
 
-pub fn get(name: &str) -> Result<Box<dyn Tool + Send + Sync>> {
+pub fn get(name: &str) -> anyhow::Result<Box<dyn Tool + Send + Sync>> {
     Ok(match name {
         "nail" => Box::new(Nail),
         "hmmer" => Box::new(Hmmer),
@@ -288,7 +287,7 @@ enum Query {
     Sequence,
 }
 
-fn query_kind(run: &Run) -> Result<Query> {
+fn query_kind(run: &Run) -> anyhow::Result<Query> {
     let raw = run.var_str("query").with_context(|| {
         format!(
             "run {:?} has no `query` key; every run block needs one to pick its input",
@@ -306,7 +305,7 @@ fn query_kind(run: &Run) -> Result<Query> {
     }
 }
 
-fn sequence_only(run: &Run, tool: &str) -> Result<()> {
+fn sequence_only(run: &Run, tool: &str) -> anyhow::Result<()> {
     if query_kind(run)? != Query::Sequence {
         bail!(
             "{tool} has no profile mode; use query = \"seq\" in run {:?}",
@@ -332,11 +331,11 @@ fn slug(path: &Path) -> String {
 struct Nail;
 
 impl Tool for Nail {
-    fn prep(&self, _ctx: &Ctx, _search: &Search) -> Result<()> {
+    fn prep(&self, _ctx: &Ctx, _search: &Search) -> anyhow::Result<()> {
         Ok(())
     }
 
-    fn run(&self, ctx: &Ctx, search: &Search, run: &Run) -> Result<Outcome> {
+    fn run(&self, ctx: &Ctx, search: &Search, run: &Run) -> anyhow::Result<Outcome> {
         let query = match query_kind(run)? {
             Query::Profile => search.asset(Asset::Hmm)?,
             Query::Sequence => search.asset(Asset::Fasta)?,
@@ -378,11 +377,11 @@ impl Tool for Nail {
 struct Hmmer;
 
 impl Tool for Hmmer {
-    fn prep(&self, _ctx: &Ctx, _search: &Search) -> Result<()> {
+    fn prep(&self, _ctx: &Ctx, _search: &Search) -> anyhow::Result<()> {
         Ok(())
     }
 
-    fn run(&self, ctx: &Ctx, search: &Search, run: &Run) -> Result<Outcome> {
+    fn run(&self, ctx: &Ctx, search: &Search, run: &Run) -> anyhow::Result<Outcome> {
         let (program, query, split_kind) = match query_kind(run)? {
             Query::Profile => ("hmmsearch", search.asset(Asset::Hmm)?, Kind::Hmm),
             Query::Sequence => ("phmmer", search.asset(Asset::Fasta)?, Kind::Fasta),
@@ -390,9 +389,8 @@ impl Tool for Hmmer {
 
         let program = ctx.bin.get(program)?;
         let tbl = ctx.out(run, search, "tbl");
-        // per-domain output as well as per-sequence: analysis needs domain
-        // scores, and the old shell pipeline named a domtbl but never asked
-        // hmmsearch for one
+        // per-domain output as well as per-sequence, since analysis needs
+        // domain scores
         let dom = ctx.out(run, search, "domtbl");
 
         // hmmsearch/phmmer scale poorly past a few threads, so the query set is
@@ -471,7 +469,7 @@ impl Mmseqs {
             .join(format!("mmseqs/target-{}/db", slug(&search.target)))
     }
 
-    fn query_db(ctx: &Ctx, search: &Search, query: Query) -> Result<PathBuf> {
+    fn query_db(ctx: &Ctx, search: &Search, query: Query) -> anyhow::Result<PathBuf> {
         let (kind, source) = match query {
             Query::Profile => ("prf", search.asset(Asset::Sto)?),
             Query::Sequence => ("seq", search.asset(Asset::Fasta)?),
@@ -483,7 +481,7 @@ impl Mmseqs {
 }
 
 impl Tool for Mmseqs {
-    fn prep(&self, ctx: &Ctx, search: &Search) -> Result<()> {
+    fn prep(&self, ctx: &Ctx, search: &Search) -> anyhow::Result<()> {
         let mmseqs = ctx.bin.get("mmseqs")?;
 
         // target db is per-target, so it is rebuilt for every shard
@@ -542,7 +540,7 @@ impl Tool for Mmseqs {
         Ok(())
     }
 
-    fn run(&self, ctx: &Ctx, search: &Search, run: &Run) -> Result<Outcome> {
+    fn run(&self, ctx: &Ctx, search: &Search, run: &Run) -> anyhow::Result<Outcome> {
         let mmseqs = ctx.bin.get("mmseqs")?;
         let qdb = Self::query_db(ctx, search, query_kind(run)?)?;
         let tdb = Self::target_db(ctx, search);
@@ -602,7 +600,7 @@ impl Blast {
 }
 
 impl Tool for Blast {
-    fn prep(&self, ctx: &Ctx, search: &Search) -> Result<()> {
+    fn prep(&self, ctx: &Ctx, search: &Search) -> anyhow::Result<()> {
         let db = Self::db(ctx, search);
         build_once(&db, || db.with_extension("pdb").exists(), || {
             std::fs::create_dir_all(db.parent().expect("db path has a parent"))?;
@@ -619,7 +617,7 @@ impl Tool for Blast {
         })
     }
 
-    fn run(&self, ctx: &Ctx, search: &Search, run: &Run) -> Result<Outcome> {
+    fn run(&self, ctx: &Ctx, search: &Search, run: &Run) -> anyhow::Result<Outcome> {
         let tbl = ctx.out(run, search, "tbl");
 
         match query_kind(run)? {
@@ -712,7 +710,7 @@ impl Last {
 }
 
 impl Tool for Last {
-    fn prep(&self, ctx: &Ctx, search: &Search) -> Result<()> {
+    fn prep(&self, ctx: &Ctx, search: &Search) -> anyhow::Result<()> {
         let db = Self::db(ctx, search);
         build_once(&db, || db.with_extension("prj").exists(), || {
             std::fs::create_dir_all(db.parent().expect("db path has a parent"))?;
@@ -726,7 +724,7 @@ impl Tool for Last {
         })
     }
 
-    fn run(&self, ctx: &Ctx, search: &Search, run: &Run) -> Result<Outcome> {
+    fn run(&self, ctx: &Ctx, search: &Search, run: &Run) -> anyhow::Result<Outcome> {
         sequence_only(run, "last")?;
 
         // lastal writes its table to stdout
@@ -759,7 +757,7 @@ impl Diamond {
 }
 
 impl Tool for Diamond {
-    fn prep(&self, ctx: &Ctx, search: &Search) -> Result<()> {
+    fn prep(&self, ctx: &Ctx, search: &Search) -> anyhow::Result<()> {
         let db = Self::db(ctx, search);
         build_once(&db, || db.with_extension("dmnd").exists(), || {
             std::fs::create_dir_all(db.parent().expect("db path has a parent"))?;
@@ -775,7 +773,7 @@ impl Tool for Diamond {
         })
     }
 
-    fn run(&self, ctx: &Ctx, search: &Search, run: &Run) -> Result<Outcome> {
+    fn run(&self, ctx: &Ctx, search: &Search, run: &Run) -> anyhow::Result<Outcome> {
         sequence_only(run, "diamond")?;
 
         let job = ctx
@@ -803,7 +801,7 @@ impl Tool for Diamond {
 
 /// Run a setup step and fail loudly if it does not succeed. Prep steps are not
 /// part of the measured search, so their timing is discarded.
-fn check(job: &Job, numa: Option<&Numa>, what: &str) -> Result<()> {
+fn check(job: &Job, numa: Option<&Numa>, what: &str) -> anyhow::Result<()> {
     let timing = exec::run(job, numa)?;
     if timing.exit != 0 {
         bail!(
@@ -815,7 +813,7 @@ fn check(job: &Job, numa: Option<&Numa>, what: &str) -> Result<()> {
     Ok(())
 }
 
-fn concat(parts: &[PathBuf], out: &Path) -> Result<()> {
+fn concat(parts: &[PathBuf], out: &Path) -> anyhow::Result<()> {
     if let Some(dir) = out.parent() {
         std::fs::create_dir_all(dir)?;
     }

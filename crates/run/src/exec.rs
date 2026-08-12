@@ -4,14 +4,14 @@ use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::time::Instant;
 
-use anyhow::{bail, Context, Result};
+use anyhow::{bail, Context};
 
 use crate::config::Run;
 
 /// Resource usage for one child process, taken from `wait4`.
 ///
-/// This replaces the old `/usr/bin/time -v` wrapper: the numbers come straight
-/// out of the kernel rather than being formatted to text and regex-parsed back.
+/// The numbers come straight out of the kernel rather than being formatted to
+/// text and parsed back.
 #[derive(Clone, Copy, Debug)]
 pub struct Timing {
     pub wall_s: f64,
@@ -36,9 +36,11 @@ impl Timing {
     }
 }
 
-/// Where a job's stdout goes. Several tools (lastal, mmseqs convertalis) write
-/// their actual results to stdout rather than to a named output file, and
-/// psiblast is invoked once per family with its output appended to one table.
+/// Where a job's stdout goes.
+///
+/// Some tools write their actual results to stdout rather than to a named
+/// output file, and some are invoked repeatedly with output appended to one
+/// table.
 #[derive(Clone, Debug)]
 pub enum Output {
     Null,
@@ -88,15 +90,16 @@ impl Job {
         self
     }
 
-    /// Capture stderr rather than letting it reach the console. Tools are
-    /// chatty (diamond narrates every seed shape), but the output is the only
-    /// diagnostic when a run fails, so it is kept until the run succeeds.
+    /// Capture stderr rather than letting it reach the console.
+    ///
+    /// Tools are chatty, but their output is the only diagnostic when a run
+    /// fails, so it is kept until the run succeeds.
     pub fn stderr_to(mut self, path: impl Into<PathBuf>) -> Self {
         self.stderr = Output::Append(path.into());
         self
     }
 
-    /// The full argv as a single line, for the `cmd` column of runs.tsv.
+    /// The full argv as a single line, for the `cmd` column of runs.tbl.
     pub fn display(&self, numa: Option<&Numa>) -> String {
         let mut parts: Vec<String> = Vec::new();
         if let Some(numa) = numa {
@@ -107,7 +110,7 @@ impl Job {
         parts.join(" ")
     }
 
-    fn command(&self, numa: Option<&Numa>) -> Result<Command> {
+    fn command(&self, numa: Option<&Numa>) -> anyhow::Result<Command> {
         let mut cmd = match numa {
             Some(numa) => {
                 let prefix = numa.prefix();
@@ -127,7 +130,7 @@ impl Job {
     }
 }
 
-fn stdio(out: &Output) -> Result<Stdio> {
+fn stdio(out: &Output) -> anyhow::Result<Stdio> {
     Ok(match out {
         Output::Null => Stdio::null(),
         Output::File(path) => {
@@ -161,9 +164,8 @@ pub struct Numa {
 }
 
 impl Numa {
-    /// Pin to the first `threads` CPUs of `node`, mirroring the CPU list that
-    /// `set_numa_prefix` in the old util/scripts/run.sh computed via awk.
-    pub fn new(node: usize, threads: usize) -> Result<Self> {
+    /// Pin to the first `threads` CPUs of `node`.
+    pub fn new(node: usize, threads: usize) -> anyhow::Result<Self> {
         let out = Command::new("numactl")
             .arg("--hardware")
             .output()
@@ -216,7 +218,7 @@ impl Numa {
 }
 
 /// Run one job to completion, returning its resource usage.
-pub fn run(job: &Job, numa: Option<&Numa>) -> Result<Timing> {
+pub fn run(job: &Job, numa: Option<&Numa>) -> anyhow::Result<Timing> {
     let mut cmd = job.command(numa)?;
     let start = Instant::now();
 
@@ -229,8 +231,7 @@ pub fn run(job: &Job, numa: Option<&Numa>) -> Result<Timing> {
 }
 
 /// Run several jobs concurrently and aggregate them into a single Timing.
-/// This is the replacement for the `parallel` invocations in run.sh.
-pub fn run_concurrent(jobs: &[Job], numa: Option<&Numa>) -> Result<Timing> {
+pub fn run_concurrent(jobs: &[Job], numa: Option<&Numa>) -> anyhow::Result<Timing> {
     let start = Instant::now();
 
     let mut pids = Vec::with_capacity(jobs.len());
@@ -253,7 +254,7 @@ pub fn run_concurrent(jobs: &[Job], numa: Option<&Numa>) -> Result<Timing> {
 /// Reap a specific child via wait4 so we get its rusage in isolation.
 /// getrusage(RUSAGE_CHILDREN) would accumulate across siblings, which is wrong
 /// as soon as we run jobs concurrently.
-fn wait_timed(pid: libc::pid_t, start: Instant) -> Result<Timing> {
+fn wait_timed(pid: libc::pid_t, start: Instant) -> anyhow::Result<Timing> {
     let mut status: libc::c_int = 0;
     let mut usage: libc::rusage = unsafe { std::mem::zeroed() };
 
@@ -288,24 +289,20 @@ fn secs(tv: libc::timeval) -> f64 {
     tv.tv_sec as f64 + tv.tv_usec as f64 / 1_000_000.0
 }
 
-/// The single run table per results directory: one row per run, replacing the
-/// per-run `.time` and `.summary` files.
-///
-/// Columns are space-padded to the widest cell in each column and the header
-/// is commented out with a dashed separator, matching the layout nail uses for
-/// its own `.tbl` output. That means widths are not known until the last row
-/// arrives, so rows are kept in memory and the whole file is rewritten after
-/// each run. The file on disk therefore stays complete and correctly aligned
-/// even if a long run is interrupted partway through.
 /// How often the table is rewritten while a run is in progress.
 ///
 /// Column widths are not known until the last row, so every rewrite emits the
-/// whole file. Doing that per row is quadratic in bytes written, which a
-/// thousand-shard sweep already feels and a per-family calibration pass would
-/// make ruinous. Rewriting on a timer instead bounds the loss from a kill to
-/// whatever landed in the last few seconds.
+/// whole file. Doing that per row is quadratic in bytes written. Rewriting on a
+/// timer instead bounds the loss from a kill to the last few seconds.
 const FLUSH_EVERY: std::time::Duration = std::time::Duration::from_secs(5);
 
+/// The single run table per results directory, one row per run.
+///
+/// Columns are space-padded to the widest cell and the header is commented out
+/// with a dashed separator, matching the layout nail uses for its own `.tbl`
+/// output. Widths are not known until the last row arrives, so rows are kept in
+/// memory and the whole file is rewritten as it goes, leaving the file on disk
+/// complete and aligned even if a long run is interrupted.
 pub struct RunsTable {
     path: PathBuf,
     sweep_columns: Vec<String>,
@@ -316,10 +313,11 @@ pub struct RunsTable {
 }
 
 impl RunsTable {
-    /// Create the table at an explicit path. It does not have to live beside
-    /// the hit tables — mgnify keeps it above its results directory so it is
-    /// not wiped when a run clears results.
-    pub fn create_at(path: impl AsRef<Path>, sweep_columns: Vec<String>) -> Result<Self> {
+    /// Create the table at an explicit path.
+    ///
+    /// It does not have to live beside the hit tables — putting it above them
+    /// keeps it from being wiped when a run clears results.
+    pub fn create_at(path: impl AsRef<Path>, sweep_columns: Vec<String>) -> anyhow::Result<Self> {
         let path = path.as_ref().to_path_buf();
         if let Some(dir) = path.parent() {
             std::fs::create_dir_all(dir)?;
@@ -356,7 +354,7 @@ impl RunsTable {
         target: &str,
         timing: &Timing,
         cmd: &str,
-    ) -> Result<()> {
+    ) -> anyhow::Result<()> {
         let mut row: Vec<String> = vec![
             run.name.clone(),
             run.tool.clone(),
@@ -394,7 +392,7 @@ impl RunsTable {
 
     /// Write the table out unconditionally. Call this when the run ends, so the
     /// file reflects every row rather than the last timed rewrite.
-    pub fn flush(&mut self) -> Result<()> {
+    pub fn flush(&mut self) -> anyhow::Result<()> {
         std::fs::write(&self.path, render(&self.header, &self.rows))
             .with_context(|| format!("failed to write {}", self.path.display()))?;
 

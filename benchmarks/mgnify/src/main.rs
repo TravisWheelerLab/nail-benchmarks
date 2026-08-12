@@ -10,7 +10,7 @@ mod parse;
 
 use std::path::PathBuf;
 
-use anyhow::{bail, Context, Result};
+use anyhow::{bail, Context};
 use clap::{Parser, Subcommand};
 
 use run::{Asset, Bin, Ctx, Numa, Options, Search};
@@ -75,7 +75,7 @@ pub struct RunArgs {
 
 }
 
-fn main() -> Result<()> {
+fn main() -> anyhow::Result<()> {
     match Cli::parse().command {
         Command::Build(args) => build::main(args),
         Command::Run(args) => run_main(args),
@@ -96,7 +96,7 @@ fn count_shards(dir: &std::path::Path) -> usize {
 }
 
 /// Parse `N` or `FIRST-LAST` into an inclusive range.
-fn shard_range(spec: &str) -> Result<(usize, usize)> {
+fn shard_range(spec: &str) -> anyhow::Result<(usize, usize)> {
     let (a, b) = match spec.split_once('-') {
         Some((a, b)) => (a.trim(), b.trim()),
         None => (spec.trim(), spec.trim()),
@@ -119,7 +119,7 @@ fn shard_range(spec: &str) -> Result<(usize, usize)> {
     Ok((a, b))
 }
 
-fn run_main(args: RunArgs) -> Result<()> {
+fn run_main(args: RunArgs) -> anyhow::Result<()> {
     let repo = build::repo();
     let dir = build::dir();
 

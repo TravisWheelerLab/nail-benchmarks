@@ -1,9 +1,8 @@
-//! The generic half of the benchmark harness: expand a run matrix from a
-//! config, execute it against a list of searches, and record what happened.
+//! Expand a run matrix from a config, execute it against a list of searches,
+//! and record what happened.
 //!
-//! This library knows nothing about any particular benchmark. Callers supply
-//! the searches ([`Search`]) and the tool binary location; how those were
-//! constructed is the benchmark's business.
+//! Callers supply the searches and the tool binary location. Nothing here knows
+//! about any particular benchmark.
 
 pub mod config;
 pub mod exec;
@@ -15,7 +14,7 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Mutex;
 use std::time::{Duration, Instant};
 
-use anyhow::{bail, Context, Result};
+use anyhow::{bail, Context};
 use rayon::iter::{IntoParallelRefIterator, ParallelIterator};
 
 /// How often a parallel execution reports progress.
@@ -26,12 +25,10 @@ pub use exec::{Numa, RunsTable};
 pub use table::Runs;
 pub use tools::{Asset, Bin, Ctx, Search};
 
-/// The repository root, derived from a benchmark crate's manifest directory.
+/// Finds the repository root from a benchmark crate's manifest directory.
 ///
-/// Call as `run::repo(env!("CARGO_MANIFEST_DIR"))`: benchmark crates live at
-/// `<repo>/benchmarks/<name>`, so the root is two levels up. This is fixed at
-/// compile time, which is fine because the binaries are built and run out of
-/// the same checkout.
+/// Call it as `run::repo(env!("CARGO_MANIFEST_DIR"))`. Benchmark crates live
+/// at `<repo>/benchmarks/<name>`, so the root is two levels up.
 pub fn repo(manifest_dir: &str) -> std::path::PathBuf {
     std::path::Path::new(manifest_dir)
         .parent()
@@ -46,10 +43,11 @@ pub struct Options {
     pub filter: Option<String>,
     pub threads: Option<usize>,
     pub numa_node: Option<usize>,
-    /// How many searches to keep in flight at once. One search at a time is
-    /// right when each is large enough to use every core; a calibration pass
-    /// made of many small searches wants the parallelism on the outside
-    /// instead, with `threads = 1` per search.
+    /// How many searches to keep in flight at once.
+    ///
+    /// One at a time suits searches that are each large enough to use every
+    /// core. Many small searches instead want the parallelism here, with
+    /// `threads = 1` on each search.
     pub jobs: usize,
     pub dry_run: bool,
 }
@@ -67,7 +65,7 @@ impl Default for Options {
 }
 
 /// Expand a config's run matrix, applying overrides and any name filter.
-pub fn plan(config: &Config, opts: &Options) -> Result<Vec<Run>> {
+pub fn plan(config: &Config, opts: &Options) -> anyhow::Result<Vec<Run>> {
     let mut runs = config.expand()?;
 
     if let Some(pattern) = &opts.filter {
@@ -90,25 +88,27 @@ pub fn plan(config: &Config, opts: &Options) -> Result<Vec<Run>> {
 }
 
 /// Execute every run against every search, writing one row per (run, search)
-/// into the results table.
+/// into the results table. Runs are the outer loop, so a tool's numbers arrive
+/// together rather than interleaved shard by shard.
 ///
-/// Runs are the outer loop: one configuration sweeps every search before the
-/// next begins, so a tool's numbers arrive together rather than interleaved
-/// shard by shard.
-///
-/// `jobs` is how many searches run concurrently, each with its own `threads`.
-/// Above one, the per-row timings stop being benchmark measurements — the
-/// children are competing for the same cores — so treat them as a record of
-/// what ran rather than as numbers to plot.
+/// With `jobs` above one the children compete for the same cores, so the
+/// per-row timings become a record of what ran rather than a measurement of it.
 pub fn execute(
     config: &Config,
     runs: &[Run],
     searches: &[Search],
     ctx: &Ctx,
     jobs: usize,
-) -> Result<()> {
+) -> anyhow::Result<()> {
     if searches.is_empty() {
         bail!("no searches to run");
+    }
+
+    // labels key the prep set and the scratch directories, so a collision
+    // would have two searches clearing each other's working directory
+    let labels: HashSet<&str> = searches.iter().map(|s| s.label.as_str()).collect();
+    if labels.len() != searches.len() {
+        bail!("searches must have distinct labels");
     }
 
     let jobs = jobs.max(1);
@@ -120,13 +120,15 @@ pub fn execute(
     let failed = AtomicUsize::new(0);
     let errored = Mutex::new(Vec::<String>::new());
 
-    // (tool, search) pairs already prepared. Tracked across the whole execution
-    // rather than per outer iteration, so a later run reuses the databases an
-    // earlier one built; tools additionally skip work whose output exists.
+    // what: the set of (tool, search) pairs whose prep has been claimed. these
+    //       are tracked across the whole execution rather than per outer
+    //       iteration.
     //
-    // Claiming a key and doing the prep are not atomic together, which is safe
-    // only because runs are sequential and each search appears once per run, so
-    // no two threads ever contend for the same key.
+    // why:  a later run then reuses the databases an earlier one built.
+    //
+    // note: nothing waits on a claim. a thread that loses one goes straight to
+    //       run(), so this holds up only while no two searches in a run share
+    //       a label. tools guard their own shared artifacts with build_once.
     let prepped = Mutex::new(HashSet::<(String, String)>::new());
 
     // when several searches are in flight, per-execution chatter is noise;

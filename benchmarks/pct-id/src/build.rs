@@ -3,7 +3,7 @@ use std::fs::{self, File};
 use std::io::{BufWriter, Write};
 use std::path::{Path, PathBuf};
 
-use anyhow::{bail, Context, Result};
+use anyhow::{bail, Context};
 use clap::Parser;
 
 use bioio::fasta::{Fasta, FastaRecord};
@@ -15,9 +15,6 @@ use rand::SeedableRng;
 
 use run::exec::Job;
 use run::Bin;
-
-/// This benchmark's directory, relative to the repository root.
-
 
 /// Decoys per true pair in the target database.
 const DECOY_RATIO: usize = 100;
@@ -50,7 +47,7 @@ pub struct Args {
     pub size: String,
 
     /// Benchmark pairs to sample; 0 uses every pair that survives filtering.
-    /// The target database gets 100 decoys per pair on top of this.
+    /// Decoys are added to the target database on top of this.
     #[arg(short, long, default_value_t = 50)]
     pub pairs: usize,
 
@@ -80,7 +77,7 @@ pub struct Args {
 
 }
 
-pub fn main(args: Args) -> Result<()> {
+pub fn main(args: Args) -> anyhow::Result<()> {
     let repo = run::repo(env!("CARGO_MANIFEST_DIR"));
     let dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
 
@@ -154,7 +151,7 @@ pub fn main(args: Args) -> Result<()> {
     Ok(())
 }
 
-fn run_profmark(bin: &Bin, pm_dir: &Path, src_sto: &Path, args: &Args) -> Result<()> {
+fn run_profmark(bin: &Bin, pm_dir: &Path, src_sto: &Path, args: &Args) -> anyhow::Result<()> {
     println!("running create-profmark (this takes a while)...");
     fs::create_dir_all(pm_dir)?;
 
@@ -181,7 +178,7 @@ fn run_profmark(bin: &Bin, pm_dir: &Path, src_sto: &Path, args: &Args) -> Result
     Ok(())
 }
 
-fn check(job: &Job, what: &str) -> Result<()> {
+fn check(job: &Job, what: &str) -> anyhow::Result<()> {
     let timing = run::exec::run(job, None)?;
     if timing.exit != 0 {
         bail!("{what} failed with exit code {}", timing.exit);
@@ -199,9 +196,8 @@ struct Pair {
 
 /// Assemble a benchmark from a profmark train/test split.
 ///
-/// Ported from the standalone `pid` binary, with one behavioural change: the
-/// RNG is seeded from the config rather than from entropy, so a given size and
-/// seed reproduce the same benchmark.
+/// The RNG is seeded from the config rather than from entropy, so a given size
+/// and seed reproduce the same benchmark.
 #[allow(clippy::too_many_arguments)]
 fn assemble(
     bench_dir: &Path,
@@ -211,7 +207,7 @@ fn assemble(
     src_fa_path: &Path,
     max_pairs: Option<usize>,
     seed: u64,
-) -> Result<()> {
+) -> anyhow::Result<()> {
     println!("loading alignments...");
     let mut query_sto =
         Stockholm::from_path(query_sto_path).context("failed to parse query sto")?;

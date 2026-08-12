@@ -9,6 +9,7 @@ path = "src/main.rs"
 
 [dependencies]
 bioio = { workspace = true }
+feisty = { workspace = true }
 run = { workspace = true }
 
 anyhow = { workspace = true }

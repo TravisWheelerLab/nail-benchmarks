@@ -2,7 +2,7 @@ use std::collections::HashSet;
 use std::fmt;
 use std::path::Path;
 
-use anyhow::{bail, Context, Result};
+use anyhow::{bail, Context};
 use indexmap::IndexMap;
 use serde::Deserialize;
 
@@ -110,7 +110,7 @@ pub struct Run {
     pub args: Vec<String>,
     pub threads: usize,
     pub threads_per: Option<usize>,
-    /// The concrete sweep assignment for this run, for the runs.tsv columns.
+    /// The concrete sweep assignment for this run, for the runs.tbl columns.
     pub vars: IndexMap<String, Scalar>,
 }
 
@@ -126,7 +126,7 @@ impl Run {
 }
 
 impl Config {
-    pub fn from_path(path: impl AsRef<Path>) -> Result<Self> {
+    pub fn from_path(path: impl AsRef<Path>) -> anyhow::Result<Self> {
         let path = path.as_ref();
         let text = std::fs::read_to_string(path)
             .with_context(|| format!("failed to read config: {}", path.display()))?;
@@ -136,9 +136,8 @@ impl Config {
     /// Load a config whose run blocks live under a name other than `[[run]]`.
     ///
     /// One file can then describe several independent stages that share a
-    /// `[defaults]` table — mgnify's calibration has a cheap recruitment sweep
-    /// and an exhaustive per-family pass, at different parameterizations.
-    pub fn from_path_as(path: impl AsRef<Path>, block: &str) -> Result<Self> {
+    /// `[defaults]` table.
+    pub fn from_path_as(path: impl AsRef<Path>, block: &str) -> anyhow::Result<Self> {
         let path = path.as_ref();
         let text = std::fs::read_to_string(path)
             .with_context(|| format!("failed to read config: {}", path.display()))?;
@@ -164,7 +163,7 @@ impl Config {
     }
 
     /// Every run in the config, with sweeps expanded.
-    pub fn expand(&self) -> Result<Vec<Run>> {
+    pub fn expand(&self) -> anyhow::Result<Vec<Run>> {
         let mut out = Vec::new();
         for block in &self.runs {
             out.extend(
@@ -186,10 +185,10 @@ impl Config {
 
     /// Union of every sweep key across all blocks, minus `query`, which gets a
     /// fixed column of its own because every run has one. These become the
-    /// variable middle columns of runs.tsv.
+    /// variable middle columns of runs.tbl.
     ///
-    /// serde's flatten does not preserve the order keys appear in the TOML, so
-    /// these are sorted for a stable, predictable header.
+    /// serde's flatten does not preserve TOML key order, so these are sorted to
+    /// keep the header stable.
     pub fn sweep_columns(&self) -> Vec<String> {
         let mut cols = Vec::new();
         let mut seen = HashSet::new();
@@ -206,7 +205,7 @@ impl Config {
 }
 
 impl RunBlock {
-    fn expand(&self, defaults: &Defaults) -> Result<Vec<Run>> {
+    fn expand(&self, defaults: &Defaults) -> anyhow::Result<Vec<Run>> {
         let threads = self.threads.unwrap_or(defaults.threads);
 
         let keys: Vec<&String> = self.sweep.keys().collect();
@@ -269,7 +268,7 @@ fn cartesian<'a>(axes: &[&'a [Scalar]]) -> Vec<Vec<&'a Scalar>> {
 
 /// Substitute `{key}` occurrences. An unknown key is an error rather than a
 /// silent passthrough, so a typo in a config surfaces before anything runs.
-fn interpolate(template: &str, vars: &IndexMap<String, Scalar>) -> Result<String> {
+fn interpolate(template: &str, vars: &IndexMap<String, Scalar>) -> anyhow::Result<String> {
     let mut out = String::with_capacity(template.len());
     let mut rest = template;
 

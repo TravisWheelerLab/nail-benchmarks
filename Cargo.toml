@@ -12,6 +12,7 @@ members = [
 
 [workspace.dependencies]
 bioio = { path = "crates/bioio" }
+feisty = { path = "crates/feisty" }
 run = { path = "crates/run" }
 
 anyhow = "1.0.99"

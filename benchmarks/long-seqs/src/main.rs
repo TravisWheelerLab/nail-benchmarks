@@ -8,7 +8,7 @@ mod parse;
 
 use std::path::PathBuf;
 
-use anyhow::{bail, Result};
+use anyhow::bail;
 use clap::{Parser, Subcommand};
 
 use run::{Asset, Bin, Ctx, Numa, Options, Search};
@@ -57,14 +57,14 @@ pub struct RunArgs {
 
 }
 
-fn main() -> Result<()> {
+fn main() -> anyhow::Result<()> {
     match Cli::parse().command {
         Command::Run(args) => run_main(args),
         Command::Parse(cmd) => parse::main(cmd),
     }
 }
 
-fn run_main(args: RunArgs) -> Result<()> {
+fn run_main(args: RunArgs) -> anyhow::Result<()> {
     let repo = run::repo(env!("CARGO_MANIFEST_DIR"));
     let dir = dir();
 

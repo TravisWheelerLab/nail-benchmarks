@@ -207,8 +207,6 @@ fn table(args: TableArgs) -> anyhow::Result<()> {
         tuples.push((prefix_tokens, search_type.to_string(), map));
     }
 
-    // ---
-
     fn cmp_component(a: &str, b: &str) -> std::cmp::Ordering {
         let na = a.chars().find(|c| c.is_ascii_digit()).map(|_| {
             a.chars()
@@ -244,8 +242,6 @@ fn table(args: TableArgs) -> anyhow::Result<()> {
     }
 
     tuples.sort_by(|a, b| a.1.cmp(&b.1).then_with(|| cmp_keys(&a.0, &b.0)));
-
-    // ---
 
     let n_rows = tuples.iter().map(|(p, _, _)| p.len()).max().unwrap();
 
@@ -802,7 +798,6 @@ impl RecallData {
                     f64::INFINITY
                 }
             };
-            // println!("{} {:.3e}", tbl.name, e_value_threshold);
             let mut bin_cnts = vec![0usize; self.bin_sizes.len()];
             tbl.positives
                 .iter()

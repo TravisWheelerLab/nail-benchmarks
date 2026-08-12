@@ -1,21 +1,15 @@
 //! Percent-identity benchmark: profmark-style ROC over Pfam families embedded
 //! in a Swissprot decoy background.
-//!
-//! Construction and analysis live here because they are specific to this
-//! benchmark; only execution is shared, via the `run` library.
 
 mod build;
 mod parse;
 
 use std::path::PathBuf;
 
-use anyhow::{bail, Result};
+use anyhow::bail;
 use clap::{Parser, Subcommand};
 
 use run::{Asset, Bin, Ctx, Numa, Options, Search};
-
-/// This benchmark's directory, relative to the repository root.
-
 
 #[derive(Parser)]
 #[command(name = "pct-id", about = "percent-identity benchmark")]
@@ -59,7 +53,7 @@ pub struct RunArgs {
 
 }
 
-fn main() -> Result<()> {
+fn main() -> anyhow::Result<()> {
     match Cli::parse().command {
         Command::Build(args) => build::main(args),
         Command::Run(args) => run_main(args),
@@ -67,7 +61,7 @@ fn main() -> Result<()> {
     }
 }
 
-fn run_main(args: RunArgs) -> Result<()> {
+fn run_main(args: RunArgs) -> anyhow::Result<()> {
     let root = run::repo(env!("CARGO_MANIFEST_DIR"));
     let dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
 
