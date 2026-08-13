@@ -17,6 +17,7 @@
 
 mod cmd;
 mod execute;
+mod label;
 mod pipeline;
 mod progress;
 mod sink;
@@ -25,8 +26,8 @@ mod table;
 
 pub use cmd::{Cmd, Output};
 pub use execute::{Status, Timing, execute};
-pub use pipeline::Pipeline;
+pub use pipeline::{Pipeline, PipelineBuilder};
 pub use progress::Progress;
 pub use sink::Sink;
-pub use step::{OnError, Step};
+pub use step::{OnError, Step, Strategy};
 pub use table::{Headers, Mode, Table};

@@ -1,24 +1,41 @@
 //! The list of steps, and running them.
 
+use std::path::PathBuf;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::mpsc;
 use std::time::Instant;
 
-use crate::cmd::Cmd;
-use crate::execute::{Status, execute};
+use anyhow::Context;
+
+use crate::cmd::{Cmd, Output};
+use crate::execute::{Status, execute, stamp};
+use crate::label;
 use crate::sink::Sink;
 use crate::step::{Step, Strategy};
 
-/// A list of steps and somewhere to send what happens.
-#[derive(Default)]
-pub struct Pipeline {
+/// Where failure logs go unless told otherwise.
+const STDERR_DIR: &str = "stderr";
+
+/// A pipeline under construction.
+pub struct PipelineBuilder {
     steps: Vec<Step>,
     sinks: Sinks,
+    stderr_dir: Option<PathBuf>,
 }
 
-impl Pipeline {
+impl Default for PipelineBuilder {
+    fn default() -> PipelineBuilder {
+        PipelineBuilder {
+            steps: Vec::new(),
+            sinks: Sinks::default(),
+            stderr_dir: Some(PathBuf::from(STDERR_DIR)),
+        }
+    }
+}
+
+impl PipelineBuilder {
     pub fn new() -> Self {
-        Pipeline::default()
+        PipelineBuilder::default()
     }
 
     /// Add a step. A bare [`Cmd`](crate::Cmd) counts as one, so `.step(cmd)`
@@ -35,14 +52,82 @@ impl Pipeline {
         self
     }
 
+    /// Keep failure logs somewhere other than `stderr/`. Each run gets its own
+    /// directory under this one, named after the time it was built.
+    pub fn stderr_dir(mut self, dir: impl Into<PathBuf>) -> Self {
+        self.stderr_dir = Some(dir.into());
+        self
+    }
+
+    /// Do not keep stderr from failures at all. Commands that route their own
+    /// stderr are unaffected either way.
+    pub fn no_stderr(mut self) -> Self {
+        self.stderr_dir = None;
+        self
+    }
+
+    /// Settle everything that can be settled before anything runs: number the
+    /// steps and their commands, and decide where a failure's stderr would go.
+    ///
+    /// Nothing here touches the disk, so building and then only looking — see
+    /// [`Pipeline::dry_run`] — leaves nothing behind.
+    pub fn build(self) -> Pipeline {
+        let PipelineBuilder {
+            mut steps,
+            sinks,
+            stderr_dir,
+        } = self;
+
+        let dir = stderr_dir.map(|dir| dir.join(stamp()));
+        let mut wanted = false;
+
+        for (s, step) in steps.iter_mut().enumerate() {
+            let s = s + 1;
+            step.index = Some(s);
+            let step_part = label::filename(s, step.name.as_deref());
+
+            for (c, cmd) in step.cmds_mut().iter_mut().enumerate() {
+                let c = c + 1;
+                cmd.index = Some((s, c));
+
+                // a command that has not said where its stderr goes gets a file
+                // of its own, which it only keeps if it fails
+                if let Some(dir) = &dir
+                    && cmd.stderr == Output::Null
+                {
+                    let cmd_part = label::filename(c, cmd.name.as_deref());
+                    cmd.stderr =
+                        Output::OnFailure(dir.join(format!("{step_part}.{cmd_part}.stderr")));
+                    wanted = true;
+                }
+            }
+        }
+
+        Pipeline {
+            steps,
+            sinks,
+            stderr_dir: if wanted { dir } else { None },
+        }
+    }
+}
+
+/// A pipeline with everything decided, ready to run.
+pub struct Pipeline {
+    steps: Vec<Step>,
+    sinks: Sinks,
+    /// This run's directory for failure logs, if any command is going to use it.
+    stderr_dir: Option<PathBuf>,
+}
+
+impl Pipeline {
     /// Print what [`run`](Self::run) would run, without running it. Shows the
     /// exact argv, so a typo in a generated flag is visible before anything
     /// takes an hour to fail.
     pub fn dry_run(&self) {
         for step in &self.steps {
-            println!("# {}", step.name());
+            println!("# {}", step.label());
             for cmd in step.cmds() {
-                println!("{}", cmd.line());
+                println!("{} {}", cmd.label(), cmd.line());
             }
         }
     }
@@ -61,7 +146,15 @@ impl Pipeline {
         let Pipeline {
             mut steps,
             mut sinks,
+            stderr_dir,
         } = self;
+
+        // a redirect target has to exist before anything spawns, so this cannot
+        // wait for the first failure
+        if let Some(dir) = &stderr_dir {
+            std::fs::create_dir_all(dir)
+                .with_context(|| format!("failed to create {}", dir.display()))?;
+        }
 
         sinks.start(&steps)?;
 
@@ -86,7 +179,17 @@ impl Pipeline {
             sinks.step_done(step)?;
         }
 
-        sinks.finish()
+        sinks.finish()?;
+
+        // nothing failed loudly, so there is nothing in there; both of these do
+        // nothing if the directory has anything in it
+        if let Some(dir) = &stderr_dir {
+            std::fs::remove_dir(dir).ok();
+            if let Some(parent) = dir.parent() {
+                std::fs::remove_dir(parent).ok();
+            }
+        }
+        Ok(())
     }
 }
 
@@ -137,7 +240,7 @@ fn batch(step: &mut Step, jobs: usize, sinks: &mut Sinks) -> anyhow::Result<()> 
     // the workers run against a copy, which leaves the step free for the main
     // thread to write results into; cloning a Cmd costs nothing next to
     // spawning a process
-    let plan: Vec<Cmd> = step.cmds().to_vec();
+    let copies: Vec<Cmd> = step.cmds().to_vec();
     let next = AtomicUsize::new(0);
     let (tx, rx) = mpsc::channel();
 
@@ -145,14 +248,14 @@ fn batch(step: &mut Step, jobs: usize, sinks: &mut Sinks) -> anyhow::Result<()> 
         for _ in 0..jobs {
             let tx = tx.clone();
             let next = &next;
-            let plan = &plan;
+            let copies = &copies;
             scope.spawn(move || {
                 loop {
                     let k = next.fetch_add(1, Ordering::Relaxed);
-                    if k >= plan.len() {
+                    if k >= copies.len() {
                         break;
                     }
-                    let mut cmd = plan[k].clone();
+                    let mut cmd = copies[k].clone();
                     execute(&mut cmd);
                     // a closed channel means the main thread gave up on us
                     if tx.send((k, cmd.status)).is_err() {

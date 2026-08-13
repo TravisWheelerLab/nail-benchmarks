@@ -2,8 +2,9 @@
 
 use std::fs::{File, OpenOptions};
 use std::io;
+use std::path::Path;
 use std::process::{Command, Stdio};
-use std::time::Instant;
+use std::time::{Instant, SystemTime, UNIX_EPOCH};
 
 use anyhow::Context;
 
@@ -72,7 +73,47 @@ pub fn execute(cmd: &mut Cmd) {
         Ok(timing) => Status::Finished(timing),
         Err(e) => Status::Failed(format!("{e:#}")),
     };
+    if let Output::OnFailure(path) = &cmd.stderr {
+        tidy(path, &status);
+    }
     cmd.status = status;
+}
+
+/// Keep a failure's stderr and nothing else.
+///
+/// An empty file is not worth keeping either way, which is also how a command
+/// that never spawned cleans up after itself: the file got created, the process
+/// never wrote to it.
+fn tidy(path: &Path, status: &Status) {
+    let keep = status.failed() && std::fs::metadata(path).is_ok_and(|m| m.len() > 0);
+    if !keep {
+        std::fs::remove_file(path).ok();
+    }
+}
+
+/// Local time as `20260813-142207`, for naming a directory after the run that
+/// made it. Falls back to epoch seconds if the C library declines.
+pub(crate) fn stamp() -> String {
+    let secs = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_secs();
+    let now = secs as libc::time_t;
+    let mut tm: libc::tm = unsafe { std::mem::zeroed() };
+    let mut buf = [0u8; 32];
+
+    let written = unsafe {
+        if libc::localtime_r(&now, &mut tm).is_null() {
+            return secs.to_string();
+        }
+        libc::strftime(
+            buf.as_mut_ptr().cast(),
+            buf.len(),
+            c"%Y%m%d-%H%M%S".as_ptr(),
+            &tm,
+        )
+    };
+    String::from_utf8_lossy(&buf[..written]).into_owned()
 }
 
 fn spawn_and_wait(cmd: &Cmd) -> anyhow::Result<Timing> {
@@ -101,7 +142,7 @@ fn stdio(out: &Output) -> anyhow::Result<Stdio> {
     Ok(match out {
         Output::Null => Stdio::null(),
         Output::Inherit => Stdio::inherit(),
-        Output::File(path) => {
+        Output::File(path) | Output::OnFailure(path) => {
             make_dir(path)?;
             let file = File::create(path)
                 .with_context(|| format!("failed to create {}", path.display()))?;

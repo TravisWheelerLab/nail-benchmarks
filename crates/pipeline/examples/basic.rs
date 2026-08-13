@@ -2,7 +2,7 @@
 //!
 //! `cargo run -p pipeline --example basic`
 
-use pipeline::{Cmd, OnError, Output, Pipeline, Progress, Step, Table};
+use pipeline::{Cmd, OnError, PipelineBuilder, Progress, Step, Table};
 
 fn main() -> anyhow::Result<()> {
     let dir = std::env::temp_dir().join("pipeline-basic");
@@ -14,42 +14,52 @@ fn main() -> anyhow::Result<()> {
     // clock comes out near double one command's, and the summed user time shows
     // what the parallelism bought
     let burns = (1..=4).map(|i| {
-        Cmd::new(format!("burn-{i}"), "/bin/sh")
-            .args(["-c", "seq 1 20000000 > /dev/null"])
-            .label("job", i)
+        Cmd::new("/bin/sh")
+            .name(format!("burn-{i}"))
+            .arg("-c")
+            // arg takes anything printable, so the count needs no to_string
+            .arg(format_args!("seq 1 {} > /dev/null", i * 5_000_000))
+            .field("job", i)
     });
 
-    Pipeline::new()
+    PipelineBuilder::new()
         // a bare Cmd is a step of one
         .step(
-            Cmd::new("make-data", "/bin/sh")
+            Cmd::new("/bin/sh")
+                .name("make-data")
                 .args(["-c", "seq 1 2000"])
-                .stdout(Output::File(data.clone()))
+                .stdout_to(&data)
                 .tag("setup"),
         )
-        .step(Step::batch("burn", 2, burns))
+        .step(Step::batch(2, burns).name("burn"))
         .step(
-            Step::serial(
-                "count",
-                [
-                    Cmd::new("lines", "/usr/bin/wc")
-                        .arg("-l")
-                        .path(&data)
-                        .stdout(Output::File(dir.join("lines")))
-                        .label("mode", "lines"),
-                    Cmd::new("bytes", "/usr/bin/wc")
-                        .arg("-c")
-                        .path(&data)
-                        .stdout(Output::File(dir.join("bytes")))
-                        .label("mode", "bytes"),
-                    Cmd::new("missing-tool", "/no/such/tool"),
-                ],
-            )
+            Step::serial([
+                Cmd::new("/usr/bin/wc")
+                    .name("lines")
+                    .arg("-l")
+                    .path(&data)
+                    .stdout_to(dir.join("lines"))
+                    .field("mode", "lines"),
+                Cmd::new("/usr/bin/wc")
+                    .name("bytes")
+                    .arg("-c")
+                    .path(&data)
+                    .stdout_to(dir.join("bytes"))
+                    .field("mode", "bytes"),
+                // no name: it goes by its number alone
+                Cmd::new("/no/such/tool"),
+                // fails with something to say, so its stderr is kept
+                Cmd::new("/bin/sh")
+                    .name("boom")
+                    .args(["-c", "echo 'no such database' >&2; exit 3"]),
+            ])
+            .name("count")
             // one bad command should not cost us the rest of the matrix
             .on_error(OnError::Continue),
         )
         .sink(Progress::new())
         .sink(Table::new(&table))
+        .build()
         .run()?;
 
     println!("\n{}", table.display());

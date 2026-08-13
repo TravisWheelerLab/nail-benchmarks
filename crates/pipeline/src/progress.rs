@@ -9,8 +9,6 @@ use crate::table::format_bytes;
 /// Prints a line per command as it lands, under a header per step.
 #[derive(Debug, Default)]
 pub struct Progress {
-    steps: usize,
-    index: usize,
     /// Whether the current step's header has been printed. The header waits for
     /// the step's first command so it needs no hook of its own.
     titled: bool,
@@ -23,19 +21,13 @@ impl Progress {
 }
 
 impl Sink for Progress {
-    fn start(&mut self, steps: &[Step]) -> anyhow::Result<()> {
-        self.steps = steps.len();
-        Ok(())
-    }
-
     fn record(&mut self, step: &Step, cmd: &Cmd) -> anyhow::Result<()> {
         if !self.titled {
-            self.index += 1;
             self.titled = true;
-            eprintln!("[{}/{}] {}", self.index, self.steps, step.name());
+            eprintln!("{}", step.label());
         }
 
-        let name = cmd.name();
+        let name = cmd.label();
         eprintln!(
             "{}",
             match cmd.status() {
@@ -55,6 +47,15 @@ impl Sink for Progress {
                 ),
             }
         );
+
+        // only if it is still there — a failure that said nothing has had its
+        // file cleaned up already
+        if cmd.status().failed()
+            && let Some(path) = cmd.stderr_path()
+            && path.exists()
+        {
+            eprintln!("    {}", path.display());
+        }
         Ok(())
     }
 

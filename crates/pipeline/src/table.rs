@@ -195,9 +195,9 @@ fn block(step: &Step, keys: &[String], tags: &[String]) -> Vec<Vec<Cell>> {
         rows.push(step_row(step, keys.len() + tags.len()));
     }
     let first = if single {
-        Cell::left(step.name())
+        Cell::left(step.label())
     } else {
-        Cell::right(match step.strategy {
+        Cell::right(match step.strategy() {
             Strategy::Serial => SERIAL,
             Strategy::Batch { .. } => BATCH,
         })
@@ -212,11 +212,11 @@ fn block(step: &Step, keys: &[String], tags: &[String]) -> Vec<Vec<Cell>> {
 fn dimensions(cmds: &[&Cmd]) -> (Vec<String>, Vec<String>) {
     let keys = cmds
         .iter()
-        .flat_map(|c| c.labels.keys().cloned())
+        .flat_map(|c| c.fields().keys().cloned())
         .collect::<BTreeSet<_>>();
     let tags = cmds
         .iter()
-        .flat_map(|c| c.tags.iter().cloned())
+        .flat_map(|c| c.tags().iter().cloned())
         .collect::<BTreeSet<_>>();
     (keys.into_iter().collect(), tags.into_iter().collect())
 }
@@ -237,7 +237,7 @@ fn header(keys: &[String], tags: &[String]) -> Vec<String> {
 
 /// The step's own line: measured wall clock, and its commands' CPU added up.
 fn step_row(step: &Step, dimensions: usize) -> Vec<Cell> {
-    let mut cells = vec![Cell::left(step.name()), Cell::left("-")];
+    let mut cells = vec![Cell::left(step.label()), Cell::left("-")];
     cells.extend(std::iter::repeat_n(Cell::left("-"), dimensions));
 
     cells.push(Cell::left(match step.wall_s() {
@@ -283,17 +283,17 @@ fn step_row(step: &Step, dimensions: usize) -> Vec<Cell> {
 /// One command's line. `first` is the step name for a collapsed step of one,
 /// and a right-aligned `|` or `||` otherwise.
 fn cmd_row(first: Cell, cmd: &Cmd, keys: &[String], tags: &[String]) -> Vec<Cell> {
-    let mut cells = vec![first, Cell::left(cmd.name())];
+    let mut cells = vec![first, Cell::left(cmd.label())];
     cells.extend(
         keys.iter()
-            .map(|k| Cell::left(cmd.labels.get(k).map(String::as_str).unwrap_or("-"))),
+            .map(|k| Cell::left(cmd.fields().get(k).map(String::as_str).unwrap_or("-"))),
     );
     cells.extend(
         tags.iter()
-            .map(|t| Cell::left(if cmd.tags.contains(t) { "x" } else { "-" })),
+            .map(|t| Cell::left(if cmd.tags().contains(t) { "x" } else { "-" })),
     );
 
-    match &cmd.status {
+    match cmd.status() {
         Status::Finished(t) => {
             cells.push(Cell::left(format!("{:.2}", t.wall_s)));
             cells.push(Cell::left(format!("{:.2}", t.user_s)));

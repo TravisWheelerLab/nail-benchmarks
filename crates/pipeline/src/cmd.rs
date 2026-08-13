@@ -2,6 +2,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
 
 use crate::execute::Status;
+use crate::label;
 
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub enum Output {
@@ -10,48 +11,67 @@ pub enum Output {
     Inherit,
     File(PathBuf),
     Append(PathBuf),
+    /// Write here, then throw the file away unless the command failed and
+    /// actually said something. What stderr does by default under a
+    /// [`Pipeline`](crate::Pipeline), which picks the path.
+    OnFailure(PathBuf),
 }
 
 #[derive(Clone, Debug)]
 pub struct Cmd {
-    pub(crate) name: String,
+    pub(crate) name: Option<String>,
+    /// Which step this belongs to and where in it, both counting from one.
+    /// Handed out by [`PipelineBuilder::build`](crate::PipelineBuilder::build),
+    /// so a command that has never been in a pipeline has none.
+    pub(crate) index: Option<(usize, usize)>,
     pub(crate) argv: Vec<String>,
     pub(crate) stdout: Output,
     pub(crate) stderr: Output,
-    pub(crate) labels: BTreeMap<String, String>,
+    pub(crate) fields: BTreeMap<String, String>,
     pub(crate) tags: BTreeSet<String>,
     pub(crate) status: Status,
 }
 
 impl Cmd {
-    pub fn new(name: impl Into<String>, program: impl AsRef<Path>) -> Self {
+    pub fn new(program: impl AsRef<Path>) -> Self {
         Cmd {
-            name: name.into(),
+            name: None,
+            index: None,
             argv: vec![program.as_ref().display().to_string()],
             stdout: Output::Null,
             stderr: Output::Null,
-            labels: BTreeMap::new(),
+            fields: BTreeMap::new(),
             tags: BTreeSet::new(),
             status: Status::NotRun,
         }
     }
 
-    pub fn arg(mut self, arg: impl Into<String>) -> Self {
-        self.argv.push(arg.into());
+    /// What to call this command in output. Optional: without one it goes by
+    /// its number alone.
+    pub fn name(mut self, name: impl Into<String>) -> Self {
+        self.name = Some(name.into());
+        self
+    }
+
+    /// Anything printable, so a numeric flag needs no `to_string`.
+    pub fn arg(mut self, arg: impl std::fmt::Display) -> Self {
+        self.argv.push(arg.to_string());
         self
     }
 
     pub fn args<I, S>(mut self, args: I) -> Self
     where
         I: IntoIterator<Item = S>,
-        S: Into<String>,
+        S: std::fmt::Display,
     {
-        self.argv.extend(args.into_iter().map(Into::into));
+        self.argv.extend(args.into_iter().map(|a| a.to_string()));
         self
     }
 
+    /// A path argument. Paths are not [`Display`](std::fmt::Display), which is
+    /// why [`arg`](Self::arg) will not take one.
     pub fn path(self, path: impl AsRef<Path>) -> Self {
-        self.arg(path.as_ref().display().to_string())
+        self.arg(path.as_ref().display())
     }
 
     pub fn stdout(mut self, out: Output) -> Self {
@@ -64,8 +84,20 @@ impl Cmd {
         self
     }
 
-    pub fn label(mut self, key: impl Into<String>, value: impl std::fmt::Display) -> Self {
-        self.labels.insert(key.into(), value.to_string());
+    /// Send stdout to this file, truncating it first. Shorthand for the common
+    /// case of [`Output::File`].
+    pub fn stdout_to(self, path: impl Into<PathBuf>) -> Self {
+        self.stdout(Output::File(path.into()))
+    }
+
+    /// Send stderr to this file, truncating it first.
+    pub fn stderr_to(self, path: impl Into<PathBuf>) -> Self {
+        self.stderr(Output::File(path.into()))
+    }
+
+    /// Attach a named value, which shows up as a summary-table column.
+    pub fn field(mut self, key: impl Into<String>, value: impl std::fmt::Display) -> Self {
+        self.fields.insert(key.into(), value.to_string());
         self
     }
 
@@ -74,12 +106,41 @@ impl Cmd {
         self
     }
 
-    pub fn name(&self) -> &str {
-        &self.name
+    /// How this command is named in output: `[1.3](boom)`, or `[1.3]` if it was
+    /// never given a name.
+    pub fn label(&self) -> String {
+        let index = self.index.map(|(step, cmd)| format!("{step}.{cmd}"));
+        label::label(index.as_deref(), self.name.as_deref())
     }
 
     pub fn status(&self) -> &Status {
         &self.status
+    }
+
+    /// The program and its arguments, as they are handed to the kernel.
+    /// [`line`](Self::line) is this shell-quoted, which is right for pasting and
+    /// wrong for anything that wants the pieces.
+    pub fn argv(&self) -> &[String] {
+        &self.argv
+    }
+
+    /// Named values for the summary table, in sorted order.
+    pub fn fields(&self) -> &BTreeMap<String, String> {
+        &self.fields
+    }
+
+    /// Named yes/no facts, in sorted order.
+    pub fn tags(&self) -> &BTreeSet<String> {
+        &self.tags
+    }
+
+    /// Where this command's stderr went, if it went anywhere with a name. Not
+    /// called `stderr` because that is already the builder.
+    pub fn stderr_path(&self) -> Option<&Path> {
+        match &self.stderr {
+            Output::Null | Output::Inherit => None,
+            Output::File(p) | Output::Append(p) | Output::OnFailure(p) => Some(p),
+        }
     }
 
     pub fn line(&self) -> String {
