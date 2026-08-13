@@ -5,15 +5,15 @@ use std::sync::mpsc;
 use std::time::Instant;
 
 use crate::cmd::Cmd;
-use crate::execute::{execute, Status};
+use crate::execute::{Status, execute};
 use crate::sink::Sink;
-use crate::step::{OnError, Step};
+use crate::step::{Step, Strategy};
 
 /// A list of steps and somewhere to send what happens.
 #[derive(Default)]
 pub struct Pipeline {
     steps: Vec<Step>,
-    sinks: Vec<Box<dyn Sink>>,
+    sinks: Sinks,
 }
 
 impl Pipeline {
@@ -31,7 +31,7 @@ impl Pipeline {
     /// Add somewhere for results to go. A pipeline with no sinks runs silently
     /// and writes nothing.
     pub fn sink(mut self, sink: impl Sink + 'static) -> Self {
-        self.sinks.push(Box::new(sink));
+        self.sinks.0.push(Box::new(sink));
         self
     }
 
@@ -50,9 +50,10 @@ impl Pipeline {
     /// Run everything, announcing each command to every sink as it lands.
     ///
     /// A command failing is not an error: it gets a [`Status`] and the step's
-    /// [`OnError`] decides whether the run goes on. When it does not, every
-    /// command left — in this step and every step after it — is announced as
-    /// [`Status::Skipped`], so a sink never has to work out what it missed.
+    /// [`OnError`](crate::OnError) decides whether the run goes on. When it does
+    /// not, every command left — in this step and every step after it — is
+    /// announced as [`Status::Skipped`], so a sink never has to work out what it
+    /// missed.
     ///
     /// `Err` means the pipeline could not do its job, which in practice means a
     /// sink refused to write.
@@ -62,46 +63,66 @@ impl Pipeline {
             mut sinks,
         } = self;
 
-        for sink in &mut sinks {
-            sink.start(&steps)?;
-        }
+        sinks.start(&steps)?;
 
-        let mut stopped = false;
-        for step in &mut steps {
-            if !stopped {
-                let start = Instant::now();
-                match step.jobs() {
-                    Some(jobs) => batch(step, jobs, start, &mut sinks)?,
-                    None => serial(step, start, &mut sinks)?,
-                }
-                stopped = step.failed() && step.on_error == OnError::Stop;
+        // run steps until one of them says that is enough
+        let mut left = steps.iter_mut();
+        for step in left.by_ref() {
+            match step.strategy {
+                Strategy::Serial => serial(step, &mut sinks)?,
+                Strategy::Batch { jobs } => batch(step, jobs, &mut sinks)?,
             }
-
             skip_rest(step, &mut sinks)?;
-            for sink in &mut sinks {
-                sink.step_done(step)?;
+            sinks.step_done(step)?;
+
+            if step.halts() {
+                break;
             }
         }
 
-        for sink in &mut sinks {
-            sink.finish()?;
+        // the ones that never got a turn still have to be accounted for
+        for step in left {
+            skip_rest(step, &mut sinks)?;
+            sinks.step_done(step)?;
         }
-        Ok(())
+
+        sinks.finish()
+    }
+}
+
+/// Every sink registered on a pipeline, so the rest of this file can talk to
+/// them as if there were one.
+#[derive(Default)]
+struct Sinks(Vec<Box<dyn Sink>>);
+
+impl Sinks {
+    fn start(&mut self, steps: &[Step]) -> anyhow::Result<()> {
+        self.0.iter_mut().try_for_each(|s| s.start(steps))
+    }
+
+    fn record(&mut self, step: &Step, cmd: &Cmd) -> anyhow::Result<()> {
+        self.0.iter_mut().try_for_each(|s| s.record(step, cmd))
+    }
+
+    fn step_done(&mut self, step: &Step) -> anyhow::Result<()> {
+        self.0.iter_mut().try_for_each(|s| s.step_done(step))
+    }
+
+    fn finish(&mut self) -> anyhow::Result<()> {
+        self.0.iter_mut().try_for_each(|s| s.finish())
     }
 }
 
 /// One command at a time, stopping early if the step says to.
-fn serial(step: &mut Step, start: Instant, sinks: &mut [Box<dyn Sink>]) -> anyhow::Result<()> {
+fn serial(step: &mut Step, sinks: &mut Sinks) -> anyhow::Result<()> {
+    let start = Instant::now();
+
     for j in 0..step.cmds().len() {
         execute(&mut step.cmds_mut()[j]);
         step.elapsed_s = Some(start.elapsed().as_secs_f64());
 
-        let cmd = &step.cmds()[j];
-        for sink in sinks.iter_mut() {
-            sink.record(step, cmd)?;
-        }
-
-        if step.cmds()[j].status().failed() && step.on_error == OnError::Stop {
+        sinks.record(step, &step.cmds()[j])?;
+        if step.halts() {
             break;
         }
     }
@@ -110,12 +131,9 @@ fn serial(step: &mut Step, start: Instant, sinks: &mut [Box<dyn Sink>]) -> anyho
 
 /// `jobs` at a time. Workers take the next command whenever they are free, so
 /// one slow command does not idle the rest.
-fn batch(
-    step: &mut Step,
-    jobs: usize,
-    start: Instant,
-    sinks: &mut [Box<dyn Sink>],
-) -> anyhow::Result<()> {
+fn batch(step: &mut Step, jobs: usize, sinks: &mut Sinks) -> anyhow::Result<()> {
+    let start = Instant::now();
+
     // the workers run against a copy, which leaves the step free for the main
     // thread to write results into; cloning a Cmd costs nothing next to
     // spawning a process
@@ -150,30 +168,21 @@ fn batch(
         for (k, status) in rx {
             step.cmds_mut()[k].status = status;
             step.elapsed_s = Some(start.elapsed().as_secs_f64());
-
-            let cmd = &step.cmds()[k];
-            for sink in sinks.iter_mut() {
-                sink.record(step, cmd)?;
-            }
+            sinks.record(step, &step.cmds()[k])?;
         }
         Ok(())
     })
 }
 
-/// Announce whatever never got its turn, so every command is heard from once.
-fn skip_rest(step: &mut Step, sinks: &mut [Box<dyn Sink>]) -> anyhow::Result<()> {
-    let mut skipped = Vec::new();
+/// Marks anything that never ran as skipped and tells the sinks about it.
+///
+/// Two cases end up here: the tail of a step that stopped partway, and every
+/// command of a step the pipeline never got to.
+fn skip_rest(step: &mut Step, sinks: &mut Sinks) -> anyhow::Result<()> {
     for j in 0..step.cmds().len() {
         if matches!(step.cmds()[j].status(), Status::NotRun) {
             step.cmds_mut()[j].status = Status::Skipped;
-            skipped.push(j);
-        }
-    }
-
-    for j in skipped {
-        let cmd = &step.cmds()[j];
-        for sink in sinks.iter_mut() {
-            sink.record(step, cmd)?;
+            sinks.record(step, &step.cmds()[j])?;
         }
     }
     Ok(())

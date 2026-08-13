@@ -8,7 +8,7 @@ pub enum OnError {
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-enum Strategy {
+pub(crate) enum Strategy {
     Serial,
     Batch { jobs: usize },
 }
@@ -17,7 +17,7 @@ enum Strategy {
 pub struct Step {
     name: String,
     cmds: Vec<Cmd>,
-    strategy: Strategy,
+    pub(crate) strategy: Strategy,
     pub(crate) on_error: OnError,
     /// Wall clock around the whole step, set as it runs. `None` until it
     /// starts. This is measured, not added up from the commands: it catches
@@ -69,24 +69,15 @@ impl Step {
         self.elapsed_s
     }
 
-    /// Whether the commands ran together rather than one after another.
-    pub(crate) fn batched(&self) -> bool {
-        matches!(self.strategy, Strategy::Batch { .. })
-    }
-
     pub(crate) fn cmds_mut(&mut self) -> &mut [Cmd] {
         &mut self.cmds
     }
 
-    pub(crate) fn jobs(&self) -> Option<usize> {
-        match self.strategy {
-            Strategy::Serial => None,
-            Strategy::Batch { jobs } => Some(jobs),
-        }
-    }
-
-    pub(crate) fn failed(&self) -> bool {
-        self.cmds.iter().any(|c| c.status().failed())
+    /// Whether something went wrong here and this step's policy says that ends
+    /// the run. The same question a serial step asks after every command and the
+    /// pipeline asks after every step.
+    pub(crate) fn halts(&self) -> bool {
+        self.on_error == OnError::Stop && self.cmds.iter().any(|c| c.status().failed())
     }
 }
 

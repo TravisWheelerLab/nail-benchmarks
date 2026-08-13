@@ -5,10 +5,9 @@
 //! instead of a name, and their own numbers. A step of one command collapses to
 //! a single row, since the two would otherwise say the same thing twice.
 //!
-//! Rows are buffered per step, because a column's width is not known until the
-//! last cell in it has arrived. What happens at the end of a step depends on the
-//! mode: [`Table::new`] writes that step's block right away, [`Table::whole`]
-//! holds everything back so the entire table lines up as one.
+//! A block is built when its step finishes, because a column's width is not
+//! known until the last cell in it has arrived. [`Mode`] decides what happens
+//! to it then.
 
 use std::collections::BTreeSet;
 use std::path::PathBuf;
@@ -18,56 +17,88 @@ use anyhow::Context;
 use crate::cmd::Cmd;
 use crate::execute::{Status, Timing};
 use crate::sink::Sink;
-use crate::step::Step;
+use crate::step::{Step, Strategy};
 
 /// Marks a command that ran after the one above it.
 const SERIAL: &str = "|";
 /// Marks a command that ran alongside the others in its step.
 const BATCH: &str = "||";
 
+/// Whether every block gets its own header.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Headers {
+    /// One header at the top of the file. Its widths are the floor for every
+    /// block, so blocks line up with it and with each other until some value
+    /// turns out wider than the label above it.
+    Once,
+    /// A header on every block, so each block reads on its own.
+    Each,
+}
+
+/// How the table is laid out and when it reaches the file.
+///
+/// Not every combination of layout, columns and headers is meaningful, so the
+/// ones that are not cannot be written down: there is nothing to decide about
+/// headers when the file holds a single block, and ragged columns force a header
+/// on every block.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Mode {
+    /// Hold everything back and write one table with every row padded alike.
+    /// Nothing reaches the file until the run is over.
+    Whole,
+    /// Write each step's block as that step finishes. Every block carries the
+    /// same columns, padded to its own contents. The default, with
+    /// [`Headers::Once`].
+    Blocks { headers: Headers },
+    /// Write each step's block as that step finishes, each carrying only the
+    /// columns its own commands use.
+    Ragged,
+}
+
 /// Writes a table of everything the pipeline ran.
 #[derive(Debug)]
 pub struct Table {
     path: PathBuf,
-    whole: bool,
-    /// Every label key and tag any command carries, worked out up front so all
-    /// blocks end up with the same columns whatever order the labels turn up in.
-    header: Vec<String>,
-    dimensions: usize,
+    mode: Mode,
+    /// Every label key and tag any command carries, worked out before anything
+    /// runs so blocks agree on their columns whatever order labels turn up in.
+    /// Unused by [`Mode::Ragged`], which asks each step instead.
     keys: Vec<String>,
     tags: Vec<String>,
-    /// The current step's command rows, waiting for its step row.
-    pending: Vec<Vec<Cell>>,
-    /// Blocks already written, or every row so far in whole mode.
-    done: Vec<Vec<Cell>>,
+    /// Every row so far, for [`Mode::Whole`].
+    rows: Vec<Vec<Cell>>,
+    /// Column widths every block starts from, worked out before the run from
+    /// everything already known: names, labels, tags, argv. Only the numbers are
+    /// missing, and their headings are wider than they usually are. Empty for
+    /// the modes that do not share widths between blocks.
+    floor: Vec<usize>,
     text: String,
 }
 
+impl Default for Mode {
+    fn default() -> Mode {
+        Mode::Blocks {
+            headers: Headers::Once,
+        }
+    }
+}
+
 impl Table {
-    /// Write each step's block as that step finishes. Columns are the same
-    /// throughout, but each block is padded to its own contents, so blocks do
-    /// not line up with each other.
     pub fn new(path: impl Into<PathBuf>) -> Table {
         Table {
             path: path.into(),
-            whole: false,
-            header: Vec::new(),
-            dimensions: 0,
+            mode: Mode::default(),
             keys: Vec::new(),
             tags: Vec::new(),
-            pending: Vec::new(),
-            done: Vec::new(),
+            rows: Vec::new(),
+            floor: Vec::new(),
             text: String::new(),
         }
     }
 
-    /// Hold everything until the run is over and write one table, every row
-    /// padded to the same widths. Nothing reaches the file until the end.
-    pub fn whole(path: impl Into<PathBuf>) -> Table {
-        Table {
-            whole: true,
-            ..Table::new(path)
-        }
+    pub fn mode(mut self, mode: Mode) -> Table {
+        self.mode = mode;
+        self
     }
 
     fn flush(&mut self) -> anyhow::Result<()> {
@@ -81,75 +112,127 @@ impl Table {
 
 impl Sink for Table {
     fn start(&mut self, steps: &[Step]) -> anyhow::Result<()> {
-        let cmds = || steps.iter().flat_map(|s| s.cmds());
+        let cmds: Vec<&Cmd> = steps.iter().flat_map(|s| s.cmds()).collect();
+        (self.keys, self.tags) = dimensions(&cmds);
 
-        self.keys = cmds()
-            .flat_map(|c| c.labels.keys().cloned())
-            .collect::<BTreeSet<_>>()
-            .into_iter()
-            .collect();
-        self.tags = cmds()
-            .flat_map(|c| c.tags.iter().cloned())
-            .collect::<BTreeSet<_>>()
-            .into_iter()
-            .collect();
-        self.dimensions = self.keys.len() + self.tags.len();
+        let head = header(&self.keys, &self.tags);
 
-        self.header = vec!["step".into(), "cmd".into()];
-        self.header.extend(self.keys.iter().cloned());
-        self.header.extend(self.tags.iter().cloned());
-        self.header.extend(
-            [
-                "wall(s)", "user(s)", "sys(s)", "max_rss", "exit", "status", "argv",
-            ]
-            .iter()
-            .map(|s| s.to_string()),
-        );
+        // Ragged blocks are meant to differ, and Whole renders in one go, so
+        // neither has anything to share.
+        if !matches!(self.mode, Mode::Ragged | Mode::Whole) {
+            self.floor = vec![0; head.len()];
+            let blocks: Vec<Vec<Cell>> = steps
+                .iter()
+                .flat_map(|s| block(s, &self.keys, &self.tags))
+                .collect();
+            widen(&mut self.floor, &head_cells(&head));
+            for row in &blocks {
+                widen(&mut self.floor, row);
+            }
+        }
 
         self.text.clear();
+        if self.mode
+            == (Mode::Blocks {
+                headers: Headers::Once,
+            })
+        {
+            self.text = render(&head, &[], true, &self.floor);
+        }
         self.flush()
     }
 
-    fn record(&mut self, step: &Step, cmd: &Cmd) -> anyhow::Result<()> {
-        // a step of one would just repeat itself, so the step keeps the first
-        // column and the command fills in the rest of the row
-        let first = if step.cmds().len() == 1 {
-            Cell::left(step.name())
-        } else {
-            Cell::right(if step.batched() { BATCH } else { SERIAL })
-        };
-        self.pending
-            .push(cmd_row(first, cmd, &self.keys, &self.tags));
-        Ok(())
-    }
+    // no `record`: a step's rows are built from the step itself once it is done,
+    // which keeps them in the order the commands were declared rather than the
+    // order a batch happened to finish them in
 
     fn step_done(&mut self, step: &Step) -> anyhow::Result<()> {
-        let mut block: Vec<Vec<Cell>> = Vec::new();
-        if step.cmds().len() != 1 {
-            block.push(step_row(step, self.dimensions));
-        }
-        block.append(&mut self.pending);
+        let (keys, tags) = match self.mode {
+            Mode::Ragged => dimensions(&step.cmds().iter().collect::<Vec<_>>()),
+            _ => (self.keys.clone(), self.tags.clone()),
+        };
 
-        if self.whole {
-            self.done.append(&mut block);
-            return Ok(());
-        }
+        let mut rows = block(step, &keys, &tags);
 
-        if !self.text.is_empty() {
-            self.text.push('\n');
-        }
-        self.text.push_str(&render(&self.header, &block));
+        let show_header = match self.mode {
+            Mode::Whole => {
+                self.rows.append(&mut rows);
+                return Ok(());
+            }
+            Mode::Blocks {
+                headers: Headers::Once,
+            } => false,
+            _ => true,
+        };
+
+        self.text.push_str(&render(
+            &header(&keys, &tags),
+            &rows,
+            show_header,
+            &self.floor,
+        ));
         self.flush()
     }
 
     fn finish(&mut self) -> anyhow::Result<()> {
-        if self.whole {
-            let rows = std::mem::take(&mut self.done);
-            self.text = render(&self.header, &rows);
+        if self.mode == Mode::Whole {
+            let rows = std::mem::take(&mut self.rows);
+            self.text = render(&header(&self.keys, &self.tags), &rows, true, &[]);
             self.flush()?;
         }
         Ok(())
     }
+}
+
+/// One step's rows: its own line, then a line per command.
+fn block(step: &Step, keys: &[String], tags: &[String]) -> Vec<Vec<Cell>> {
+    // a step of one would just repeat itself, so the step keeps the first
+    // column and its command fills in the rest of the row
+    let single = step.cmds().len() == 1;
+
+    let mut rows = Vec::new();
+    if !single {
+        rows.push(step_row(step, keys.len() + tags.len()));
+    }
+    let first = if single {
+        Cell::left(step.name())
+    } else {
+        Cell::right(match step.strategy {
+            Strategy::Serial => SERIAL,
+            Strategy::Batch { .. } => BATCH,
+        })
+    };
+    for cmd in step.cmds() {
+        rows.push(cmd_row(first.clone(), cmd, keys, tags));
+    }
+    rows
+}
+
+/// The label keys and tags these commands carry, each in sorted order.
+fn dimensions(cmds: &[&Cmd]) -> (Vec<String>, Vec<String>) {
+    let keys = cmds
+        .iter()
+        .flat_map(|c| c.labels.keys().cloned())
+        .collect::<BTreeSet<_>>();
+    let tags = cmds
+        .iter()
+        .flat_map(|c| c.tags.iter().cloned())
+        .collect::<BTreeSet<_>>();
+    (keys.into_iter().collect(), tags.into_iter().collect())
+}
+
+fn header(keys: &[String], tags: &[String]) -> Vec<String> {
+    let mut header: Vec<String> = vec!["step".into(), "cmd".into()];
+    header.extend(keys.iter().cloned());
+    header.extend(tags.iter().cloned());
+    header.extend(
+        [
+            "wall(s)", "user(s)", "sys(s)", "max_rss", "exit", "status", "argv",
+        ]
+        .iter()
+        .map(|s| s.to_string()),
+    );
+    header
 }
 
 /// The step's own line: measured wall clock, and its commands' CPU added up.
@@ -260,34 +343,55 @@ impl Cell {
     }
 }
 
-/// Lay out a commented header, a dashed separator, and the rows, every column
-/// padded to its widest cell.
-fn render(header: &[String], rows: &[Vec<Cell>]) -> String {
-    // the "# " marker is absorbed into the first column's width, so the header
-    // labels stay lined up over the data below them
-    let mut head: Vec<Cell> = header.iter().map(Cell::left).collect();
-    head[0] = Cell::left(format!("# {}", header[0]));
+/// Lay out the rows, every column padded to its widest cell, under a commented
+/// header and dashed separator if `show_header` says so.
+///
+/// The header sets the width of every column whether it is printed or not. That
+/// is what keeps blocks lined up under a header printed once at the top: they
+/// share its widths as a floor, and only drift apart where a value is wider than
+/// the label above it.
+fn render(header: &[String], rows: &[Vec<Cell>], show_header: bool, floor: &[usize]) -> String {
+    let head = head_cells(header);
 
-    let mut widths: Vec<usize> = head.iter().map(|c| c.text.chars().count()).collect();
+    let mut widths = if floor.len() == header.len() {
+        floor.to_vec()
+    } else {
+        vec![0; header.len()]
+    };
+    widen(&mut widths, &head);
     for row in rows {
-        for (i, cell) in row.iter().enumerate() {
-            widths[i] = widths[i].max(cell.text.chars().count());
-        }
+        widen(&mut widths, row);
     }
 
-    let last = widths.len() - 1;
-    let mut sep: Vec<Cell> = widths.iter().map(|w| Cell::left("-".repeat(*w))).collect();
-    sep[0] = Cell::left(format!("# {}", "-".repeat(widths[0].saturating_sub(2))));
-    // argv is unpadded, so underline the label rather than the whole column
-    sep[last] = Cell::left("-".repeat(header[last].chars().count()));
-
     let mut out = String::new();
-    write_row(&mut out, &head, &widths);
-    write_row(&mut out, &sep, &widths);
+    if show_header {
+        let last = header.len() - 1;
+        let mut sep: Vec<Cell> = widths.iter().map(|w| Cell::left("-".repeat(*w))).collect();
+        sep[0] = Cell::left(format!("# {}", "-".repeat(widths[0].saturating_sub(2))));
+        // argv is unpadded, so underline the label rather than the whole column
+        sep[last] = Cell::left("-".repeat(header[last].chars().count()));
+
+        write_row(&mut out, &head, &widths);
+        write_row(&mut out, &sep, &widths);
+    }
     for row in rows {
         write_row(&mut out, row, &widths);
     }
     out
+}
+
+/// The header as cells. The "# " marker is absorbed into the first column's
+/// width, so the labels stay lined up over the data below them.
+fn head_cells(header: &[String]) -> Vec<Cell> {
+    let mut head: Vec<Cell> = header.iter().map(Cell::left).collect();
+    head[0] = Cell::left(format!("# {}", header[0]));
+    head
+}
+
+fn widen(widths: &mut [usize], cells: &[Cell]) {
+    for (i, cell) in cells.iter().enumerate() {
+        widths[i] = widths[i].max(cell.text.chars().count());
+    }
 }
 
 fn write_row(out: &mut String, cells: &[Cell], widths: &[usize]) {

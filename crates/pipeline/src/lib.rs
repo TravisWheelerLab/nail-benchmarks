@@ -29,4 +29,4 @@ pub use pipeline::Pipeline;
 pub use progress::Progress;
 pub use sink::Sink;
 pub use step::{OnError, Step};
-pub use table::Table;
+pub use table::{Headers, Mode, Table};
