@@ -37,10 +37,9 @@ pub enum Headers {
 
 /// How the table is laid out and when it reaches the file.
 ///
-/// Not every combination of layout, columns and headers is meaningful, so the
-/// ones that are not cannot be written down: there is nothing to decide about
-/// headers when the file holds a single block, and ragged columns force a header
-/// on every block.
+/// The combinations that make no sense cannot be written down: there is nothing
+/// to decide about headers when the file holds one block, and ragged columns
+/// force a header on every block.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Mode {
     /// Hold everything back and write one table with every row padded alike.
@@ -60,15 +59,15 @@ pub enum Mode {
 pub struct Table {
     path: PathBuf,
     mode: Mode,
-    /// Every label key and tag any command carries, worked out before anything
-    /// runs so blocks agree on their columns whatever order labels turn up in.
+    /// Every field key and tag any command carries, worked out before anything
+    /// runs so blocks agree on their columns whatever order fields turn up in.
     /// Unused by [`Mode::Ragged`], which asks each step instead.
     keys: Vec<String>,
     tags: Vec<String>,
     /// Every row so far, for [`Mode::Whole`].
     rows: Vec<Vec<Cell>>,
     /// Column widths every block starts from, worked out before the run from
-    /// everything already known: names, labels, tags, argv. Only the numbers are
+    /// everything already known: names, fields, tags, argv. Only the numbers are
     /// missing, and their headings are wider than they usually are. Empty for
     /// the modes that do not share widths between blocks.
     floor: Vec<usize>,
@@ -132,11 +131,12 @@ impl Sink for Table {
         }
 
         self.text.clear();
-        if self.mode
-            == (Mode::Blocks {
-                headers: Headers::Once,
-            })
-        {
+        if matches!(
+            self.mode,
+            Mode::Blocks {
+                headers: Headers::Once
+            }
+        ) {
             self.text = render(&head, &[], true, &self.floor);
         }
         self.flush()
@@ -186,29 +186,27 @@ impl Sink for Table {
 
 /// One step's rows: its own line, then a line per command.
 fn block(step: &Step, keys: &[String], tags: &[String]) -> Vec<Vec<Cell>> {
-    // a step of one would just repeat itself, so the step keeps the first
-    // column and its command fills in the rest of the row
-    let single = step.cmds().len() == 1;
-
     let mut rows = Vec::new();
-    if !single {
-        rows.push(step_row(step, keys.len() + tags.len()));
-    }
-    let first = if single {
+
+    // a step of one would just repeat itself, so it gets no line of its own and
+    // keeps the first column instead, with its command filling in the rest
+    let first = if step.cmds().len() == 1 {
         Cell::left(step.label())
     } else {
+        rows.push(step_row(step, keys.len() + tags.len()));
         Cell::right(match step.strategy() {
             Strategy::Serial => SERIAL,
             Strategy::Batch { .. } => BATCH,
         })
     };
+
     for cmd in step.cmds() {
         rows.push(cmd_row(first.clone(), cmd, keys, tags));
     }
     rows
 }
 
-/// The label keys and tags these commands carry, each in sorted order.
+/// The field keys and tags these commands carry, each in sorted order.
 fn dimensions(cmds: &[&Cmd]) -> (Vec<String>, Vec<String>) {
     let keys = cmds
         .iter()
@@ -249,29 +247,31 @@ fn step_row(step: &Step, dimensions: usize) -> Vec<Cell> {
         .cmds()
         .iter()
         .filter_map(|c| match c.status() {
-            Status::Finished(t) => Some(t),
+            // a command killed on its deadline still burned everything it says
+            // it burned, so it counts toward the step
+            Status::Finished(t) | Status::TimedOut(t) => Some(t),
             _ => None,
         })
         .collect();
 
-    if timings.is_empty() {
-        cells.extend(std::iter::repeat_n(Cell::left("-"), 3));
-    } else {
-        // summed CPU against measured wall is what shows whether a batch
-        // actually bought anything
-        cells.push(Cell::left(format!(
-            "{:.2}",
-            timings.iter().map(|t| t.user_s).sum::<f64>()
-        )));
-        cells.push(Cell::left(format!(
-            "{:.2}",
-            timings.iter().map(|t| t.sys_s).sum::<f64>()
-        )));
-        // the largest any one process got, which is not the same as the most
-        // the step held at once — wait4 cannot tell us that
-        cells.push(Cell::left(format_bytes(
-            timings.iter().map(|t| t.max_rss_kb).max().unwrap_or(-1),
-        )));
+    // no peak means nothing finished, so there is nothing to add up either
+    match timings.iter().map(|t| t.max_rss_kb).max() {
+        None => cells.extend(std::iter::repeat_n(Cell::left("-"), 3)),
+        Some(peak) => {
+            // summed CPU against measured wall is what shows whether a batch
+            // actually bought anything
+            cells.push(Cell::left(format!(
+                "{:.2}",
+                timings.iter().map(|t| t.user_s).sum::<f64>()
+            )));
+            cells.push(Cell::left(format!(
+                "{:.2}",
+                timings.iter().map(|t| t.sys_s).sum::<f64>()
+            )));
+            // the largest any one process got, which is not the same as the most
+            // the step held at once — wait4 cannot tell us that
+            cells.push(Cell::left(format_bytes(peak)));
+        }
     }
 
     // exit and status belong to commands; a count or a rollup here would be a
@@ -293,31 +293,36 @@ fn cmd_row(first: Cell, cmd: &Cmd, keys: &[String], tags: &[String]) -> Vec<Cell
             .map(|t| Cell::left(if cmd.tags().contains(t) { "x" } else { "-" })),
     );
 
+    // two separate questions: what it cost, and how it went. a command that
+    // could not start has nothing to say about the first
     match cmd.status() {
-        Status::Finished(t) => {
+        Status::Finished(t) | Status::TimedOut(t) => {
             cells.push(Cell::left(format!("{:.2}", t.wall_s)));
             cells.push(Cell::left(format!("{:.2}", t.user_s)));
             cells.push(Cell::left(format!("{:.2}", t.sys_s)));
             cells.push(Cell::left(format_bytes(t.max_rss_kb)));
             cells.push(Cell::left(t.exit.to_string()));
-            cells.push(Cell::left("ok"));
         }
-        // nothing was measured either way; status is what separates "could not
-        // start" from "never got its turn", which leaves exit to hold exit codes
-        // and nothing else
-        Status::Failed(_) => {
-            cells.extend(std::iter::repeat_n(Cell::left("-"), 5));
-            cells.push(Cell::left("err"));
-        }
-        Status::Skipped => {
-            cells.extend(std::iter::repeat_n(Cell::left("-"), 5));
-            cells.push(Cell::left("skip"));
-        }
-        Status::NotRun => cells.extend(std::iter::repeat_n(Cell::left("-"), 6)),
+        _ => cells.extend(std::iter::repeat_n(Cell::left("-"), 5)),
     }
 
+    cells.push(Cell::left(status_word(cmd.status())));
     cells.push(Cell::left(cmd.line()));
     cells
+}
+
+/// The status column. It answers one question — did this work — and leaves the
+/// exit column to say what the command actually reported, which is also how
+/// "never started" tells itself apart from "started and failed" without a word
+/// of its own: there is no exit code beside it.
+fn status_word(status: &Status) -> &'static str {
+    match status {
+        Status::NotRun => "-",
+        Status::Skipped => "skip",
+        Status::TimedOut(_) => "time",
+        Status::Finished(t) if t.ok() => "ok",
+        _ => "fail",
+    }
 }
 
 /// A cell and which side its padding goes on.
@@ -353,6 +358,8 @@ impl Cell {
 fn render(header: &[String], rows: &[Vec<Cell>], show_header: bool, floor: &[usize]) -> String {
     let head = head_cells(header);
 
+    // a floor from a different set of columns is no floor at all, which is also
+    // how the modes that pass an empty one opt out
     let mut widths = if floor.len() == header.len() {
         floor.to_vec()
     } else {

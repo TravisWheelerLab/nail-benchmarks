@@ -1,8 +1,8 @@
 //! How steps and commands are named in output.
 //!
-//! Kept in one place so the shape of a name is one decision rather than a format
-//! string copied to every site that writes one, and so it can be handed over to
-//! the caller later without hunting them down.
+//! One place, so the shape of a name is one decision instead of a format string
+//! copied to every site that writes one — and so a caller can take it over later
+//! without hunting those sites down.
 
 /// `[1.3](boom)` when both are known, `[1.3]` when there is no name, the bare
 /// name when there is no index, and empty when there is neither — which only

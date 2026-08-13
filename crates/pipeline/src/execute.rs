@@ -4,11 +4,19 @@ use std::fs::{File, OpenOptions};
 use std::io;
 use std::path::Path;
 use std::process::{Command, Stdio};
-use std::time::{Instant, SystemTime, UNIX_EPOCH};
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Arc, Mutex};
+use std::thread::JoinHandle;
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use anyhow::Context;
 
 use crate::cmd::{Cmd, Output};
+
+/// How often the watchdog looks at the children.
+const TICK: Duration = Duration::from_millis(100);
+/// How long a command gets to leave on its own before it is made to.
+const GRACE: Duration = Duration::from_secs(5);
 
 /// What one command cost, taken from `wait4`.
 ///
@@ -47,6 +55,10 @@ pub enum Status {
     /// A process ran and was measured. It may still have exited nonzero; that
     /// is in [`Timing::exit`].
     Finished(Timing),
+    /// Ran past its [`Cmd::timeout`] and was killed for it. Everything measured
+    /// up to the kill is real, so a command that timed out still says what it
+    /// was costing when it went.
+    TimedOut(Timing),
 }
 
 impl Status {
@@ -55,7 +67,7 @@ impl Status {
     pub fn failed(&self) -> bool {
         match self {
             Status::NotRun | Status::Skipped => false,
-            Status::Failed(_) => true,
+            Status::Failed(_) | Status::TimedOut(_) => true,
             Status::Finished(t) => !t.ok(),
         }
     }
@@ -69,14 +81,178 @@ impl Status {
 ///
 /// Running an already-run command just overwrites what was there.
 pub fn execute(cmd: &mut Cmd) {
-    let status = match spawn_and_wait(cmd) {
-        Ok(timing) => Status::Finished(timing),
-        Err(e) => Status::Failed(format!("{e:#}")),
-    };
-    if let Output::OnFailure(path) = &cmd.stderr {
-        tidy(path, &status);
+    let live = Arc::new(Live::default());
+    // nothing to watch for unless there is a deadline: on its own, one command
+    // has nobody who might call it off
+    let _watchdog = cmd.timeout.is_some().then(|| Live::watch(&live));
+    live.execute(cmd);
+}
+
+/// The children running right now, so somebody who is not waiting on them can
+/// still end them.
+///
+/// Two things want that: a step that has already failed and should not keep
+/// paying for the rest of its batch, and a command that has run past its
+/// deadline. Both come down to signalling a pid somebody else is blocked on.
+#[derive(Default)]
+pub(crate) struct Live {
+    running: Mutex<Vec<Entry>>,
+    stopping: AtomicBool,
+    done: AtomicBool,
+}
+
+/// One running child, and how far along the way out it is.
+struct Entry {
+    pid: libc::pid_t,
+    /// When it has overstayed, for a command that set a timeout.
+    deadline: Option<Instant>,
+    phase: Phase,
+    /// Whether what ended it was its own deadline rather than the pipeline
+    /// giving up, which is the difference between `time` and `fail`.
+    expired: bool,
+}
+
+/// How hard we have asked a child to leave.
+enum Phase {
+    Running,
+    /// Sent SIGTERM at this point, and waiting out [`GRACE`].
+    Term(Instant),
+    /// Sent SIGKILL. There is nothing after this.
+    Kill,
+}
+
+impl Live {
+    /// Like [`execute`], with the child visible to [`stop`](Self::stop) and to
+    /// the watchdog while it runs.
+    pub(crate) fn execute(&self, cmd: &mut Cmd) {
+        let status = match spawn(cmd) {
+            Err(e) => Status::Failed(format!("{e:#}")),
+            Ok((pid, start)) => {
+                self.add(pid, cmd.timeout.map(|after| start + after));
+                let waited = wait_timed(pid, start);
+                let expired = self.remove(pid);
+                match waited {
+                    Ok(t) if expired => Status::TimedOut(t),
+                    Ok(t) => Status::Finished(t),
+                    Err(e) => Status::Failed(format!("{e:#}")),
+                }
+            }
+        };
+        if let Output::OnFailure(path) = &cmd.stderr {
+            tidy(path, &status);
+        }
+        cmd.status = status;
     }
-    cmd.status = status;
+
+    /// Nothing new starts, and anything already running is asked to leave.
+    pub(crate) fn stop(&self) {
+        // the lock is held across the flag and the signals, so a child spawning
+        // right now either shows up in this list or sees the flag in `add`
+        let mut running = self.running.lock().unwrap();
+        self.stopping.store(true, Ordering::Relaxed);
+        let now = Instant::now();
+        for entry in running.iter_mut() {
+            entry.term(now);
+        }
+    }
+
+    pub(crate) fn stopping(&self) -> bool {
+        self.stopping.load(Ordering::Relaxed)
+    }
+
+    /// Start the thread that enforces deadlines and finishes off anything that
+    /// ignored a polite SIGTERM. It stops when the returned handle drops.
+    pub(crate) fn watch(live: &Arc<Live>) -> Watchdog {
+        let live = Arc::clone(live);
+        let handle = std::thread::spawn({
+            let live = Arc::clone(&live);
+            move || {
+                while !live.done.load(Ordering::Relaxed) {
+                    live.sweep();
+                    std::thread::sleep(TICK);
+                }
+            }
+        });
+        Watchdog {
+            live,
+            handle: Some(handle),
+        }
+    }
+
+    fn add(&self, pid: libc::pid_t, deadline: Option<Instant>) {
+        let mut running = self.running.lock().unwrap();
+        let mut entry = Entry {
+            pid,
+            deadline,
+            phase: Phase::Running,
+            expired: false,
+        };
+        if self.stopping() {
+            entry.term(Instant::now());
+        }
+        running.push(entry);
+    }
+
+    /// Take a finished child off the list, saying whether its deadline is what
+    /// ended it.
+    fn remove(&self, pid: libc::pid_t) -> bool {
+        let mut running = self.running.lock().unwrap();
+        match running.iter().position(|e| e.pid == pid) {
+            Some(i) => running.swap_remove(i).expired,
+            None => false,
+        }
+    }
+
+    /// One pass over the children: anything past its deadline gets asked to
+    /// leave, and anything that was asked long enough ago stops being asked.
+    fn sweep(&self) {
+        let now = Instant::now();
+        let mut running = self.running.lock().unwrap();
+        for entry in running.iter_mut() {
+            match entry.phase {
+                Phase::Running if entry.deadline.is_some_and(|at| now >= at) => {
+                    entry.expired = true;
+                    entry.term(now);
+                }
+                Phase::Term(at) if now.duration_since(at) >= GRACE => {
+                    entry.phase = Phase::Kill;
+                    signal(entry.pid, libc::SIGKILL);
+                }
+                _ => {}
+            }
+        }
+    }
+}
+
+impl Entry {
+    fn term(&mut self, now: Instant) {
+        if matches!(self.phase, Phase::Running) {
+            self.phase = Phase::Term(now);
+            signal(self.pid, libc::SIGTERM);
+        }
+    }
+}
+
+/// Keeps the watchdog thread alive. Dropping it stops the thread and waits for
+/// it, so it cannot outlive the run that started it.
+pub(crate) struct Watchdog {
+    live: Arc<Live>,
+    handle: Option<JoinHandle<()>>,
+}
+
+impl Drop for Watchdog {
+    fn drop(&mut self) {
+        self.live.done.store(true, Ordering::Relaxed);
+        if let Some(handle) = self.handle.take() {
+            handle.join().ok();
+        }
+    }
+}
+
+/// A signal to a child we have not reaped yet always lands, so there is nothing
+/// to check here: the pid cannot have been reused while we still owe it a wait.
+fn signal(pid: libc::pid_t, sig: libc::c_int) {
+    unsafe { libc::kill(pid, sig) };
 }
 
 /// Keep a failure's stderr and nothing else.
@@ -116,9 +292,15 @@ pub(crate) fn stamp() -> String {
     String::from_utf8_lossy(&buf[..written]).into_owned()
 }
 
-fn spawn_and_wait(cmd: &Cmd) -> anyhow::Result<Timing> {
+/// Start the command, handing back its pid and the moment it started. The
+/// caller reaps it, which is what lets somebody else signal it in between.
+fn spawn(cmd: &Cmd) -> anyhow::Result<(libc::pid_t, Instant)> {
     let mut proc = Command::new(&cmd.argv[0]);
     proc.args(&cmd.argv[1..]);
+    proc.envs(&cmd.env);
+    if let Some(dir) = &cmd.dir {
+        proc.current_dir(dir);
+    }
     proc.stdout(stdio(&cmd.stdout)?);
     proc.stderr(stdio(&cmd.stderr)?);
 
@@ -127,7 +309,7 @@ fn spawn_and_wait(cmd: &Cmd) -> anyhow::Result<Timing> {
         .spawn()
         .with_context(|| format!("failed to spawn {}", cmd.argv[0]))?;
 
-    wait_timed(child.id() as libc::pid_t, start)
+    Ok((child.id() as libc::pid_t, start))
 }
 
 /// Open a redirect target, making its directory if it is not there yet.
@@ -167,8 +349,7 @@ fn wait_timed(pid: libc::pid_t, start: Instant) -> anyhow::Result<Timing> {
     let mut status: libc::c_int = 0;
     let mut usage: libc::rusage = unsafe { std::mem::zeroed() };
 
-    // std::process::Child does not reap on drop, so taking the child here does
-    // not race with anything in std.
+    // std never reaps a child on its own, so nothing in it races with this
     let rc = unsafe { libc::wait4(pid, &mut status, 0, &mut usage) };
     if rc < 0 {
         return Err(io::Error::last_os_error()).context("wait4 failed");

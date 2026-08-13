@@ -1,5 +1,6 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
+use std::time::Duration;
 
 use crate::execute::Status;
 use crate::label;
@@ -25,6 +26,9 @@ pub struct Cmd {
     /// so a command that has never been in a pipeline has none.
     pub(crate) index: Option<(usize, usize)>,
     pub(crate) argv: Vec<String>,
+    pub(crate) env: BTreeMap<String, String>,
+    pub(crate) dir: Option<PathBuf>,
+    pub(crate) timeout: Option<Duration>,
     pub(crate) stdout: Output,
     pub(crate) stderr: Output,
     pub(crate) fields: BTreeMap<String, String>,
@@ -38,6 +42,9 @@ impl Cmd {
             name: None,
             index: None,
             argv: vec![program.as_ref().display().to_string()],
+            env: BTreeMap::new(),
+            dir: None,
+            timeout: None,
             stdout: Output::Null,
             stderr: Output::Null,
             fields: BTreeMap::new(),
@@ -72,6 +79,28 @@ impl Cmd {
     /// why [`arg`](Self::arg) will not take one.
     pub fn path(self, path: impl AsRef<Path>) -> Self {
         self.arg(path.as_ref().display())
+    }
+
+    /// Set a variable for this command, on top of whatever the pipeline itself
+    /// was started with.
+    pub fn env(mut self, key: impl Into<String>, value: impl std::fmt::Display) -> Self {
+        self.env.insert(key.into(), value.to_string());
+        self
+    }
+
+    /// Run from here rather than from wherever the pipeline was started. Worth
+    /// setting for anything that drops scratch files in the current directory,
+    /// since two of those in one place collide.
+    pub fn dir(mut self, dir: impl Into<PathBuf>) -> Self {
+        self.dir = Some(dir.into());
+        self
+    }
+
+    /// Give up on this command after `after` and kill it, which comes back as
+    /// [`Status::TimedOut`]. Without one it runs as long as it likes.
+    pub fn timeout(mut self, after: Duration) -> Self {
+        self.timeout = Some(after);
+        self
     }
 
     pub fn stdout(mut self, out: Output) -> Self {
@@ -143,10 +172,16 @@ impl Cmd {
         }
     }
 
+    /// The command as you would paste it into a shell, environment and all.
+    ///
+    /// [`dir`](Self::dir) is the one thing missing: there is no prefix for it
+    /// the way there is for a variable, so a command that sets one has to be run
+    /// from there to match.
     pub fn line(&self) -> String {
-        self.argv
+        self.env
             .iter()
-            .map(|a| quote(a))
+            .map(|(key, value)| format!("{key}={}", quote(value)))
+            .chain(self.argv.iter().map(|a| quote(a)))
             .collect::<Vec<_>>()
             .join(" ")
     }

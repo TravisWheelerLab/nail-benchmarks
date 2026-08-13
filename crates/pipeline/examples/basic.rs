@@ -1,6 +1,9 @@
-//! A pipeline end to end: a bare command, a batch, a serial step, two sinks.
+//! A pipeline end to end: a bare command, a batch, a serial step, a deadline, a
+//! step that gives up, and two sinks.
 //!
 //! `cargo run -p pipeline --example basic`
+
+use std::time::Duration;
 
 use pipeline::{Cmd, OnError, PipelineBuilder, Progress, Step, Table};
 
@@ -22,6 +25,15 @@ fn main() -> anyhow::Result<()> {
             .field("job", i)
     });
 
+    // three that would take half a minute each, alongside one that fails at
+    // once. the step is set to stop, so the sleeps get killed rather than run to
+    // the end for nothing
+    let sleeps = (1..=2).map(|i| {
+        Cmd::new("/bin/sh")
+            .name(format!("sleep-{i}"))
+            .args(["-c", "sleep 30"])
+    });
+
     PipelineBuilder::new()
         // a bare Cmd is a step of one
         .step(
@@ -34,16 +46,22 @@ fn main() -> anyhow::Result<()> {
         .step(Step::batch(2, burns).name("burn"))
         .step(
             Step::serial([
+                // dir means the argument can be relative, and the variable rides
+                // along in the pasteable line
                 Cmd::new("/usr/bin/wc")
                     .name("lines")
                     .arg("-l")
-                    .path(&data)
+                    .path("data.txt")
+                    .dir(&dir)
+                    .env("LC_ALL", "C")
                     .stdout_to(dir.join("lines"))
                     .field("mode", "lines"),
                 Cmd::new("/usr/bin/wc")
                     .name("bytes")
                     .arg("-c")
-                    .path(&data)
+                    .path("data.txt")
+                    .dir(&dir)
+                    .env("LC_ALL", "C")
                     .stdout_to(dir.join("bytes"))
                     .field("mode", "bytes"),
                 // no name: it goes by its number alone
@@ -57,6 +75,29 @@ fn main() -> anyhow::Result<()> {
             // one bad command should not cost us the rest of the matrix
             .on_error(OnError::Continue),
         )
+        .step(
+            Step::serial([Cmd::new("/bin/sh")
+                .name("slow")
+                .args(["-c", "sleep 30"])
+                .timeout(Duration::from_millis(300))])
+            .name("limit")
+            .on_error(OnError::Continue),
+        )
+        .step(
+            Step::batch(
+                3,
+                std::iter::once(
+                    Cmd::new("/bin/sh")
+                        .name("early")
+                        .args(["-c", "exit 1"])
+                        .field("job", 0),
+                )
+                .chain(sleeps),
+            )
+            .name("race"),
+        )
+        // never gets a turn, because the step above stops the run
+        .step(Cmd::new("/bin/echo").name("after").arg("unreachable"))
         .sink(Progress::new())
         .sink(Table::new(&table))
         .build()

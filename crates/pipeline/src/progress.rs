@@ -45,6 +45,12 @@ impl Sink for Progress {
                         format!("exit {}", t.exit)
                     }
                 ),
+                Status::TimedOut(t) => format!(
+                    "  {:<32} {:>9.2}s {:>9}  timed out",
+                    name,
+                    t.wall_s,
+                    format_bytes(t.max_rss_kb)
+                ),
             }
         );
 

@@ -4,10 +4,9 @@
 //! commands and announces what happened to whatever sinks were registered on
 //! it. Printing progress and writing the summary table are both just sinks.
 //!
-//! Two things hold for every sink, and they are what make one easy to write:
-//! **each command is announced exactly once**, and **never with
-//! [`Status::NotRun`]** — by the time you see it, it has finished, failed to
-//! start, or been skipped.
+//! Two things hold for every sink, which is what makes one easy to write: each
+//! command is announced exactly once, and never as [`Status::NotRun`] — by the
+//! time you see it, it has finished, failed to start, or been skipped.
 //!
 //! [`Status::NotRun`]: crate::Status
 
@@ -23,7 +22,7 @@ pub trait Sink {
     /// Everything the pipeline is about to run, before any of it has.
     ///
     /// This is where a sink that needs to know the shape of the whole run — the
-    /// full set of label keys, say — works it out.
+    /// full set of field keys, say — works it out.
     fn start(&mut self, steps: &[Step]) -> anyhow::Result<()> {
         let _ = steps;
         Ok(())

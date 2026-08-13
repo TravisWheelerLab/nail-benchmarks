@@ -2,13 +2,13 @@
 
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicUsize, Ordering};
-use std::sync::mpsc;
+use std::sync::{Arc, mpsc};
 use std::time::Instant;
 
 use anyhow::Context;
 
 use crate::cmd::{Cmd, Output};
-use crate::execute::{Status, execute, stamp};
+use crate::execute::{Live, Status, stamp};
 use crate::label;
 use crate::sink::Sink;
 use crate::step::{Step, Strategy};
@@ -149,21 +149,27 @@ impl Pipeline {
             stderr_dir,
         } = self;
 
+        sinks.start(&steps)?;
+
         // a redirect target has to exist before anything spawns, so this cannot
-        // wait for the first failure
+        // wait for the first failure. after the sinks, so a sink that cannot
+        // write leaves no directory behind
         if let Some(dir) = &stderr_dir {
             std::fs::create_dir_all(dir)
                 .with_context(|| format!("failed to create {}", dir.display()))?;
         }
 
-        sinks.start(&steps)?;
+        // one watchdog for the whole run, since a deadline and a step giving up
+        // are the same job: signalling a child somebody else is waiting on
+        let live = Arc::new(Live::default());
+        let _watchdog = Live::watch(&live);
 
         // run steps until one of them says that is enough
         let mut left = steps.iter_mut();
         for step in left.by_ref() {
             match step.strategy {
-                Strategy::Serial => serial(step, &mut sinks)?,
-                Strategy::Batch { jobs } => batch(step, jobs, &mut sinks)?,
+                Strategy::Serial => serial(step, &live, &mut sinks)?,
+                Strategy::Batch { jobs } => batch(step, jobs, &live, &mut sinks)?,
             }
             skip_rest(step, &mut sinks)?;
             sinks.step_done(step)?;
@@ -181,8 +187,9 @@ impl Pipeline {
 
         sinks.finish()?;
 
-        // nothing failed loudly, so there is nothing in there; both of these do
-        // nothing if the directory has anything in it
+        // if nothing failed with anything to say, these are empty and go away.
+        // remove_dir refuses a directory with anything in it, which is exactly
+        // the check we want
         if let Some(dir) = &stderr_dir {
             std::fs::remove_dir(dir).ok();
             if let Some(parent) = dir.parent() {
@@ -217,11 +224,11 @@ impl Sinks {
 }
 
 /// One command at a time, stopping early if the step says to.
-fn serial(step: &mut Step, sinks: &mut Sinks) -> anyhow::Result<()> {
+fn serial(step: &mut Step, live: &Live, sinks: &mut Sinks) -> anyhow::Result<()> {
     let start = Instant::now();
 
     for j in 0..step.cmds().len() {
-        execute(&mut step.cmds_mut()[j]);
+        live.execute(&mut step.cmds_mut()[j]);
         step.elapsed_s = Some(start.elapsed().as_secs_f64());
 
         sinks.record(step, &step.cmds()[j])?;
@@ -234,7 +241,13 @@ fn serial(step: &mut Step, sinks: &mut Sinks) -> anyhow::Result<()> {
 
 /// `jobs` at a time. Workers take the next command whenever they are free, so
 /// one slow command does not idle the rest.
-fn batch(step: &mut Step, jobs: usize, sinks: &mut Sinks) -> anyhow::Result<()> {
+///
+/// A step that has failed and is set to stop does not wait for the rest of the
+/// batch to finish: nothing new is taken, and what is already running is killed.
+/// Those come back as `exit 143`, which is a real failure and reads as one, so a
+/// step that stopped shows the one command that broke it and the ones it took
+/// down with it.
+fn batch(step: &mut Step, jobs: usize, live: &Live, sinks: &mut Sinks) -> anyhow::Result<()> {
     let start = Instant::now();
 
     // the workers run against a copy, which leaves the step free for the main
@@ -251,12 +264,15 @@ fn batch(step: &mut Step, jobs: usize, sinks: &mut Sinks) -> anyhow::Result<()> 
             let copies = &copies;
             scope.spawn(move || {
                 loop {
+                    if live.stopping() {
+                        break;
+                    }
                     let k = next.fetch_add(1, Ordering::Relaxed);
                     if k >= copies.len() {
                         break;
                     }
                     let mut cmd = copies[k].clone();
-                    execute(&mut cmd);
+                    live.execute(&mut cmd);
                     // a closed channel means the main thread gave up on us
                     if tx.send((k, cmd.status)).is_err() {
                         break;
@@ -272,6 +288,10 @@ fn batch(step: &mut Step, jobs: usize, sinks: &mut Sinks) -> anyhow::Result<()> 
             step.cmds_mut()[k].status = status;
             step.elapsed_s = Some(start.elapsed().as_secs_f64());
             sinks.record(step, &step.cmds()[k])?;
+
+            if step.halts() {
+                live.stop();
+            }
         }
         Ok(())
     })
