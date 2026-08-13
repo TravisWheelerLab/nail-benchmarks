@@ -1,16 +1,11 @@
-//! A sink that says on stderr what is happening as it happens.
-
 use crate::cmd::Cmd;
 use crate::execute::Status;
 use crate::sink::Sink;
 use crate::step::Step;
 use crate::table::format_bytes;
 
-/// Prints a line per command as it lands, under a header per step.
 #[derive(Debug, Default)]
 pub struct Progress {
-    /// Whether the current step's header has been printed. The header waits for
-    /// the step's first command so it needs no hook of its own.
     titled: bool,
 }
 

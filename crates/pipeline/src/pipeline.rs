@@ -38,39 +38,26 @@ impl PipelineBuilder {
         PipelineBuilder::default()
     }
 
-    /// Add a step. A bare [`Cmd`](crate::Cmd) counts as one, so `.step(cmd)`
-    /// works.
     pub fn step(mut self, step: impl Into<Step>) -> Self {
         self.steps.push(step.into());
         self
     }
 
-    /// Add somewhere for results to go. A pipeline with no sinks runs silently
-    /// and writes nothing.
     pub fn sink(mut self, sink: impl Sink + 'static) -> Self {
         self.sinks.0.push(Box::new(sink));
         self
     }
 
-    /// Keep failure logs somewhere other than `stderr/`. Each run gets its own
-    /// directory under this one, named after the time it was built.
     pub fn stderr_dir(mut self, dir: impl Into<PathBuf>) -> Self {
         self.stderr_dir = Some(dir.into());
         self
     }
 
-    /// Do not keep stderr from failures at all. Commands that route their own
-    /// stderr are unaffected either way.
     pub fn no_stderr(mut self) -> Self {
         self.stderr_dir = None;
         self
     }
 
-    /// Settle everything that can be settled before anything runs: number the
-    /// steps and their commands, and decide where a failure's stderr would go.
-    ///
-    /// Nothing here touches the disk, so building and then only looking — see
-    /// [`Pipeline::dry_run`] — leaves nothing behind.
     pub fn build(self) -> Pipeline {
         let PipelineBuilder {
             mut steps,
@@ -78,27 +65,27 @@ impl PipelineBuilder {
             stderr_dir,
         } = self;
 
-        let dir = stderr_dir.map(|dir| dir.join(stamp()));
-        let mut wanted = false;
+        let maybe_dir = stderr_dir.map(|dir| dir.join(stamp()));
+        let mut stderr_wanted = false;
 
         for (s, step) in steps.iter_mut().enumerate() {
-            let s = s + 1;
-            step.index = Some(s);
-            let step_part = label::filename(s, step.name.as_deref());
+            let s_idx = s + 1;
+            step.index = Some(s_idx);
+            let step_part = label::filename(s_idx, step.name.as_deref());
 
             for (c, cmd) in step.cmds_mut().iter_mut().enumerate() {
-                let c = c + 1;
-                cmd.index = Some((s, c));
+                let c_idx = c + 1;
+                cmd.index = Some((s_idx, c_idx));
 
-                // a command that has not said where its stderr goes gets a file
-                // of its own, which it only keeps if it fails
-                if let Some(dir) = &dir
+                // if we have a stderr dir, we redirect every un-routed stderr
+                // to its own file just in case the command ends up failing
+                if let Some(dir) = &maybe_dir
                     && cmd.stderr == Output::Null
                 {
-                    let cmd_part = label::filename(c, cmd.name.as_deref());
+                    let cmd_part = label::filename(c_idx, cmd.name.as_deref());
                     cmd.stderr =
                         Output::OnFailure(dir.join(format!("{step_part}.{cmd_part}.stderr")));
-                    wanted = true;
+                    stderr_wanted = true;
                 }
             }
         }
@@ -106,23 +93,18 @@ impl PipelineBuilder {
         Pipeline {
             steps,
             sinks,
-            stderr_dir: if wanted { dir } else { None },
+            stderr_dir: if stderr_wanted { maybe_dir } else { None },
         }
     }
 }
 
-/// A pipeline with everything decided, ready to run.
 pub struct Pipeline {
     steps: Vec<Step>,
     sinks: Sinks,
-    /// This run's directory for failure logs, if any command is going to use it.
     stderr_dir: Option<PathBuf>,
 }
 
 impl Pipeline {
-    /// Print what [`run`](Self::run) would run, without running it. Shows the
-    /// exact argv, so a typo in a generated flag is visible before anything
-    /// takes an hour to fail.
     pub fn dry_run(&self) {
         for step in &self.steps {
             println!("# {}", step.label());
@@ -132,16 +114,6 @@ impl Pipeline {
         }
     }
 
-    /// Run everything, announcing each command to every sink as it lands.
-    ///
-    /// A command failing is not an error: it gets a [`Status`] and the step's
-    /// [`OnError`](crate::OnError) decides whether the run goes on. When it does
-    /// not, every command left — in this step and every step after it — is
-    /// announced as [`Status::Skipped`], so a sink never has to work out what it
-    /// missed.
-    ///
-    /// `Err` means the pipeline could not do its job, which in practice means a
-    /// sink refused to write.
     pub fn run(self) -> anyhow::Result<()> {
         let Pipeline {
             mut steps,
@@ -151,20 +123,15 @@ impl Pipeline {
 
         sinks.start(&steps)?;
 
-        // a redirect target has to exist before anything spawns, so this cannot
-        // wait for the first failure. after the sinks, so a sink that cannot
-        // write leaves no directory behind
         if let Some(dir) = &stderr_dir {
             std::fs::create_dir_all(dir)
                 .with_context(|| format!("failed to create {}", dir.display()))?;
         }
 
-        // one watchdog for the whole run, since a deadline and a step giving up
-        // are the same job: signalling a child somebody else is waiting on
         let live = Arc::new(Live::default());
         let _watchdog = Live::watch(&live);
 
-        // run steps until one of them says that is enough
+        // run steps until one of them halts
         let mut left = steps.iter_mut();
         for step in left.by_ref() {
             match step.strategy {
@@ -179,7 +146,7 @@ impl Pipeline {
             }
         }
 
-        // the ones that never got a turn still have to be accounted for
+        // any steps after an early halt get to report here
         for step in left {
             skip_rest(step, &mut sinks)?;
             sinks.step_done(step)?;
@@ -187,9 +154,7 @@ impl Pipeline {
 
         sinks.finish()?;
 
-        // if nothing failed with anything to say, these are empty and go away.
-        // remove_dir refuses a directory with anything in it, which is exactly
-        // the check we want
+        // cleanup
         if let Some(dir) = &stderr_dir {
             std::fs::remove_dir(dir).ok();
             if let Some(parent) = dir.parent() {
