@@ -3,13 +3,11 @@
 use std::fs::{File, OpenOptions};
 use std::io;
 use std::process::{Command, Stdio};
-use std::sync::Mutex;
 use std::time::Instant;
 
 use anyhow::Context;
 
 use crate::cmd::{Cmd, Output};
-use crate::table::format_bytes;
 
 /// What one command cost, taken from `wait4`.
 ///
@@ -34,9 +32,14 @@ impl Timing {
 /// How far a command got.
 #[derive(Clone, Debug)]
 pub enum Status {
-    /// Never attempted. Either nothing has been run yet, or the pipeline
-    /// stopped before reaching it.
+    /// Not yet attempted. The starting state, and the only one a [`Sink`] never
+    /// sees: by the time a command is announced it has reached one of the
+    /// three below.
+    ///
+    /// [`Sink`]: crate::Sink
     NotRun,
+    /// Never will be attempted, because the pipeline stopped before reaching it.
+    Skipped,
     /// Tried, but no process came of it — the program could not be spawned, or
     /// a redirect could not be opened. Carries the reason.
     Failed(String),
@@ -46,11 +49,11 @@ pub enum Status {
 }
 
 impl Status {
-    /// Whether this counts against the run. [`NotRun`](Status::NotRun) does
-    /// not: a command that never got its turn did not fail.
+    /// Whether this counts against the run. A command that never got its turn
+    /// did not fail.
     pub fn failed(&self) -> bool {
         match self {
-            Status::NotRun => false,
+            Status::NotRun | Status::Skipped => false,
             Status::Failed(_) => true,
             Status::Finished(t) => !t.ok(),
         }
@@ -70,52 +73,6 @@ pub fn execute(cmd: &mut Cmd) {
         Err(e) => Status::Failed(format!("{e:#}")),
     };
     cmd.status = status;
-}
-
-/// Run one command and say on stderr how it went, so a long pipeline shows its
-/// progress as it goes.
-pub(crate) fn execute_verbose(cmd: &mut Cmd) {
-    execute(cmd);
-    eprintln!("{}", progress(cmd));
-}
-
-/// Run commands `jobs` at a time. Workers take the next command off a shared
-/// queue whenever they are free, so one slow command does not idle the rest.
-pub(crate) fn execute_batch(cmds: &mut [Cmd], jobs: usize) {
-    let queue = Mutex::new(cmds.iter_mut());
-
-    std::thread::scope(|scope| {
-        for _ in 0..jobs {
-            scope.spawn(|| {
-                loop {
-                    let Some(cmd) = queue.lock().unwrap().next() else {
-                        break;
-                    };
-                    execute_verbose(cmd);
-                }
-            });
-        }
-    });
-}
-
-/// One line saying how a command went.
-fn progress(cmd: &Cmd) -> String {
-    let name = cmd.name();
-    match cmd.status() {
-        Status::NotRun => format!("  {name:<32} not run"),
-        Status::Failed(why) => format!("  {name:<32} {why}"),
-        Status::Finished(t) => format!(
-            "  {:<32} {:>9.2}s {:>9}  {}",
-            name,
-            t.wall_s,
-            format_bytes(t.max_rss_kb),
-            if t.ok() {
-                "ok".to_string()
-            } else {
-                format!("exit {}", t.exit)
-            }
-        ),
-    }
 }
 
 fn spawn_and_wait(cmd: &Cmd) -> anyhow::Result<Timing> {

@@ -1,111 +1,154 @@
-//! The summary table, written as the pipeline runs.
+//! A sink that writes the summary table.
 //!
 //! Two kinds of row, told apart by the first column. A step row carries the
 //! step's name and its wall clock; the command rows under it carry a `|` or `||`
 //! instead of a name, and their own numbers. A step of one command collapses to
 //! a single row, since the two would otherwise say the same thing twice.
+//!
+//! Rows are buffered per step, because a column's width is not known until the
+//! last cell in it has arrived. What happens at the end of a step depends on the
+//! mode: [`Table::new`] writes that step's block right away, [`Table::whole`]
+//! holds everything back so the entire table lines up as one.
 
 use std::collections::BTreeSet;
-use std::path::Path;
+use std::path::PathBuf;
 
 use anyhow::Context;
 
-use crate::Step;
 use crate::cmd::Cmd;
 use crate::execute::{Status, Timing};
+use crate::sink::Sink;
+use crate::step::Step;
 
 /// Marks a command that ran after the one above it.
 const SERIAL: &str = "|";
 /// Marks a command that ran alongside the others in its step.
 const BATCH: &str = "||";
 
-/// What a pipeline did: the steps it was given, with a [`crate::Status`] on
-/// every command.
-#[derive(Clone, Debug, Default)]
-pub struct Report {
-    pub(crate) steps: Vec<Step>,
+/// Writes a table of everything the pipeline ran.
+#[derive(Debug)]
+pub struct Table {
+    path: PathBuf,
+    whole: bool,
+    /// Every label key and tag any command carries, worked out up front so all
+    /// blocks end up with the same columns whatever order the labels turn up in.
+    header: Vec<String>,
+    dimensions: usize,
+    keys: Vec<String>,
+    tags: Vec<String>,
+    /// The current step's command rows, waiting for its step row.
+    pending: Vec<Vec<Cell>>,
+    /// Blocks already written, or every row so far in whole mode.
+    done: Vec<Vec<Cell>>,
+    text: String,
 }
 
-impl Report {
-    /// Every command, in the order they were meant to run, paired with the name
-    /// of the step it belongs to.
-    pub fn cmds(&self) -> impl Iterator<Item = (&str, &Cmd)> {
-        self.steps
-            .iter()
-            .flat_map(|s| s.cmds().iter().map(move |c| (s.name(), c)))
-    }
-
-    /// How many commands could not be run or came back nonzero. Commands that
-    /// never got their turn do not count.
-    pub fn failed(&self) -> usize {
-        self.cmds().filter(|(_, c)| c.status.failed()).count()
-    }
-
-    /// How long the pipeline spent inside steps, on the wall clock.
-    pub fn wall_s(&self) -> f64 {
-        self.steps.iter().filter_map(|s| s.wall_s()).sum()
-    }
-
-    /// The table, laid out with a commented header and padded columns.
-    ///
-    /// Label columns are the union of every key any command carries, so
-    /// commands that did not set a key show a dash. Tag columns follow, reading
-    /// `x` or `-`. `argv` is last and left unpadded, since it can run to
-    /// hundreds of characters.
-    pub fn render(&self) -> String {
-        let keys: Vec<String> = self
-            .cmds()
-            .flat_map(|(_, c)| c.labels.keys().cloned())
-            .collect::<BTreeSet<_>>()
-            .into_iter()
-            .collect();
-
-        let tags: Vec<String> = self
-            .cmds()
-            .flat_map(|(_, c)| c.tags.iter().cloned())
-            .collect::<BTreeSet<_>>()
-            .into_iter()
-            .collect();
-
-        let mut header: Vec<String> = vec!["step".into(), "cmd".into()];
-        header.extend(keys.iter().cloned());
-        header.extend(tags.iter().cloned());
-        header.extend(
-            ["wall(s)", "user(s)", "sys(s)", "max_rss", "exit", "argv"]
-                .iter()
-                .map(|s| s.to_string()),
-        );
-
-        let mut rows: Vec<Vec<Cell>> = Vec::new();
-        for step in &self.steps {
-            // a step of one would just repeat itself, so the step keeps the
-            // first column and the command fills in the rest of the row
-            if let [only] = step.cmds() {
-                rows.push(cmd_row(Cell::left(step.name()), only, &keys, &tags));
-                continue;
-            }
-
-            rows.push(step_row(step, keys.len() + tags.len()));
-            let marker = if step.batched() { BATCH } else { SERIAL };
-            for cmd in step.cmds() {
-                rows.push(cmd_row(Cell::right(marker), cmd, &keys, &tags));
-            }
+impl Table {
+    /// Write each step's block as that step finishes. Columns are the same
+    /// throughout, but each block is padded to its own contents, so blocks do
+    /// not line up with each other.
+    pub fn new(path: impl Into<PathBuf>) -> Table {
+        Table {
+            path: path.into(),
+            whole: false,
+            header: Vec::new(),
+            dimensions: 0,
+            keys: Vec::new(),
+            tags: Vec::new(),
+            pending: Vec::new(),
+            done: Vec::new(),
+            text: String::new(),
         }
-
-        render(&header, &rows)
     }
 
-    pub fn write(&self, path: impl AsRef<Path>) -> anyhow::Result<()> {
-        let path = path.as_ref();
-        if let Some(dir) = path.parent() {
+    /// Hold everything until the run is over and write one table, every row
+    /// padded to the same widths. Nothing reaches the file until the end.
+    pub fn whole(path: impl Into<PathBuf>) -> Table {
+        Table {
+            whole: true,
+            ..Table::new(path)
+        }
+    }
+
+    fn flush(&mut self) -> anyhow::Result<()> {
+        if let Some(dir) = self.path.parent() {
             std::fs::create_dir_all(dir)?;
         }
-        std::fs::write(path, self.render())
-            .with_context(|| format!("failed to write {}", path.display()))
+        std::fs::write(&self.path, &self.text)
+            .with_context(|| format!("failed to write {}", self.path.display()))
+    }
+}
+
+impl Sink for Table {
+    fn start(&mut self, steps: &[Step]) -> anyhow::Result<()> {
+        let cmds = || steps.iter().flat_map(|s| s.cmds());
+
+        self.keys = cmds()
+            .flat_map(|c| c.labels.keys().cloned())
+            .collect::<BTreeSet<_>>()
+            .into_iter()
+            .collect();
+        self.tags = cmds()
+            .flat_map(|c| c.tags.iter().cloned())
+            .collect::<BTreeSet<_>>()
+            .into_iter()
+            .collect();
+        self.dimensions = self.keys.len() + self.tags.len();
+
+        self.header = vec!["step".into(), "cmd".into()];
+        self.header.extend(self.keys.iter().cloned());
+        self.header.extend(self.tags.iter().cloned());
+        self.header.extend(
+            [
+                "wall(s)", "user(s)", "sys(s)", "max_rss", "exit", "status", "argv",
+            ]
+            .iter()
+            .map(|s| s.to_string()),
+        );
+
+        self.text.clear();
+        self.flush()
     }
 
-    pub fn print(&self) {
-        print!("{}", self.render());
+    fn record(&mut self, step: &Step, cmd: &Cmd) -> anyhow::Result<()> {
+        // a step of one would just repeat itself, so the step keeps the first
+        // column and the command fills in the rest of the row
+        let first = if step.cmds().len() == 1 {
+            Cell::left(step.name())
+        } else {
+            Cell::right(if step.batched() { BATCH } else { SERIAL })
+        };
+        self.pending
+            .push(cmd_row(first, cmd, &self.keys, &self.tags));
+        Ok(())
+    }
+
+    fn step_done(&mut self, step: &Step) -> anyhow::Result<()> {
+        let mut block: Vec<Vec<Cell>> = Vec::new();
+        if step.cmds().len() != 1 {
+            block.push(step_row(step, self.dimensions));
+        }
+        block.append(&mut self.pending);
+
+        if self.whole {
+            self.done.append(&mut block);
+            return Ok(());
+        }
+
+        if !self.text.is_empty() {
+            self.text.push('\n');
+        }
+        self.text.push_str(&render(&self.header, &block));
+        self.flush()
+    }
+
+    fn finish(&mut self) -> anyhow::Result<()> {
+        if self.whole {
+            let rows = std::mem::take(&mut self.done);
+            self.text = render(&self.header, &rows);
+            self.flush()?;
+        }
+        Ok(())
     }
 }
 
@@ -148,10 +191,9 @@ fn step_row(step: &Step, dimensions: usize) -> Vec<Cell> {
         )));
     }
 
-    // exit codes belong to commands; a count here would be a different quantity
-    // sharing a column
-    cells.push(Cell::left("-"));
-    cells.push(Cell::left("-"));
+    // exit and status belong to commands; a count or a rollup here would be a
+    // different quantity sharing a column
+    cells.extend(std::iter::repeat_n(Cell::left("-"), 3));
     cells
 }
 
@@ -175,14 +217,20 @@ fn cmd_row(first: Cell, cmd: &Cmd, keys: &[String], tags: &[String]) -> Vec<Cell
             cells.push(Cell::left(format!("{:.2}", t.sys_s)));
             cells.push(Cell::left(format_bytes(t.max_rss_kb)));
             cells.push(Cell::left(t.exit.to_string()));
+            cells.push(Cell::left("ok"));
         }
-        // nothing was measured either way; the exit cell is what separates
-        // "could not start" from "never got its turn"
+        // nothing was measured either way; status is what separates "could not
+        // start" from "never got its turn", which leaves exit to hold exit codes
+        // and nothing else
         Status::Failed(_) => {
-            cells.extend(std::iter::repeat_n(Cell::left("-"), 4));
+            cells.extend(std::iter::repeat_n(Cell::left("-"), 5));
             cells.push(Cell::left("err"));
         }
-        Status::NotRun => cells.extend(std::iter::repeat_n(Cell::left("-"), 5)),
+        Status::Skipped => {
+            cells.extend(std::iter::repeat_n(Cell::left("-"), 5));
+            cells.push(Cell::left("skip"));
+        }
+        Status::NotRun => cells.extend(std::iter::repeat_n(Cell::left("-"), 6)),
     }
 
     cells.push(Cell::left(cmd.line()));
@@ -190,7 +238,7 @@ fn cmd_row(first: Cell, cmd: &Cmd, keys: &[String], tags: &[String]) -> Vec<Cell
 }
 
 /// A cell and which side its padding goes on.
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 struct Cell {
     text: String,
     right: bool,

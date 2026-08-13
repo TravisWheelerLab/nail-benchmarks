@@ -1,26 +1,32 @@
-//! Run a list of commands, measure each one, and write down what happened.
+//! Run a list of commands, measure each one, and hand the results to whoever
+//! asked for them.
 //!
-//! The whole model is three types. A [`Cmd`] is one process: an argv, where its
-//! output goes, how it should be described in the table, and — once it has run —
-//! what it cost. A [`Step`] is a named batch or sequence of commands sharing a
-//! failure policy. A [`Pipeline`] is a list of steps plus somewhere to put the
-//! [`Report`], which is those same steps handed back with their timings filled
-//! in.
+//! A [`Cmd`] is one process: an argv, where its output goes, how it should be
+//! described, and — once it has run — a [`Status`] saying how it went. A
+//! [`Step`] is a named group of commands that run in order or all at once, and
+//! that share a failure policy. A [`Pipeline`] is a list of steps.
 //!
-//! `examples/basic.rs` puts the three together.
+//! Output is somebody else's job. A pipeline announces what happened to the
+//! [`Sink`]s registered on it and knows nothing more than that: [`Progress`]
+//! prints to stderr as commands land, [`Table`] writes the summary table, and
+//! anything else is an implementation away.
 //!
-//! Steps always run one after another. Within a step, commands run in order or
-//! all at once, depending on how the step was built. Nothing here knows about
-//! shells, config files, or what the commands are for.
+//! `examples/basic.rs` puts it together.
+//!
+//! Nothing here knows about shells, config files, or what the commands are for.
 
 mod cmd;
 mod execute;
 mod pipeline;
+mod progress;
+mod sink;
 mod step;
 mod table;
 
 pub use cmd::{Cmd, Output};
 pub use execute::{Status, Timing, execute};
 pub use pipeline::Pipeline;
+pub use progress::Progress;
+pub use sink::Sink;
 pub use step::{OnError, Step};
-pub use table::Report;
+pub use table::Table;

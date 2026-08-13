@@ -1,8 +1,8 @@
-//! A pipeline end to end: a bare command, a serial step, a batch, a table.
+//! A pipeline end to end: a bare command, a batch, a serial step, two sinks.
 //!
 //! `cargo run -p pipeline --example basic`
 
-use pipeline::{Cmd, OnError, Output, Pipeline, Step};
+use pipeline::{Cmd, OnError, Output, Pipeline, Progress, Step, Table};
 
 fn main() -> anyhow::Result<()> {
     let dir = std::env::temp_dir().join("pipeline-basic");
@@ -19,7 +19,7 @@ fn main() -> anyhow::Result<()> {
             .label("job", i)
     });
 
-    let report = Pipeline::new()
+    Pipeline::new()
         // a bare Cmd is a step of one
         .step(
             Cmd::new("make-data", "/bin/sh")
@@ -48,17 +48,12 @@ fn main() -> anyhow::Result<()> {
             // one bad command should not cost us the rest of the matrix
             .on_error(OnError::Continue),
         )
-        .table(&table)
+        .sink(Progress::new())
+        .sink(Table::new(&table))
         .run()?;
 
     println!("\n{}", table.display());
-    report.print();
-    println!(
-        "\n{} of {} failed, {:.2}s of pipeline time",
-        report.failed(),
-        report.cmds().count(),
-        report.wall_s()
-    );
+    print!("{}", std::fs::read_to_string(&table)?);
 
     Ok(())
 }
