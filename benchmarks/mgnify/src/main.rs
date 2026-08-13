@@ -15,7 +15,6 @@ use clap::{Parser, Subcommand};
 
 use run::{Numa, Options, Paths, Search};
 
-
 #[derive(Parser)]
 #[command(name = "mgnify", about = "mgnify/pfam benchmark")]
 struct Cli {
@@ -72,7 +71,6 @@ pub struct RunArgs {
     /// List the expanded runs and exit without executing anything.
     #[arg(long)]
     pub dry_run: bool,
-
 }
 
 fn main() -> anyhow::Result<()> {

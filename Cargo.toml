@@ -4,6 +4,7 @@ resolver = "2"
 members = [
     "crates/bioio",
     "crates/feisty",
+    "crates/pipeline",
     "crates/run",
     "benchmarks/pct-id",
     "benchmarks/mgnify",
@@ -13,6 +14,7 @@ members = [
 [workspace.dependencies]
 bioio = { path = "crates/bioio" }
 feisty = { path = "crates/feisty" }
+pipeline = { path = "crates/pipeline" }
 run = { path = "crates/run" }
 
 anyhow = "1.0.99"
