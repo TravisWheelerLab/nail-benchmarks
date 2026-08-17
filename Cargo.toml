@@ -8,13 +8,15 @@ members = [
     "crates/run",
     "benchmarks/pct-id",
     "benchmarks/mgnify",
-    "benchmarks/long-seqs",
+    "benchmarks/long-seqs", "crates/tools",
+    "benchmarks/search-size",
 ]
 
 [workspace.dependencies]
 bioio = { path = "crates/bioio" }
 feisty = { path = "crates/feisty" }
 pipeline = { path = "crates/pipeline" }
+tools = { path = "crates/tools" }
 run = { path = "crates/run" }
 
 anyhow = "1.0.99"

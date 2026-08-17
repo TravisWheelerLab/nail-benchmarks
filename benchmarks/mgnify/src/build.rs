@@ -1,6 +1,6 @@
 use std::fs::File;
 use std::io::{BufWriter, Write};
-use std::path::{Path, PathBuf};
+use std::path::Path;
 
 use anyhow::{bail, Context};
 use clap::Parser;
@@ -11,14 +11,8 @@ use rand::SeedableRng;
 use bioio::aggregate::AggregateFasta;
 use bioio::{fasta, hmm, stockholm};
 use feisty::Permutation;
-
-pub fn dir() -> PathBuf {
-    PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-}
-
-pub fn repo() -> PathBuf {
-    run::repo(env!("CARGO_MANIFEST_DIR"))
-}
+use pipeline::{Cmd, PipelineBuilder, Progress, Sink, Step};
+use tools::{mgnify, mmseqs, pfam_hmm, pfam_sto};
 
 pub const DEFAULT_NAME: &str = "benchmark";
 const INDEX_NAME: &str = "mgnify.afi";
@@ -26,7 +20,7 @@ const INDEX_NAME: &str = "mgnify.afi";
 #[derive(Parser, Debug)]
 pub struct Args {
     /// The name of the benchmark directory. The path resolves to "benchmarks/mgnify/<name>/"
-    #[arg(long, default_value = DEFAULT_NAME)]
+    #[arg(default_value = DEFAULT_NAME)]
     pub name: String,
 
     /// The number of target database shards
@@ -47,33 +41,27 @@ pub struct Args {
 }
 
 pub fn main(args: Args) -> anyhow::Result<()> {
-    let repo = repo();
+    let src_dir = mgnify()?;
+    let src_hmm = pfam_hmm()?;
+    let src_sto = pfam_sto()?;
 
-    let src_dir = repo.join("data/mgnify");
-    let src_hmm = repo.join("data/pfam.hmm");
-    let src_sto = repo.join("data/pfam.sto");
+    let mmseqs = mmseqs()?;
 
-    for path in [&src_dir, &src_hmm, &src_sto] {
-        if !path.exists() {
-            bail!(
-                "missing source data {}; run `make setup` from the repo root",
-                path.display()
-            );
-        }
-    }
-
-    let bench = dir().join(&args.name);
+    let bench = crate::util::dir().join(&args.name);
 
     if bench.exists() {
-        std::fs::remove_dir_all(&bench)?;
+        bail!("benchmark: {} already exists", args.name)
     }
 
     std::fs::create_dir_all(&bench)?;
 
     // ---- queries ----
 
-    let query_hmm = bench.join("query.hmm");
-    let query_sto = bench.join("query.sto");
+    let queries = bench.join("queries");
+    std::fs::create_dir_all(&queries)?;
+
+    let query_hmm = queries.join("query.hmm");
+    let query_sto = queries.join("query.sto");
 
     match args.n_fams {
         None => {
@@ -96,9 +84,44 @@ pub fn main(args: Args) -> anyhow::Result<()> {
         }
     }
 
+    println!("building the mmseqs profile db...");
+
+    let msa_db = queries.join("msaDB");
+    let query_db = queries.join("queryDB");
+
+    PipelineBuilder::new()
+        .step(
+            Step::serial([
+                Cmd::new("mkdir")
+                    .name("dirs")
+                    .flag("-p")
+                    .path(&msa_db)
+                    .path(&query_db),
+                Cmd::new(&mmseqs)
+                    .name("convertmsa")
+                    .sub("convertmsa")
+                    .arg("--identifier-field", 0)
+                    .path(&query_sto)
+                    .path(msa_db.join("msaDB")),
+                Cmd::new(&mmseqs)
+                    .name("msa2profile")
+                    .sub("msa2profile")
+                    .arg("--match-mode", 1)
+                    .path(msa_db.join("msaDB"))
+                    .path(query_db.join("queryDB")),
+                Cmd::new("rm").name("cleanup").flag("-rf").path(&msa_db),
+            ])
+            .name("profile db"),
+        )
+        .stderr_dir(bench.join("stderr"))
+        .sink(Progress::new())
+        .sink(MustSucceed)
+        .build()
+        .run()?;
+
     // ---- targets ----
 
-    let mgy = bench.join("mgy");
+    let targets = bench.join("targets");
 
     let seqs = AggregateFasta::builder()
         .dir(&src_dir)
@@ -121,10 +144,26 @@ pub fn main(args: Args) -> anyhow::Result<()> {
         seqs.files().len(),
         args.shards
     );
-    deal(&seqs, n_seqs, args.shards, args.seed, &mgy)?;
+    deal(&seqs, n_seqs, args.shards, args.seed, &targets)?;
 
     println!("\nbuilt {}", bench.display());
     Ok(())
+}
+
+/// Turns a failed command into a failed build.
+///
+/// A pipeline treats failure as something to record and carry on from, which is
+/// right when it is measuring a benchmark. Here there is nothing to measure and
+/// nothing downstream works without the db, so the first failure ends it.
+struct MustSucceed;
+
+impl Sink for MustSucceed {
+    fn record(&mut self, _step: &Step, cmd: &Cmd) -> anyhow::Result<()> {
+        if cmd.status().failed() {
+            bail!("{} failed: {}", cmd.label(), cmd.line());
+        }
+        Ok(())
+    }
 }
 
 fn deal(
@@ -183,6 +222,7 @@ fn deal(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::path::PathBuf;
 
     /// A collection whose records name themselves, so a deal can be checked
     /// against what went into it.

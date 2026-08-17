@@ -25,8 +25,7 @@ mod util {
     };
 
     use anyhow::Context;
-    
-    
+
     use rayon::ThreadPoolBuilder;
 
     pub trait Float: PartialOrd {}
@@ -619,9 +618,11 @@ fn recall(args: RecallArgs) -> anyhow::Result<()> {
     let start = Instant::now();
 
     // a benchmark owns its results, runs table, and analysis output
-    let bench = crate::build::dir().join(&args.name);
+    let bench = crate::util::dir().join(&args.name);
     let results_dir = args.results.unwrap_or_else(|| bench.join("results"));
-    let runs_path = args.runs.unwrap_or_else(|| bench.join(run::table::FILE_NAME));
+    let runs_path = args
+        .runs
+        .unwrap_or_else(|| bench.join(run::table::FILE_NAME));
     let out_path = args.out_path.unwrap_or_else(|| bench.join("analysis"));
 
     util::set_threads(args.num_threads)?;

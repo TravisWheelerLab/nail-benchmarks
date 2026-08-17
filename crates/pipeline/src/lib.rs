@@ -7,7 +7,7 @@ mod sink;
 mod step;
 mod table;
 
-pub use cmd::{Cmd, Output};
+pub use cmd::{Cmd, Output, Value};
 pub use execute::{execute, Status, Timing};
 pub use pipeline::{Pipeline, PipelineBuilder};
 pub use progress::Progress;

@@ -15,11 +15,84 @@ pub enum Output {
     OnFailure(PathBuf),
 }
 
+/// Something that can stand in as the value of an option.
+///
+/// There is no blanket impl over Display, so paths get their own and come out
+/// without the quotes a Debug print would add.
+pub trait Value {
+    fn render(self) -> String;
+}
+
+macro_rules! value_via_display {
+    ($($t:ty),* $(,)?) => {
+        $(impl Value for $t {
+            fn render(self) -> String {
+                self.to_string()
+            }
+        })*
+    };
+}
+
+value_via_display!(
+    &str,
+    String,
+    &String,
+    char,
+    bool,
+    u8,
+    u16,
+    u32,
+    u64,
+    usize,
+    i8,
+    i16,
+    i32,
+    i64,
+    isize,
+    f32,
+    f64,
+    std::fmt::Arguments<'_>,
+);
+
+impl Value for &Path {
+    fn render(self) -> String {
+        self.display().to_string()
+    }
+}
+
+impl Value for PathBuf {
+    fn render(self) -> String {
+        self.display().to_string()
+    }
+}
+
+impl Value for &PathBuf {
+    fn render(self) -> String {
+        self.display().to_string()
+    }
+}
+
+/// An option: a flag on its own, or a flag with a value after it.
+#[derive(Clone, Debug)]
+pub(crate) struct Opt {
+    flag: String,
+    value: Option<String>,
+}
+
+/// A command, built but not run.
+///
+/// The pieces are kept apart rather than in one argv so that the order they are
+/// added in doesn't matter. Several of these tools take their query and target
+/// as trailing positionals, and an option tacked on after them would be read as
+/// another file.
 #[derive(Clone, Debug)]
 pub struct Cmd {
     pub(crate) name: Option<String>,
     pub(crate) index: Option<(usize, usize)>,
-    pub(crate) argv: Vec<String>,
+    pub(crate) program: PathBuf,
+    pub(crate) sub: Vec<String>,
+    pub(crate) opts: Vec<Opt>,
+    pub(crate) positionals: Vec<String>,
     pub(crate) env: BTreeMap<String, String>,
     pub(crate) dir: Option<PathBuf>,
     pub(crate) timeout: Option<Duration>,
@@ -35,7 +108,10 @@ impl Cmd {
         Cmd {
             name: None,
             index: None,
-            argv: vec![program.as_ref().display().to_string()],
+            program: program.as_ref().to_owned(),
+            sub: Vec::new(),
+            opts: Vec::new(),
+            positionals: Vec::new(),
             env: BTreeMap::new(),
             dir: None,
             timeout: None,
@@ -52,26 +128,40 @@ impl Cmd {
         self
     }
 
-    pub fn arg(mut self, arg: impl std::fmt::Display) -> Self {
-        self.argv.push(arg.to_string());
+    /// A subcommand, like the `search` in `mmseqs search`. Call it more than
+    /// once for tools that nest them.
+    pub fn sub(mut self, sub: impl Into<String>) -> Self {
+        self.sub.push(sub.into());
         self
     }
 
-    pub fn args<I, S>(mut self, args: I) -> Self
-    where
-        I: IntoIterator<Item = S>,
-        S: std::fmt::Display,
-    {
-        self.argv.extend(args.into_iter().map(|a| a.to_string()));
+    /// An option that stands alone, like `--allow-overwrite`.
+    pub fn flag(mut self, flag: impl Into<String>) -> Self {
+        self.opts.push(Opt {
+            flag: flag.into(),
+            value: None,
+        });
         self
     }
 
-    pub fn path(self, path: impl AsRef<Path>) -> Self {
-        self.arg(path.as_ref().display())
+    /// An option and the value that follows it, like `-E 10`.
+    pub fn arg(mut self, flag: impl Into<String>, value: impl Value) -> Self {
+        self.opts.push(Opt {
+            flag: flag.into(),
+            value: Some(value.render()),
+        });
+        self
     }
 
-    pub fn env(mut self, key: impl Into<String>, value: impl std::fmt::Display) -> Self {
-        self.env.insert(key.into(), value.to_string());
+    /// A positional. These come out in the order they were added, after
+    /// everything else.
+    pub fn path(mut self, path: impl AsRef<Path>) -> Self {
+        self.positionals.push(path.as_ref().display().to_string());
+        self
+    }
+
+    pub fn env(mut self, key: impl Into<String>, value: impl Value) -> Self {
+        self.env.insert(key.into(), value.render());
         self
     }
 
@@ -103,8 +193,8 @@ impl Cmd {
         self.stderr(Output::File(path.into()))
     }
 
-    pub fn field(mut self, key: impl Into<String>, value: impl std::fmt::Display) -> Self {
-        self.fields.insert(key.into(), value.to_string());
+    pub fn field(mut self, key: impl Into<String>, value: impl Value) -> Self {
+        self.fields.insert(key.into(), value.render());
         self
     }
 
@@ -122,10 +212,6 @@ impl Cmd {
         &self.status
     }
 
-    pub fn argv(&self) -> &[String] {
-        &self.argv
-    }
-
     pub fn fields(&self) -> &BTreeMap<String, String> {
         &self.fields
     }
@@ -141,14 +227,67 @@ impl Cmd {
         }
     }
 
+    /// Everything after the program, in the order it gets handed to the shell.
+    pub(crate) fn args(&self) -> Vec<String> {
+        let mut out = Vec::with_capacity(self.sub.len() + self.opts.len() + self.positionals.len());
+
+        out.extend(self.sub.iter().cloned());
+
+        for opt in &self.opts {
+            out.push(opt.flag.clone());
+            if let Some(value) = &opt.value {
+                out.push(value.clone());
+            }
+        }
+
+        out.extend(self.positionals.iter().cloned());
+        out
+    }
+
+    /// The command as a line you can paste into a shell and get the same thing.
+    ///
+    /// A working directory becomes a subshell so pasting it leaves your own
+    /// shell where it was. The redirects sit outside it, because the files are
+    /// opened before the child moves anywhere, so a relative one lands in the
+    /// same place either way.
     pub fn line(&self) -> String {
-        self.env
+        let mut parts: Vec<String> = self
+            .env
             .iter()
             .map(|(key, value)| format!("{key}={}", quote(value)))
-            .chain(self.argv.iter().map(|a| quote(a)))
-            .collect::<Vec<_>>()
-            .join(" ")
+            .collect();
+
+        parts.push(quote(&self.program.display().to_string()));
+        parts.extend(self.args().iter().map(|a| quote(a)));
+
+        let mut line = parts.join(" ");
+
+        if let Some(dir) = &self.dir {
+            line = format!("(cd {} && {line})", quote(&dir.display().to_string()));
+        }
+
+        for redirect in [redirect(&self.stdout, ""), redirect(&self.stderr, "2")]
+            .into_iter()
+            .flatten()
+        {
+            line.push(' ');
+            line.push_str(&redirect);
+        }
+
+        line
     }
+}
+
+fn redirect(out: &Output, fd: &str) -> Option<String> {
+    let (op, path) = match out {
+        Output::Inherit => return None,
+        Output::Null => (">", "/dev/null".to_string()),
+        // OnFailure still writes to the file, it just may not survive the run
+        Output::File(p) | Output::OnFailure(p) => (">", quote(&p.display().to_string())),
+        Output::Append(p) => (">>", quote(&p.display().to_string())),
+    };
+
+    Some(format!("{fd}{op} {path}"))
 }
 
 fn quote(arg: &str) -> String {

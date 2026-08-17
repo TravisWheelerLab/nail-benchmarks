@@ -252,11 +252,13 @@ dependencies = [
  "feisty",
  "glob",
  "indexmap",
+ "pipeline",
  "rand",
  "rayon",
  "regex",
  "run",
  "thread_local",
+ "tools",
 ]
 
 [[package]]
@@ -413,6 +415,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "search-size"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "bioio",
+ "clap",
+ "feisty",
+ "pipeline",
+ "tools",
+]
+
+[[package]]
 name = "serde"
 version = "1.0.229"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -526,6 +540,13 @@ name = "toml_writer"
 version = "1.1.2+spec-1.1.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "7d56353a2a665ad0f41a421187180aab746c8c325620617ad883a99a1cbe66d2"
+
+[[package]]
+name = "tools"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+]
 
 [[package]]
 name = "unicode-ident"

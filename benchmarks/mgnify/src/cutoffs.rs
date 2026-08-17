@@ -58,7 +58,7 @@ struct Layout {
 
 impl Layout {
     fn new(name: &str, out: &str) -> anyhow::Result<Self> {
-        let bench = build::dir().join(name);
+        let bench = crate::util::dir().join(name);
         if !bench.is_dir() {
             bail!(
                 "benchmark directory {} does not exist; run `mgnify build{}` first",
@@ -271,8 +271,8 @@ pub fn main(cmd: Cmd) -> anyhow::Result<()> {
 /// point parameters, so splitting on dots is not safe elsewhere and is not
 /// worth doing differently here.
 fn shards(dir: &Path) -> anyhow::Result<Vec<(usize, PathBuf)>> {
-    let entries = std::fs::read_dir(dir)
-        .with_context(|| format!("failed to read {}", dir.display()))?;
+    let entries =
+        std::fs::read_dir(dir).with_context(|| format!("failed to read {}", dir.display()))?;
 
     let mut out: Vec<(usize, PathBuf)> = entries
         .filter_map(|e| e.ok())
@@ -322,13 +322,15 @@ fn reverse(args: ReverseArgs) -> anyhow::Result<()> {
 
     let pool = pool(args.threads)?;
     pool.install(|| {
-        found.par_iter().try_for_each(|(i, path)| -> anyhow::Result<()> {
-            // plain `<n>.fa`, not `<n>.rev.fa`: the directory already says
-            // these are reversed, and the shard index has to stay readable off
-            // the stem for the stages downstream
-            bioio::fasta::reverse(path, &dst.join(format!("{i}.fa")))
-                .with_context(|| format!("failed to reverse shard {i}"))
-        })
+        found
+            .par_iter()
+            .try_for_each(|(i, path)| -> anyhow::Result<()> {
+                // plain `<n>.fa`, not `<n>.rev.fa`: the directory already says
+                // these are reversed, and the shard index has to stay readable off
+                // the stem for the stages downstream
+                bioio::fasta::reverse(path, &dst.join(format!("{i}.fa")))
+                    .with_context(|| format!("failed to reverse shard {i}"))
+            })
     })?;
 
     println!("reversed {} shards", found.len());
@@ -396,33 +398,32 @@ fn decoys(args: DecoysArgs) -> anyhow::Result<()> {
     let wanted: Vec<(String, HashMap<String, Vec<String>>)> = pool.install(|| {
         shards
             .par_iter()
-            .map(|shard| -> anyhow::Result<(String, HashMap<String, Vec<String>>)> {
-                let mut map: HashMap<String, Vec<String>> = HashMap::new();
+            .map(
+                |shard| -> anyhow::Result<(String, HashMap<String, Vec<String>>)> {
+                    let mut map: HashMap<String, Vec<String>> = HashMap::new();
 
-                let path = runs.table_path(nail, shard);
-                let tbl = HitTable::from_path::<_, NailTable>(&path)
-                    .with_context(|| format!("failed to read {}", path.display()))?;
-                collect(tbl, &mut map);
+                    let path = runs.table_path(nail, shard);
+                    let tbl = HitTable::from_path::<_, NailTable>(&path)
+                        .with_context(|| format!("failed to read {}", path.display()))?;
+                    collect(tbl, &mut map);
 
-                let path = runs.table_path(mmseqs, shard);
-                let tbl = HitTable::from_path::<_, BlastTable>(&path)
-                    .with_context(|| format!("failed to read {}", path.display()))?;
-                collect(tbl, &mut map);
+                    let path = runs.table_path(mmseqs, shard);
+                    let tbl = HitTable::from_path::<_, BlastTable>(&path)
+                        .with_context(|| format!("failed to read {}", path.display()))?;
+                    collect(tbl, &mut map);
 
-                for v in map.values_mut() {
-                    v.sort();
-                    v.dedup();
-                }
+                    for v in map.values_mut() {
+                        v.sort();
+                        v.dedup();
+                    }
 
-                Ok((shard.clone(), map))
-            })
+                    Ok((shard.clone(), map))
+                },
+            )
             .collect::<anyhow::Result<Vec<_>>>()
     })?;
 
-    let families: HashSet<String> = wanted
-        .iter()
-        .flat_map(|(_, m)| m.keys().cloned())
-        .collect();
+    let families: HashSet<String> = wanted.iter().flat_map(|(_, m)| m.keys().cloned()).collect();
 
     if families.is_empty() {
         bail!("no family recruited any decoys; is the recruit stage's E-value too strict?");
@@ -449,50 +450,52 @@ fn decoys(args: DecoysArgs) -> anyhow::Result<()> {
 
     let mgy = layout.mgy();
     pool.install(|| {
-        wanted.par_iter().try_for_each(|(shard, map)| -> anyhow::Result<()> {
-            // invert to a name lookup so the shard is read once, streaming,
-            // rather than held in memory
-            let mut by_target: HashMap<&str, Vec<&str>> = HashMap::new();
-            for (family, names) in map {
-                for name in names {
-                    by_target
-                        .entry(name.as_str())
-                        .or_default()
-                        .push(family.as_str());
+        wanted
+            .par_iter()
+            .try_for_each(|(shard, map)| -> anyhow::Result<()> {
+                // invert to a name lookup so the shard is read once, streaming,
+                // rather than held in memory
+                let mut by_target: HashMap<&str, Vec<&str>> = HashMap::new();
+                for (family, names) in map {
+                    for name in names {
+                        by_target
+                            .entry(name.as_str())
+                            .or_default()
+                            .push(family.as_str());
+                    }
                 }
-            }
 
-            let path = mgy.join(format!("{shard}.fa"));
-            let mut reader = bioio::fasta::Reader::from_path(&path)
-                .with_context(|| format!("failed to open {}", path.display()))?;
+                let path = mgy.join(format!("{shard}.fa"));
+                let mut reader = bioio::fasta::Reader::from_path(&path)
+                    .with_context(|| format!("failed to open {}", path.display()))?;
 
-            let mut buffers: HashMap<&str, String> = HashMap::new();
-            while let Some(rec) = reader.next_record()? {
-                let Some(fams) = by_target.get(rec.name.as_str()) else {
-                    continue;
-                };
-                for family in fams {
-                    let buf = buffers.entry(family).or_default();
-                    buf.push_str(&format!("{rec}\n"));
+                let mut buffers: HashMap<&str, String> = HashMap::new();
+                while let Some(rec) = reader.next_record()? {
+                    let Some(fams) = by_target.get(rec.name.as_str()) else {
+                        continue;
+                    };
+                    for family in fams {
+                        let buf = buffers.entry(family).or_default();
+                        buf.push_str(&format!("{rec}\n"));
+                    }
                 }
-            }
 
-            for (family, text) in buffers {
-                let guard = handles
-                    .get(family)
-                    .with_context(|| format!("no handle for family {family}"))?
-                    .lock()
-                    .expect("family mutex poisoned");
+                for (family, text) in buffers {
+                    let guard = handles
+                        .get(family)
+                        .with_context(|| format!("no handle for family {family}"))?
+                        .lock()
+                        .expect("family mutex poisoned");
 
-                let mut file = std::fs::OpenOptions::new()
-                    .create(true)
-                    .append(true)
-                    .open(&*guard)?;
-                file.write_all(text.as_bytes())?;
-            }
+                    let mut file = std::fs::OpenOptions::new()
+                        .create(true)
+                        .append(true)
+                        .open(&*guard)?;
+                    file.write_all(text.as_bytes())?;
+                }
 
-            Ok(())
-        })
+                Ok(())
+            })
     })?;
 
     // ---- reverse them back, so both directions are searched in stage 2
@@ -595,7 +598,13 @@ fn search(args: StageArgs) -> anyhow::Result<()> {
         .jobs
         .unwrap_or_else(|| std::thread::available_parallelism().map_or(4, |n| n.get()));
 
-    stage(DECOY_BLOCK, searches, &args, layout.root.clone(), How::Split(jobs))
+    stage(
+        DECOY_BLOCK,
+        searches,
+        &args,
+        layout.root.clone(),
+        How::Split(jobs),
+    )
 }
 
 // ------------------------------------------------------- shared stage setup
@@ -609,8 +618,14 @@ enum How {
 }
 
 /// Plan and execute one of the two search stages.
-fn stage(block: &str, searches: Vec<Search>, args: &StageArgs, into: PathBuf, how: How) -> anyhow::Result<()> {
-    let config = run::Config::from_path_as(build::dir().join("cutoffs.toml"), block)?;
+fn stage(
+    block: &str,
+    searches: Vec<Search>,
+    args: &StageArgs,
+    into: PathBuf,
+    how: How,
+) -> anyhow::Result<()> {
+    let config = run::Config::from_path_as(crate::util::dir().join("cutoffs.toml"), block)?;
 
     let opts = Options {
         filter: args.filter.clone(),
@@ -642,7 +657,7 @@ fn stage(block: &str, searches: Vec<Search>, args: &StageArgs, into: PathBuf, ho
     };
 
     let paths = Paths {
-        bin: build::repo().join("tools/bin"),
+        bin: tools::repo().join("tools/bin"),
         tmp: into.join("tmp"),
         results,
         // above results/, so it survives the wipe at the start of a stage
@@ -697,38 +712,38 @@ fn learn(args: LearnArgs) -> anyhow::Result<()> {
 
     let pool = pool(args.threads)?;
     pool.install(|| {
-        families.par_iter().try_for_each(|family| -> anyhow::Result<()> {
-            let nail_scores = decoy_scores::<NailTable>(&results, &nail, family, args.reverse_e_cutoff)?;
-            let mmseqs_scores =
-                decoy_scores::<BlastTable>(&results, &mmseqs, family, args.reverse_e_cutoff)?;
-            let hmmer_scores = match &hmmer {
-                Some(run) => decoy_scores::<HmmerTable>(&results, run, family, args.reverse_e_cutoff)?,
-                None => None,
-            };
+        families
+            .par_iter()
+            .try_for_each(|family| -> anyhow::Result<()> {
+                let nail_scores =
+                    decoy_scores::<NailTable>(&results, &nail, family, args.reverse_e_cutoff)?;
+                let mmseqs_scores =
+                    decoy_scores::<BlastTable>(&results, &mmseqs, family, args.reverse_e_cutoff)?;
+                let hmmer_scores = match &hmmer {
+                    Some(run) => {
+                        decoy_scores::<HmmerTable>(&results, run, family, args.reverse_e_cutoff)?
+                    }
+                    None => None,
+                };
 
-            let (Some(n), Some(m)) = (nail_scores, mmseqs_scores) else {
-                // a family without both tables tells us nothing comparative
-                skipped.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-                return Ok(());
-            };
+                let (Some(n), Some(m)) = (nail_scores, mmseqs_scores) else {
+                    // a family without both tables tells us nothing comparative
+                    skipped.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                    return Ok(());
+                };
 
-            let mut line = format!("{family},{},{}", group("nail", &n), group("mmseqs", &m));
-            if let Some(h) = hmmer_scores {
-                line.push(',');
-                line.push_str(&group("hmmer", &h));
-            }
+                let mut line = format!("{family},{},{}", group("nail", &n), group("mmseqs", &m));
+                if let Some(h) = hmmer_scores {
+                    line.push(',');
+                    line.push_str(&group("hmmer", &h));
+                }
 
-            writeln!(
-                out.lock().expect("output mutex poisoned"),
-                "{line}"
-            )?;
-            Ok(())
-        })
+                writeln!(out.lock().expect("output mutex poisoned"), "{line}")?;
+                Ok(())
+            })
     })?;
 
-    out.into_inner()
-        .expect("output mutex poisoned")
-        .flush()?;
+    out.into_inner().expect("output mutex poisoned").flush()?;
 
     let skipped = skipped.load(std::sync::atomic::Ordering::Relaxed);
     if skipped > 0 {

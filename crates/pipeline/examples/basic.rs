@@ -19,9 +19,8 @@ fn main() -> anyhow::Result<()> {
     let burns = (1..=4).map(|i| {
         Cmd::new("/bin/sh")
             .name(format!("burn-{i}"))
-            .arg("-c")
-            // arg takes anything printable, so the count needs no to_string
-            .arg(format_args!("seq 1 {} > /dev/null", i * 5_000_000))
+            // a value can be anything printable, so the count needs no to_string
+            .arg("-c", format_args!("seq 1 {} > /dev/null", i * 5_000_000))
             .field("job", i)
     });
 
@@ -31,7 +30,7 @@ fn main() -> anyhow::Result<()> {
     let sleeps = (1..=2).map(|i| {
         Cmd::new("/bin/sh")
             .name(format!("sleep-{i}"))
-            .args(["-c", "sleep 30"])
+            .arg("-c", "sleep 30")
     });
 
     PipelineBuilder::new()
@@ -39,7 +38,7 @@ fn main() -> anyhow::Result<()> {
         .step(
             Cmd::new("/bin/sh")
                 .name("make-data")
-                .args(["-c", "seq 1 2000"])
+                .arg("-c", "seq 1 2000")
                 .stdout_to(&data)
                 .tag("setup"),
         )
@@ -50,7 +49,7 @@ fn main() -> anyhow::Result<()> {
                 // along in the pasteable line
                 Cmd::new("/usr/bin/wc")
                     .name("lines")
-                    .arg("-l")
+                    .flag("-l")
                     .path("data.txt")
                     .dir(&dir)
                     .env("LC_ALL", "C")
@@ -58,7 +57,7 @@ fn main() -> anyhow::Result<()> {
                     .field("mode", "lines"),
                 Cmd::new("/usr/bin/wc")
                     .name("bytes")
-                    .arg("-c")
+                    .flag("-c")
                     .path("data.txt")
                     .dir(&dir)
                     .env("LC_ALL", "C")
@@ -69,7 +68,7 @@ fn main() -> anyhow::Result<()> {
                 // fails with something to say, so its stderr is kept
                 Cmd::new("/bin/sh")
                     .name("boom")
-                    .args(["-c", "echo 'no such database' >&2; exit 3"]),
+                    .arg("-c", "echo 'no such database' >&2; exit 3"),
             ])
             .name("count")
             // one bad command should not cost us the rest of the matrix
@@ -78,7 +77,7 @@ fn main() -> anyhow::Result<()> {
         .step(
             Step::serial([Cmd::new("/bin/sh")
                 .name("slow")
-                .args(["-c", "sleep 30"])
+                .arg("-c", "sleep 30")
                 .timeout(Duration::from_millis(300))])
             .name("limit")
             .on_error(OnError::Continue),
@@ -89,7 +88,7 @@ fn main() -> anyhow::Result<()> {
                 std::iter::once(
                     Cmd::new("/bin/sh")
                         .name("early")
-                        .args(["-c", "exit 1"])
+                        .arg("-c", "exit 1")
                         .field("job", 0),
                 )
                 .chain(sleeps),
@@ -97,7 +96,7 @@ fn main() -> anyhow::Result<()> {
             .name("race"),
         )
         // never gets a turn, because the step above stops the run
-        .step(Cmd::new("/bin/echo").name("after").arg("unreachable"))
+        .step(Cmd::new("/bin/echo").name("after").path("unreachable"))
         .sink(Progress::new())
         .sink(Table::new(&table))
         .build()

@@ -241,14 +241,19 @@ pub fn measure(
     searches: &[Search],
     paths: &Paths,
 ) -> anyhow::Result<()> {
-    let matrix = prepare(runs, searches, paths)?;
+    let plan = Plan::new(runs, searches, paths)?;
     let mut table = table::Writer::create(&paths.runs_table, config.sweep_columns())?;
     let report = Report::new(runs.len() * searches.len());
 
-    for (tool, run) in &matrix {
+    for (tool, run) in &plan.runs {
         for search in searches {
             let label = describe_one(run, search);
-            println!("[{}/{}] {label} | {}", report.next(), report.total, run.args.join(" "));
+            println!(
+                "[{}/{}] {label} | {}",
+                report.next(),
+                report.total,
+                run.args.join(" ")
+            );
 
             match execute_one(*tool, run, search, paths) {
                 Err(e) => report.error(format!("{label}: {e:#}")),
@@ -286,7 +291,7 @@ pub fn batch(
     jobs: usize,
 ) -> anyhow::Result<()> {
     let jobs = jobs.max(1);
-    let matrix = prepare(runs, searches, paths)?;
+    let plan = Plan::new(runs, searches, paths)?;
 
     let pool = rayon::ThreadPoolBuilder::new()
         .num_threads(jobs)
@@ -300,7 +305,7 @@ pub fn batch(
     let report = Report::new(runs.len() * searches.len());
     let last_report = Mutex::new(Instant::now());
 
-    for (tool, run) in &matrix {
+    for (tool, run) in &plan.runs {
         pool.install(|| {
             searches.par_iter().for_each(|search| {
                 let label = describe_one(run, search);
@@ -337,46 +342,41 @@ pub fn batch(
 
 // ------------------------------------------------------------------ internals
 
-/// Check the matrix, resolve its tools, and build every database it needs.
-///
-/// Both executors run this before measuring anything, so a bad config or a
-/// missing binary surfaces before any time is spent.
-fn prepare(
-    runs: &[Run],
-    searches: &[Search],
-    paths: &Paths,
-) -> anyhow::Result<Vec<(Tool, Run)>> {
-    if searches.is_empty() {
-        bail!("no searches to run");
+/// The validated matrix, with every database already built.
+struct Plan {
+    runs: Vec<(Tool, Run)>,
+}
+
+impl Plan {
+    fn new(runs: &[Run], searches: &[Search], paths: &Paths) -> anyhow::Result<Self> {
+        if searches.is_empty() {
+            bail!("no searches to run");
+        }
+
+        // labels name the outputs, the logs and the scratch directories, so a
+        // collision would have two searches overwriting each other everywhere
+        let labels: HashSet<&str> = searches.iter().map(|s| s.label.as_str()).collect();
+        if labels.len() != searches.len() {
+            bail!("searches must have distinct labels");
+        }
+
+        let runs: Vec<(Tool, Run)> = runs
+            .iter()
+            .map(|r| Ok((Tool::parse(&r.tool)?, r.clone())))
+            .collect::<anyhow::Result<_>>()?;
+
+        std::fs::create_dir_all(paths.log_dir())?;
+        build_databases(&runs, searches, paths)?;
+
+        Ok(Plan { runs })
     }
-
-    // labels name the outputs, the logs and the scratch directories, so a
-    // collision would have two searches overwriting each other everywhere
-    let labels: HashSet<&str> = searches.iter().map(|s| s.label.as_str()).collect();
-    if labels.len() != searches.len() {
-        bail!("searches must have distinct labels");
-    }
-
-    let runs: Vec<(Tool, Run)> = runs
-        .iter()
-        .map(|r| Ok((Tool::parse(&r.tool)?, r.clone())))
-        .collect::<anyhow::Result<_>>()?;
-
-    std::fs::create_dir_all(paths.log_dir())?;
-    build_databases(&runs, searches, paths)?;
-
-    Ok(runs)
 }
 
 /// Build every database the matrix needs, before anything is measured.
 ///
 /// This runs to completion on one thread, so two searches deriving the same
 /// database path cannot race to build it and leave one that is neither.
-fn build_databases(
-    runs: &[(Tool, Run)],
-    searches: &[Search],
-    paths: &Paths,
-) -> anyhow::Result<()> {
+fn build_databases(runs: &[(Tool, Run)], searches: &[Search], paths: &Paths) -> anyhow::Result<()> {
     let mut tools: Vec<Tool> = Vec::new();
     for (tool, _) in runs {
         if !tools.contains(tool) {
@@ -438,11 +438,6 @@ fn execute_one(
     let work = tool
         .work(run, search, paths)
         .with_context(|| format!("could not plan run {:?}", run.name))?;
-
-    for dir in &work.dirs {
-        std::fs::create_dir_all(dir)
-            .with_context(|| format!("failed to create {}", dir.display()))?;
-    }
 
     let (timing, cmd) = match &work.search {
         Shape::One(cmd) => (exec::run(cmd, numa)?, exec::render(cmd, numa)),

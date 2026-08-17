@@ -228,8 +228,8 @@ pub(crate) fn stamp() -> String {
 }
 
 fn spawn(cmd: &Cmd) -> anyhow::Result<(libc::pid_t, Instant)> {
-    let mut proc = Command::new(&cmd.argv[0]);
-    proc.args(&cmd.argv[1..]);
+    let mut proc = Command::new(&cmd.program);
+    proc.args(cmd.args());
     proc.envs(&cmd.env);
     if let Some(dir) = &cmd.dir {
         proc.current_dir(dir);
@@ -240,7 +240,7 @@ fn spawn(cmd: &Cmd) -> anyhow::Result<(libc::pid_t, Instant)> {
     let start = Instant::now();
     let child = proc
         .spawn()
-        .with_context(|| format!("failed to spawn {}", cmd.argv[0]))?;
+        .with_context(|| format!("failed to spawn {}", cmd.program.display()))?;
 
     Ok((child.id() as libc::pid_t, start))
 }
