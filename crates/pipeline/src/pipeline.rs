@@ -5,7 +5,7 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, mpsc};
 use std::time::Instant;
 
-use anyhow::Context;
+use anyhow::{Context, anyhow};
 
 use crate::cmd::{Cmd, Output};
 use crate::execute::{Live, Status, stamp};
@@ -75,7 +75,6 @@ impl PipelineBuilder {
 
             for (c, cmd) in step.cmds_mut().iter_mut().enumerate() {
                 let c_idx = c + 1;
-                cmd.index = Some((s_idx, c_idx));
 
                 // if we have a stderr dir, we redirect every un-routed stderr
                 // to its own file just in case the command ends up failing
@@ -131,7 +130,8 @@ impl Pipeline {
         let live = Arc::new(Live::default());
         let _watchdog = Live::watch(&live);
 
-        // run steps until one of them halts
+        // run steps until one of them aborts
+        let mut failure = None;
         let mut left = steps.iter_mut();
         for step in left.by_ref() {
             match step.strategy {
@@ -141,12 +141,13 @@ impl Pipeline {
             skip_rest(step, &mut sinks)?;
             sinks.step_done(step)?;
 
-            if step.halts() {
+            if let Some(cmd) = step.aborts() {
+                failure = Some(format!("{} failed: {}", cmd.label(), cmd.line()));
                 break;
             }
         }
 
-        // any steps after an early halt get to report here
+        // any steps after an early abort get to report here
         for step in left {
             skip_rest(step, &mut sinks)?;
             sinks.step_done(step)?;
@@ -161,7 +162,13 @@ impl Pipeline {
                 std::fs::remove_dir(parent).ok();
             }
         }
-        Ok(())
+
+        // last, so the table is finished and the stderr log is still there to
+        // read by the time the caller hears about it
+        match failure {
+            Some(failure) => Err(anyhow!(failure)),
+            None => Ok(()),
+        }
     }
 }
 
@@ -197,7 +204,7 @@ fn serial(step: &mut Step, live: &Live, sinks: &mut Sinks) -> anyhow::Result<()>
         step.elapsed_s = Some(start.elapsed().as_secs_f64());
 
         sinks.record(step, &step.cmds()[j])?;
-        if step.halts() {
+        if step.skips() {
             break;
         }
     }
@@ -254,7 +261,7 @@ fn batch(step: &mut Step, jobs: usize, live: &Live, sinks: &mut Sinks) -> anyhow
             step.elapsed_s = Some(start.elapsed().as_secs_f64());
             sinks.record(step, &step.cmds()[k])?;
 
-            if step.halts() {
+            if step.skips() {
                 live.stop();
             }
         }

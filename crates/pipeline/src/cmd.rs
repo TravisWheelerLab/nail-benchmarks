@@ -3,7 +3,6 @@ use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 use crate::execute::Status;
-use crate::label;
 
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub enum Output {
@@ -88,7 +87,6 @@ pub(crate) struct Opt {
 #[derive(Clone, Debug)]
 pub struct Cmd {
     pub(crate) name: Option<String>,
-    pub(crate) index: Option<(usize, usize)>,
     pub(crate) program: PathBuf,
     pub(crate) sub: Vec<String>,
     pub(crate) opts: Vec<Opt>,
@@ -107,7 +105,6 @@ impl Cmd {
     pub fn new(program: impl AsRef<Path>) -> Self {
         Cmd {
             name: None,
-            index: None,
             program: program.as_ref().to_owned(),
             sub: Vec::new(),
             opts: Vec::new(),
@@ -203,9 +200,18 @@ impl Cmd {
         self
     }
 
+    /// What to call this command in a table or on the progress line: its name if
+    /// it was given one, and otherwise the program it runs, with the path in
+    /// front of it dropped. Not unique — the argv column is what tells two
+    /// `mkdir`s apart.
     pub fn label(&self) -> String {
-        let index = self.index.map(|(step, cmd)| format!("{step}.{cmd}"));
-        label::label(index.as_deref(), self.name.as_deref())
+        match &self.name {
+            Some(name) => name.clone(),
+            None => match self.program.file_name() {
+                Some(file) => file.to_string_lossy().into_owned(),
+                None => self.program.display().to_string(),
+            },
+        }
     }
 
     pub fn status(&self) -> &Status {

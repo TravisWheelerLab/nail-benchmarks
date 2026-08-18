@@ -11,7 +11,7 @@ use rand::SeedableRng;
 use bioio::aggregate::AggregateFasta;
 use bioio::{fasta, hmm, stockholm};
 use feisty::Permutation;
-use pipeline::{Cmd, PipelineBuilder, Progress, Sink, Step};
+use pipeline::{Cmd, PipelineBuilder, Progress, Step};
 use tools::{mgnify, mmseqs, pfam_hmm, pfam_sto};
 
 pub const DEFAULT_NAME: &str = "benchmark";
@@ -115,7 +115,6 @@ pub fn main(args: Args) -> anyhow::Result<()> {
         )
         .stderr_dir(bench.join("stderr"))
         .sink(Progress::new())
-        .sink(MustSucceed)
         .build()
         .run()?;
 
@@ -148,22 +147,6 @@ pub fn main(args: Args) -> anyhow::Result<()> {
 
     println!("\nbuilt {}", bench.display());
     Ok(())
-}
-
-/// Turns a failed command into a failed build.
-///
-/// A pipeline treats failure as something to record and carry on from, which is
-/// right when it is measuring a benchmark. Here there is nothing to measure and
-/// nothing downstream works without the db, so the first failure ends it.
-struct MustSucceed;
-
-impl Sink for MustSucceed {
-    fn record(&mut self, _step: &Step, cmd: &Cmd) -> anyhow::Result<()> {
-        if cmd.status().failed() {
-            bail!("{} failed: {}", cmd.label(), cmd.line());
-        }
-        Ok(())
-    }
 }
 
 fn deal(

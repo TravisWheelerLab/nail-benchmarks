@@ -1,11 +1,16 @@
 use crate::cmd::Cmd;
 use crate::label;
 
+/// How far a failed command reaches.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub enum OnError {
-    #[default]
-    Stop,
+    /// Run the rest of this step's commands anyway.
     Continue,
+    /// Skip the rest of this step. The pipeline carries on to the next one.
+    Skip,
+    /// Skip the rest of this step, skip every step after it, and fail the run.
+    #[default]
+    Abort,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -75,8 +80,16 @@ impl Step {
         &mut self.cmds
     }
 
-    pub(crate) fn halts(&self) -> bool {
-        self.on_error == OnError::Stop && self.cmds.iter().any(|c| c.status().failed())
+    /// Whether the rest of this step's commands are worth running.
+    pub(crate) fn skips(&self) -> bool {
+        self.on_error != OnError::Continue && self.cmds.iter().any(|c| c.status().failed())
+    }
+
+    /// The command that ends the run, if this step holds one.
+    pub(crate) fn aborts(&self) -> Option<&Cmd> {
+        (self.on_error == OnError::Abort)
+            .then(|| self.cmds.iter().find(|c| c.status().failed()))
+            .flatten()
     }
 }
 
