@@ -88,6 +88,10 @@ pub(crate) struct Opt {
 pub struct Cmd {
     pub(crate) name: Option<String>,
     pub(crate) program: PathBuf,
+    /// How many cores this asks for, and the ones it was given. The second is
+    /// filled in when the pipeline is built, from the first.
+    pub(crate) cores: Option<usize>,
+    pub(crate) cpus: Vec<usize>,
     pub(crate) sub: Vec<String>,
     pub(crate) opts: Vec<Opt>,
     pub(crate) positionals: Vec<String>,
@@ -106,6 +110,8 @@ impl Cmd {
         Cmd {
             name: None,
             program: program.as_ref().to_owned(),
+            cores: None,
+            cpus: Vec::new(),
             sub: Vec::new(),
             opts: Vec::new(),
             positionals: Vec::new(),
@@ -122,6 +128,13 @@ impl Cmd {
 
     pub fn name(mut self, name: impl Into<String>) -> Self {
         self.name = Some(name.into());
+        self
+    }
+
+    /// Pin this command to `cores` physical cores, whichever ones are going.
+    /// Overrides whatever its step asked for.
+    pub fn cores(mut self, cores: usize) -> Self {
+        self.cores = Some(cores);
         self
     }
 
@@ -250,6 +263,24 @@ impl Cmd {
         out
     }
 
+    /// What actually gets exec'd, with the pinning wrapper in front of it if
+    /// this command was given cpus.
+    ///
+    /// `program` is left alone rather than being rewritten to `taskset`, so an
+    /// unnamed command still labels itself after the thing it runs.
+    pub(crate) fn argv(&self) -> (PathBuf, Vec<String>) {
+        let mut wrapper = crate::cpu::wrapper(&self.cpus);
+        if wrapper.is_empty() {
+            return (self.program.clone(), self.args());
+        }
+
+        let program = PathBuf::from(wrapper.remove(0));
+        let mut args = wrapper;
+        args.push(self.program.display().to_string());
+        args.extend(self.args());
+        (program, args)
+    }
+
     /// The command as a line you can paste into a shell and get the same thing.
     ///
     /// A working directory becomes a subshell so pasting it leaves your own
@@ -263,8 +294,9 @@ impl Cmd {
             .map(|(key, value)| format!("{key}={}", quote(value)))
             .collect();
 
-        parts.push(quote(&self.program.display().to_string()));
-        parts.extend(self.args().iter().map(|a| quote(a)));
+        let (program, args) = self.argv();
+        parts.push(quote(&program.display().to_string()));
+        parts.extend(args.iter().map(|a| quote(a)));
 
         let mut line = parts.join(" ");
 

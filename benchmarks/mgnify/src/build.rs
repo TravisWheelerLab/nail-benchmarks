@@ -115,7 +115,7 @@ pub fn main(args: Args) -> anyhow::Result<()> {
         )
         .stderr_dir(bench.join("stderr"))
         .sink(Progress::new())
-        .build()
+        .build()?
         .run()?;
 
     // ---- targets ----

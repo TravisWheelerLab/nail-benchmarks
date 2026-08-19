@@ -99,7 +99,7 @@ fn main() -> anyhow::Result<()> {
         .step(Cmd::new("/bin/echo").name("after").path("unreachable"))
         .sink(Progress::new())
         .sink(Table::new(&table))
-        .build()
+        .build()?
         .run()?;
 
     println!("\n{}", table.display());

@@ -1,4 +1,5 @@
 mod cmd;
+mod cpu;
 mod execute;
 mod label;
 mod pipeline;

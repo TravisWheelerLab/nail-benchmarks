@@ -27,6 +27,9 @@ pub struct Step {
     pub(crate) strategy: Strategy,
     pub(crate) on_error: OnError,
     pub(crate) elapsed_s: Option<f64>,
+    /// How many cores each of this step's commands asks for, unless it asked
+    /// for itself.
+    pub(crate) cores: Option<usize>,
 }
 
 impl Step {
@@ -46,8 +49,19 @@ impl Step {
             strategy,
             on_error: OnError::default(),
             elapsed_s: None,
+            cores: None,
         }
     }
+
+    /// Pin each of this step's commands to `cores` physical cores.
+    ///
+    /// Per command, not per step: a batch of four with `cores(2)` has eight
+    /// cores in flight, on eight distinct physical cores.
+    pub fn cores(mut self, cores: usize) -> Self {
+        self.cores = Some(cores);
+        self
+    }
+
 
     pub fn name(mut self, name: impl Into<String>) -> Self {
         self.name = Some(name.into());

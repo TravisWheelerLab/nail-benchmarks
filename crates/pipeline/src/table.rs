@@ -225,7 +225,7 @@ fn header(keys: &[String], tags: &[String]) -> Vec<String> {
     header.extend(tags.iter().cloned());
     header.extend(
         [
-            "wall(s)", "user(s)", "sys(s)", "max_rss", "exit", "status", "argv",
+            "wall(s)", "user(s)", "sys(s)", "cpu(%)", "max_rss", "exit", "status", "argv",
         ]
         .iter()
         .map(|s| s.to_string()),
@@ -256,18 +256,18 @@ fn step_row(step: &Step, dimensions: usize) -> Vec<Cell> {
 
     // no peak means nothing finished, so there is nothing to add up either
     match timings.iter().map(|t| t.max_rss_kb).max() {
-        None => cells.extend(std::iter::repeat_n(Cell::left("-"), 3)),
+        None => cells.extend(std::iter::repeat_n(Cell::left("-"), 4)),
         Some(peak) => {
             // summed CPU against measured wall is what shows whether a batch
             // actually bought anything
-            cells.push(Cell::left(format!(
-                "{:.2}",
-                timings.iter().map(|t| t.user_s).sum::<f64>()
-            )));
-            cells.push(Cell::left(format!(
-                "{:.2}",
-                timings.iter().map(|t| t.sys_s).sum::<f64>()
-            )));
+            let user_s: f64 = timings.iter().map(|t| t.user_s).sum();
+            let sys_s: f64 = timings.iter().map(|t| t.sys_s).sum();
+            cells.push(Cell::left(format!("{user_s:.2}")));
+            cells.push(Cell::left(format!("{sys_s:.2}")));
+            // the same ratio the commands report, over the step's own clock, so
+            // a batch that ran four commands at once reads about four times what
+            // any one of them did
+            cells.push(Cell::left(cpu_pct(user_s + sys_s, step.wall_s())));
             // the largest any one process got, which is not the same as the most
             // the step held at once — wait4 cannot tell us that
             cells.push(Cell::left(format_bytes(peak)));
@@ -300,10 +300,11 @@ fn cmd_row(first: Cell, cmd: &Cmd, keys: &[String], tags: &[String]) -> Vec<Cell
             cells.push(Cell::left(format!("{:.2}", t.wall_s)));
             cells.push(Cell::left(format!("{:.2}", t.user_s)));
             cells.push(Cell::left(format!("{:.2}", t.sys_s)));
+            cells.push(Cell::left(cpu_pct(t.user_s + t.sys_s, Some(t.wall_s))));
             cells.push(Cell::left(format_bytes(t.max_rss_kb)));
             cells.push(Cell::left(t.exit.to_string()));
         }
-        _ => cells.extend(std::iter::repeat_n(Cell::left("-"), 5)),
+        _ => cells.extend(std::iter::repeat_n(Cell::left("-"), 6)),
     }
 
     cells.push(Cell::left(status_word(cmd.status())));
@@ -419,6 +420,19 @@ fn write_row(out: &mut String, cells: &[Cell], widths: &[usize]) {
         out.push(' ');
     }
     out.push('\n');
+}
+
+/// `time`'s `%P`: the CPU something burned over the wall clock it took, so a
+/// command that kept four cores busy the whole way through reads 400%.
+///
+/// Truncated rather than rounded, since `time` divides two integers. `time`
+/// writes `?%` when there is no clock to divide by; the rest of this table says
+/// `-` when it has no number, so that is what goes here.
+fn cpu_pct(cpu_s: f64, wall_s: Option<f64>) -> String {
+    match wall_s.filter(|wall| *wall > 0.0) {
+        Some(wall) => format!("{:.0}%", (cpu_s / wall * 100.0).floor()),
+        None => "-".to_string(),
+    }
 }
 
 /// Peak memory in binary units, to about three significant figures so the

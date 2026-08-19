@@ -164,7 +164,7 @@ pub fn main(args: Args) -> anyhow::Result<()> {
     let pipeline = pl
         .stderr_dir(tmp_dir.join("stderr"))
         .sink(Progress::new())
-        .build();
+        .build()?;
 
     if args.dry_run {
         pipeline.dry_run();

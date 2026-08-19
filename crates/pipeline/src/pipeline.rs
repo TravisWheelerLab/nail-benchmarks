@@ -1,13 +1,15 @@
 //! The list of steps, and running them.
 
+use std::collections::VecDeque;
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, mpsc};
 use std::time::Instant;
 
-use anyhow::{Context, anyhow};
+use anyhow::{Context, anyhow, bail};
 
 use crate::cmd::{Cmd, Output};
+use crate::cpu::Cores;
 use crate::execute::{Live, Status, stamp};
 use crate::label;
 use crate::sink::Sink;
@@ -58,7 +60,7 @@ impl PipelineBuilder {
         self
     }
 
-    pub fn build(self) -> Pipeline {
+    pub fn build(self) -> anyhow::Result<Pipeline> {
         let PipelineBuilder {
             mut steps,
             sinks,
@@ -89,26 +91,84 @@ impl PipelineBuilder {
             }
         }
 
-        Pipeline {
+        // resolved once here, so nothing downstream has to know a command's
+        // core count can come from the step holding it
+        for step in steps.iter_mut() {
+            let inherited = step.cores;
+            for cmd in step.cmds_mut() {
+                if cmd.cores.is_none() {
+                    cmd.cores = inherited;
+                }
+            }
+        }
+
+        let cores = Cores::read();
+        fits(&steps, &cores)?;
+
+        Ok(Pipeline {
             steps,
             sinks,
             stderr_dir: if stderr_wanted { maybe_dir } else { None },
+            cores,
+        })
+    }
+}
+
+/// Whether every command asks for something the machine could ever give it.
+///
+/// Only the one check: a command wanting more cores than exist would wait for
+/// them forever. Anything else is a matter of waiting, since commands hand
+/// their cores back when they finish.
+fn fits(steps: &[Step], cores: &Cores) -> anyhow::Result<()> {
+    for step in steps {
+        for cmd in step.cmds() {
+            let want = cmd.cores.unwrap_or(0);
+            if want > cores.len() {
+                bail!(
+                    "{}.{} wants {want} cores, and the machine has {}",
+                    step.label(),
+                    cmd.label(),
+                    cores.len()
+                );
+            }
         }
     }
+    Ok(())
 }
 
 pub struct Pipeline {
     steps: Vec<Step>,
     sinks: Sinks,
     stderr_dir: Option<PathBuf>,
+    cores: Cores,
 }
 
 impl Pipeline {
     pub fn dry_run(&self) {
         for step in &self.steps {
             println!("# {}", step.label());
+
+            // cores really are taken and given back here, so the pinning shown
+            // is one a run could produce. only as many are held at once as the
+            // step could run at once; which command gets which is a guess,
+            // since that depends on the order workers pick them up
+            let width = match step.strategy {
+                Strategy::Serial => 1,
+                Strategy::Batch { jobs } => jobs,
+            };
+            let mut held = VecDeque::new();
+
             for cmd in step.cmds() {
-                println!("{} {}", cmd.label(), cmd.line());
+                if held.len() >= width {
+                    held.pop_front();
+                }
+                let lease = self.cores.try_acquire(cmd.cores.unwrap_or(0));
+
+                let mut copy = cmd.clone();
+                copy.cpus = lease.as_ref().map(|l| l.cpus().to_vec()).unwrap_or_default();
+                println!("{} {}", copy.label(), copy.line());
+
+                held.extend(lease);
             }
         }
     }
@@ -118,6 +178,7 @@ impl Pipeline {
             mut steps,
             mut sinks,
             stderr_dir,
+            cores,
         } = self;
 
         sinks.start(&steps)?;
@@ -127,7 +188,7 @@ impl Pipeline {
                 .with_context(|| format!("failed to create {}", dir.display()))?;
         }
 
-        let live = Arc::new(Live::default());
+        let live = Arc::new(Live::with_cores(cores));
         let _watchdog = Live::watch(&live);
 
         // run steps until one of them aborts
@@ -246,7 +307,7 @@ fn batch(step: &mut Step, jobs: usize, live: &Live, sinks: &mut Sinks) -> anyhow
                     let mut cmd = copies[k].clone();
                     live.execute(&mut cmd);
                     // a closed channel means the main thread gave up on us
-                    if tx.send((k, cmd.status)).is_err() {
+                    if tx.send((k, cmd)).is_err() {
                         break;
                     }
                 }
@@ -256,8 +317,10 @@ fn batch(step: &mut Step, jobs: usize, live: &Live, sinks: &mut Sinks) -> anyhow
 
         // results are applied here rather than in the workers, so sinks stay
         // single-threaded and the table keeps up during a long batch
-        for (k, status) in rx {
-            step.cmds_mut()[k].status = status;
+        // the whole command comes back, not just its status, so the cpus the
+        // worker actually pinned it to are what the table reports
+        for (k, cmd) in rx {
+            step.cmds_mut()[k] = cmd;
             step.elapsed_s = Some(start.elapsed().as_secs_f64());
             sinks.record(step, &step.cmds()[k])?;
 

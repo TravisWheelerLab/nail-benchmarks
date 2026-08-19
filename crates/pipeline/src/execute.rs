@@ -12,6 +12,7 @@ use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use anyhow::Context;
 
 use crate::cmd::{Cmd, Output};
+use crate::cpu::Cores;
 
 const WATCHDOG_TICK: Duration = Duration::from_millis(100);
 const SIGTERM_GRACE: Duration = Duration::from_secs(5);
@@ -63,6 +64,7 @@ pub(crate) struct Live {
     running: Mutex<Vec<Entry>>,
     stopping: AtomicBool,
     done: AtomicBool,
+    cores: Cores,
 }
 
 struct Entry {
@@ -79,7 +81,22 @@ enum Phase {
 }
 
 impl Live {
+    pub(crate) fn with_cores(cores: Cores) -> Live {
+        Live {
+            cores,
+            ..Live::default()
+        }
+    }
+
     pub(crate) fn execute(&self, cmd: &mut Cmd) {
+        // held until this command is finished with, however it finishes; the
+        // cpus go back on the way out of scope
+        let lease = self.cores.acquire(cmd.cores.unwrap_or(0), &|| self.stopping());
+        cmd.cpus = match &lease {
+            Some(lease) => lease.cpus().to_vec(),
+            None => Vec::new(),
+        };
+
         let status = match spawn(cmd) {
             Err(e) => Status::Failed(format!("{e:#}")),
             Ok((pid, start)) => {
@@ -106,6 +123,10 @@ impl Live {
         for entry in running.iter_mut() {
             entry.term(now);
         }
+        drop(running);
+        // a worker asleep waiting for cores would never look at the flag on its
+        // own, and the cores it is waiting for may never come back
+        self.cores.wake();
     }
 
     pub(crate) fn stopping(&self) -> bool {
@@ -228,8 +249,9 @@ pub(crate) fn stamp() -> String {
 }
 
 fn spawn(cmd: &Cmd) -> anyhow::Result<(libc::pid_t, Instant)> {
-    let mut proc = Command::new(&cmd.program);
-    proc.args(cmd.args());
+    let (program, args) = cmd.argv();
+    let mut proc = Command::new(&program);
+    proc.args(args);
     proc.envs(&cmd.env);
     if let Some(dir) = &cmd.dir {
         proc.current_dir(dir);
