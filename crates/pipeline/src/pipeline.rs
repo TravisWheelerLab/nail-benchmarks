@@ -8,10 +8,10 @@ use std::time::Instant;
 
 use anyhow::{Context, anyhow, bail};
 
-use crate::closure::Closure;
 use crate::cmd::{Cmd, Output};
 use crate::cpu::Cores;
 use crate::execute::{Batch, Status, stamp};
+use crate::item::Item;
 use crate::label;
 use crate::sink::Sink;
 use crate::step::{Items, Step, Strategy};
@@ -213,6 +213,7 @@ impl Pipeline {
         let mut remaining_steps = steps.iter_mut();
 
         for step in remaining_steps.by_ref() {
+            self.sinks.step_start(step)?;
             match step.strategy() {
                 Some(Strategy::Serial) => self.serial(step)?,
                 Some(Strategy::Batched { jobs }) => self.batch(step, jobs)?,
@@ -222,13 +223,17 @@ impl Pipeline {
             self.sinks.step_done(step)?;
 
             if let Some(why) = step.aborts() {
+                self.sinks.abandoned(&why)?;
                 failure = Some(why);
                 break;
             }
         }
 
-        // any steps after an early abort get to report here
+        // any steps after an early abort get to report here. they still get a
+        // start of their own, so a sink never sees a step end that it was not
+        // told had begun
         for step in remaining_steps {
+            self.sinks.step_start(step)?;
             self.skip_rest(step)?;
             self.sinks.step_done(step)?;
         }
@@ -241,10 +246,14 @@ impl Pipeline {
         let start = Instant::now();
 
         for j in 0..step.cmds().len() {
+            // a serial step is the only thing running, so its cores are free
+            // the moment it asks: nothing here waits, and announcing before the
+            // lease says the same thing as announcing after it
+            self.sinks.item_start(step, j, Item::Cmd(&step.cmds()[j]))?;
             self.cores.execute(&mut step.cmds_mut()[j]);
             step.elapsed_s = Some(start.elapsed().as_secs_f64());
 
-            self.sinks.record(step, &step.cmds()[j])?;
+            self.sinks.item_done(step, j, Item::Cmd(&step.cmds()[j]))?;
             if step.skips() {
                 break;
             }
@@ -260,10 +269,14 @@ impl Pipeline {
         let start = Instant::now();
 
         for j in 0..step.closures().len() {
+            // a closure takes no cores, so there is nothing for it to wait on
+            self.sinks
+                .item_start(step, j, Item::Closure(&step.closures()[j]))?;
             step.closures_mut()[j].execute();
             step.elapsed_s = Some(start.elapsed().as_secs_f64());
 
-            self.sinks.record_closure(step, &step.closures()[j])?;
+            self.sinks
+                .item_done(step, j, Item::Closure(&step.closures()[j]))?;
             if step.skips() {
                 break;
             }
@@ -280,6 +293,17 @@ impl Pipeline {
     /// as one, so a step that stopped shows the one command that broke it and the
     /// ones it took down with it.
     fn batch(&mut self, step: &mut Step, jobs: usize) -> anyhow::Result<()> {
+        /// What a worker has to say about the command it claimed. Both go back
+        /// over the one channel, so the main thread stays the only place that
+        /// talks to a sink.
+        ///
+        /// The command is boxed because a `Started` carries nothing, and every
+        /// message on the channel would otherwise be as big as the largest.
+        enum Event {
+            Started,
+            Done(Box<Cmd>),
+        }
+
         let start = Instant::now();
 
         // the workers run against a copy, which leaves the step free for the main
@@ -309,9 +333,14 @@ impl Pipeline {
                             break;
                         }
                         let mut cmd = copies[k].clone();
-                        batch.execute(&mut cmd);
+                        // announced from inside, once it holds its cores: a
+                        // batch can queue for them, and saying so out here
+                        // would count the queuing as part of the run
+                        batch.execute(&mut cmd, || {
+                            let _ = tx.send((k, Event::Started));
+                        });
                         // a closed channel means the main thread gave up on us
-                        if tx.send((k, cmd)).is_err() {
+                        if tx.send((k, Event::Done(Box::new(cmd)))).is_err() {
                             break;
                         }
                     }
@@ -319,25 +348,38 @@ impl Pipeline {
             }
             drop(tx);
 
-            // results are applied here rather than in the workers, so sinks stay
-            // single-threaded and the table keeps up during a long batch
-            // the whole command comes back, not just its status, so the cpus the
-            // worker actually pinned it to are what the table reports
-            for (k, cmd) in rx {
-                step.cmds_mut()[k] = cmd;
-                step.elapsed_s = Some(start.elapsed().as_secs_f64());
+            // everything the workers have to say is applied here rather than in
+            // the workers themselves, so sinks stay single-threaded and the
+            // table keeps up during a long batch
+            for (k, event) in rx {
+                // giving up on the run is not a reason to leave a batch of
+                // searches running behind us, so a sink that could not write
+                // cancels before it propagates
+                let told = match event {
+                    // the copy still sitting in the step has not run, which is
+                    // all a start has to say: its name, its fields, its tags
+                    Event::Started => sinks.item_start(step, k, Item::Cmd(&step.cmds()[k])),
 
-                // a command the batch was cancelled out from under comes back
-                // never having run. leaving it alone lets skip_rest announce it
-                // once, as skipped, alongside the ones no worker ever picked up
-                if !matches!(step.cmds()[k].status(), Status::NotRun) {
-                    // giving up on the run is not a reason to leave a batch of
-                    // searches running behind us, so this cancels before it
-                    // propagates
-                    if let Err(e) = sinks.record(step, &step.cmds()[k]) {
-                        batch.cancel(scope);
-                        return Err(e);
+                    Event::Done(cmd) => {
+                        // the whole command comes back, not just its status, so
+                        // the cpus the worker pinned it to are what gets reported
+                        step.cmds_mut()[k] = *cmd;
+                        step.elapsed_s = Some(start.elapsed().as_secs_f64());
+
+                        // one the batch was cancelled out from under comes back
+                        // never having run. leaving it alone lets skip_rest
+                        // announce it once, as skipped, alongside the ones no
+                        // worker ever picked up
+                        match step.cmds()[k].status() {
+                            Status::NotRun => Ok(()),
+                            _ => sinks.item_done(step, k, Item::Cmd(&step.cmds()[k])),
+                        }
                     }
+                };
+
+                if let Err(e) = told {
+                    batch.cancel(scope);
+                    return Err(e);
                 }
 
                 if step.skips() {
@@ -356,13 +398,14 @@ impl Pipeline {
         for j in 0..step.cmds().len() {
             if matches!(step.cmds()[j].status(), Status::NotRun) {
                 step.cmds_mut()[j].status = Status::Skipped;
-                self.sinks.record(step, &step.cmds()[j])?;
+                self.sinks.item_done(step, j, Item::Cmd(&step.cmds()[j]))?;
             }
         }
         for j in 0..step.closures().len() {
             if matches!(step.closures()[j].status(), Status::NotRun) {
                 step.closures_mut()[j].status = Status::Skipped;
-                self.sinks.record_closure(step, &step.closures()[j])?;
+                self.sinks
+                    .item_done(step, j, Item::Closure(&step.closures()[j]))?;
             }
         }
         Ok(())
@@ -372,14 +415,21 @@ impl Pipeline {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::closure::Closure;
     use crate::cpu::Cores;
     use crate::step::OnError;
     use std::sync::{Arc, Mutex};
 
     #[derive(Default)]
     struct Log {
-        /// One entry per `record`, so a command announced twice shows up twice.
+        /// One entry per `record`, so anything announced twice shows up twice.
         records: Vec<(String, String, Status)>,
+        /// One entry per `item_start`, by name.
+        started: Vec<String>,
+        /// `+label` on a step start and `-label` on a step done, so the two can
+        /// be checked for pairing and order.
+        order: Vec<String>,
+        abandoned: Option<String>,
         finished: usize,
     }
 
@@ -411,28 +461,37 @@ mod tests {
     }
 
     impl Sink for Recorder {
-        fn record(&mut self, step: &Step, cmd: &Cmd) -> anyhow::Result<()> {
-            self.log.lock().unwrap().records.push((
-                step.label(),
-                cmd.label(),
-                cmd.status().clone(),
-            ));
-            if self.broken_by.as_deref() == Some(cmd.label().as_str()) {
+        fn step_start(&mut self, step: &Step) -> anyhow::Result<()> {
+            let mut log = self.log.lock().unwrap();
+            log.order.push(format!("+{}", step.label()));
+            Ok(())
+        }
+
+        fn item_start(&mut self, _step: &Step, _at: usize, item: Item<'_>) -> anyhow::Result<()> {
+            self.log.lock().unwrap().started.push(item.label());
+            Ok(())
+        }
+
+        fn item_done(&mut self, step: &Step, _at: usize, item: Item<'_>) -> anyhow::Result<()> {
+            let mut log = self.log.lock().unwrap();
+            log.records
+                .push((step.label(), item.label(), item.status().clone()));
+            drop(log);
+
+            if self.broken_by.as_deref() == Some(item.label().as_str()) {
                 bail!("the sink cannot write");
             }
             Ok(())
         }
 
-        fn record_closure(&mut self, step: &Step, closure: &Closure) -> anyhow::Result<()> {
-            // the same log, so `of` finds either kind by name
-            self.log.lock().unwrap().records.push((
-                step.label(),
-                closure.label().to_string(),
-                closure.status().clone(),
-            ));
-            if self.broken_by.as_deref() == Some(closure.label()) {
-                bail!("the sink cannot write");
-            }
+        fn step_done(&mut self, step: &Step) -> anyhow::Result<()> {
+            let mut log = self.log.lock().unwrap();
+            log.order.push(format!("-{}", step.label()));
+            Ok(())
+        }
+
+        fn abandoned(&mut self, why: &str) -> anyhow::Result<()> {
+            self.log.lock().unwrap().abandoned = Some(why.to_string());
             Ok(())
         }
 
@@ -908,18 +967,28 @@ impl Sinks {
         self.0.iter_mut().try_for_each(|s| s.start(steps))
     }
 
-    fn record(&mut self, step: &Step, cmd: &Cmd) -> anyhow::Result<()> {
-        self.0.iter_mut().try_for_each(|s| s.record(step, cmd))
+    fn step_start(&mut self, step: &Step) -> anyhow::Result<()> {
+        self.0.iter_mut().try_for_each(|s| s.step_start(step))
     }
 
-    fn record_closure(&mut self, step: &Step, closure: &Closure) -> anyhow::Result<()> {
+    fn item_start(&mut self, step: &Step, at: usize, item: Item<'_>) -> anyhow::Result<()> {
         self.0
             .iter_mut()
-            .try_for_each(|s| s.record_closure(step, closure))
+            .try_for_each(|s| s.item_start(step, at, item))
+    }
+
+    fn item_done(&mut self, step: &Step, at: usize, item: Item<'_>) -> anyhow::Result<()> {
+        self.0
+            .iter_mut()
+            .try_for_each(|s| s.item_done(step, at, item))
     }
 
     fn step_done(&mut self, step: &Step) -> anyhow::Result<()> {
         self.0.iter_mut().try_for_each(|s| s.step_done(step))
+    }
+
+    fn abandoned(&mut self, why: &str) -> anyhow::Result<()> {
+        self.0.iter_mut().try_for_each(|s| s.abandoned(why))
     }
 
     fn finish(&mut self) -> anyhow::Result<()> {

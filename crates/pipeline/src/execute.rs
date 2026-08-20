@@ -147,7 +147,12 @@ impl<'a> Batch<'a> {
     }
 
     /// Run one command as part of the batch, which may be cancelled under it.
-    pub(crate) fn execute(&self, cmd: &mut Cmd) {
+    ///
+    /// `started` runs once the command has its cores and is about to be
+    /// spawned, so anything timing it from there measures the same stretch the
+    /// command itself reports. A batch can wait a long time for cores, and
+    /// counting that would put the two out by however long the wait was.
+    pub(crate) fn execute(&self, cmd: &mut Cmd, started: impl FnOnce()) {
         let lease = self.cores.acquire(cmd.cores.unwrap_or(0), &|| self.cancelled());
 
         // an empty lease means one of two things: the command asked for no
@@ -158,6 +163,7 @@ impl<'a> Batch<'a> {
             return;
         }
         cmd.cpus = pinned(&lease);
+        started();
 
         let status = match cmd.spawn() {
             Err(e) => Status::Failed(format!("{e:#}")),

@@ -1,7 +1,13 @@
-use crate::closure::Closure;
-use crate::cmd::Cmd;
+//! What a run is doing, a line at a time.
+//!
+//! This is the pipeline's output rather than a note about it, so it goes to
+//! stdout. Nothing in this crate writes to stderr.
+
+use std::io::Write;
+
 use crate::execute::Status;
 use crate::fmt::{bytes, dash};
+use crate::item::Item;
 use crate::sink::Sink;
 use crate::step::Step;
 
@@ -18,9 +24,20 @@ impl Progress {
     fn title(&mut self, step: &Step) {
         if !self.titled {
             self.titled = true;
-            eprintln!("{}", step.label());
+            say(&step.label());
         }
     }
+}
+
+/// One line out.
+///
+/// Flushed rather than left to the buffer, because stdout holds its output back
+/// in blocks when it is not a terminal, and a benchmark that runs for an hour
+/// is worth being able to watch through a pipe.
+fn say(line: &str) {
+    let mut out = std::io::stdout().lock();
+    let _ = writeln!(out, "{line}");
+    let _ = out.flush();
 }
 
 /// One line about how something went, whichever kind of thing it was.
@@ -45,24 +62,18 @@ fn outcome(name: &str, status: &Status) -> String {
 }
 
 impl Sink for Progress {
-    fn record(&mut self, step: &Step, cmd: &Cmd) -> anyhow::Result<()> {
+    fn item_done(&mut self, step: &Step, _at: usize, item: Item<'_>) -> anyhow::Result<()> {
         self.title(step);
-        eprintln!("{}", outcome(&cmd.label(), cmd.status()));
+        say(&outcome(&item.label(), item.status()));
 
         // only if it is still there — a failure that said nothing has had its
         // file cleaned up already
-        if cmd.status().failed()
-            && let Some(path) = cmd.stderr_path()
+        if item.status().failed()
+            && let Some(path) = item.stderr_path()
             && path.exists()
         {
-            eprintln!("    {}", path.display());
+            say(&format!("    {}", path.display()));
         }
-        Ok(())
-    }
-
-    fn record_closure(&mut self, step: &Step, closure: &Closure) -> anyhow::Result<()> {
-        self.title(step);
-        eprintln!("{}", outcome(closure.label(), closure.status()));
         Ok(())
     }
 

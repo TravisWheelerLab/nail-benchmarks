@@ -14,10 +14,9 @@ use std::path::PathBuf;
 
 use anyhow::Context;
 
-use crate::closure::Closure;
-use crate::cmd::Cmd;
 use crate::execute::{Status, Timing};
 use crate::fmt::{bytes, cpu_pct, dash, secs};
+use crate::item::Item;
 use crate::sink::Sink;
 use crate::step::{Step, Strategy};
 
@@ -198,15 +197,9 @@ impl Columns {
         let mut keys = BTreeSet::new();
         let mut tags = BTreeSet::new();
 
-        for step in steps {
-            for cmd in step.cmds() {
-                keys.extend(cmd.fields().keys().cloned());
-                tags.extend(cmd.tags().iter().cloned());
-            }
-            for closure in step.closures() {
-                keys.extend(closure.fields().keys().cloned());
-                tags.extend(closure.tags().iter().cloned());
-            }
+        for item in steps.iter().flat_map(Step::items) {
+            keys.extend(item.fields().keys().cloned());
+            tags.extend(item.tags().iter().cloned());
         }
 
         Columns {
@@ -229,7 +222,7 @@ impl Columns {
 
         // a step of one would just repeat itself, so it gets no line of its own
         // and keeps the first column instead, with its command filling in the rest
-        let first = if step.cmds().len() + step.closures().len() == 1 {
+        let first = if step.items().count() == 1 {
             Cell::left(step.label())
         } else {
             rows.push(self.step_row(step));
@@ -239,11 +232,8 @@ impl Columns {
             })
         };
 
-        for cmd in step.cmds() {
-            rows.push(self.cmd_row(first.clone(), cmd));
-        }
-        for closure in step.closures() {
-            rows.push(self.closure_row(first.clone(), closure));
+        for item in step.items() {
+            rows.push(self.row(first.clone(), item));
         }
         rows
     }
@@ -312,10 +302,8 @@ impl Columns {
         ));
 
         let timings: Vec<&Timing> = step
-            .cmds()
-            .iter()
-            .filter_map(|c| c.status().timing())
-            .chain(step.closures().iter().filter_map(|c| c.status().timing()))
+            .items()
+            .filter_map(|item| item.status().timing())
             .collect();
 
         // exit, status and argv belong to commands; a count or a rollup here
@@ -347,39 +335,24 @@ impl Columns {
 
     /// One command's line. `first` is the step name for a collapsed step of one,
     /// and a right-aligned `|` or `||` otherwise.
-    fn cmd_row(&self, first: Cell, cmd: &Cmd) -> Vec<Cell> {
-        let mut cells = vec![first, Cell::left(cmd.label())];
-        cells.extend(self.key_cells(cmd.fields(), cmd.tags()));
+    /// One item's line, whichever kind it is. The columns a closure has no
+    /// answer for come back `None` from [`Item`] and print as `-`.
+    fn row(&self, first: Cell, item: Item<'_>) -> Vec<Cell> {
+        let mut cells = vec![first, Cell::left(item.label())];
+        cells.extend(self.key_cells(item.fields(), item.tags()));
 
-        // two separate questions: what it cost, and how it went. a command that
-        // could not start has nothing to say about the first
-        let t = cmd.status().timing();
+        // two separate questions: what it cost, and how it went. one that could
+        // not start has nothing to say about the first
+        let t = item.status().timing();
         cells.extend(
             Metrics {
                 wall_s: t.map(|t| t.wall_s),
                 user_s: t.and_then(|t| t.user_s),
                 sys_s: t.and_then(|t| t.sys_s),
                 max_rss_kb: t.and_then(|t| t.max_rss_kb),
-                exit: t.map(|t| t.exit),
-                status: Some(status_word(cmd.status())),
-                argv: Some(cmd.line()),
-            }
-            .cells(),
-        );
-        cells
-    }
-
-    /// One closure's line. Only its wall clock was measured, so the cpu, memory,
-    /// exit and argv columns have nothing to put there.
-    fn closure_row(&self, first: Cell, closure: &Closure) -> Vec<Cell> {
-        let mut cells = vec![first, Cell::left(closure.label())];
-        cells.extend(self.key_cells(closure.fields(), closure.tags()));
-
-        cells.extend(
-            Metrics {
-                wall_s: closure.status().timing().map(|t| t.wall_s),
-                status: Some(status_word(closure.status())),
-                ..Metrics::default()
+                exit: item.exit(),
+                status: Some(status_word(item.status())),
+                argv: item.line(),
             }
             .cells(),
         );
@@ -518,7 +491,8 @@ fn write_row(out: &mut String, cells: &[Cell], widths: &[usize]) {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::cmd::Output;
+    use crate::closure::Closure;
+    use crate::cmd::{Cmd, Output};
     use crate::step::OnError;
 
     /// Fixed numbers so a rendered table is the same every time: 2.25s of CPU

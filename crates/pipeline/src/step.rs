@@ -1,6 +1,7 @@
 use crate::closure::Closure;
 use crate::cmd::Cmd;
 use crate::execute::Status;
+use crate::item::Item;
 use crate::label;
 
 /// How far a failed command reaches.
@@ -122,6 +123,15 @@ impl Step {
             Items::Cmds { .. } => &[],
             Items::Closures(closures) => closures,
         }
+    }
+
+    /// Everything this step holds, in the order it was given, whichever kind it
+    /// holds. This is what a sink sees.
+    pub fn items(&self) -> impl Iterator<Item = Item<'_>> {
+        self.cmds()
+            .iter()
+            .map(Item::Cmd)
+            .chain(self.closures().iter().map(Item::Closure))
     }
 
     pub fn wall_s(&self) -> Option<f64> {
