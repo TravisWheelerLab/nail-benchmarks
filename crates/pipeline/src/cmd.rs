@@ -88,9 +88,11 @@ pub(crate) struct Opt {
 pub struct Cmd {
     pub(crate) name: Option<String>,
     pub(crate) program: PathBuf,
-    /// How many cores this asks for, and the ones it was given. The second is
-    /// filled in when the pipeline is built, from the first.
+    /// How many cores this asks for. Resolved when the pipeline is built, since
+    /// it can come from the step instead.
     pub(crate) cores: Option<usize>,
+    /// The cpus it was given, filled in when it runs and only for as long as it
+    /// held them.
     pub(crate) cpus: Vec<usize>,
     pub(crate) sub: Vec<String>,
     pub(crate) opts: Vec<Opt>,
@@ -269,7 +271,11 @@ impl Cmd {
     /// `program` is left alone rather than being rewritten to `taskset`, so an
     /// unnamed command still labels itself after the thing it runs.
     pub(crate) fn argv(&self) -> (PathBuf, Vec<String>) {
-        let mut wrapper = crate::cpu::wrapper(&self.cpus);
+        self.argv_on(&self.cpus)
+    }
+
+    fn argv_on(&self, cpus: &[usize]) -> (PathBuf, Vec<String>) {
+        let mut wrapper = crate::cpu::wrapper(cpus);
         if wrapper.is_empty() {
             return (self.program.clone(), self.args());
         }
@@ -288,13 +294,19 @@ impl Cmd {
     /// opened before the child moves anywhere, so a relative one lands in the
     /// same place either way.
     pub fn line(&self) -> String {
+        self.line_on(&self.cpus)
+    }
+
+    /// The same line, but pinned to `cpus` rather than to whatever this command
+    /// was given. For showing what a run would look like before it happens.
+    pub(crate) fn line_on(&self, cpus: &[usize]) -> String {
         let mut parts: Vec<String> = self
             .env
             .iter()
             .map(|(key, value)| format!("{key}={}", quote(value)))
             .collect();
 
-        let (program, args) = self.argv();
+        let (program, args) = self.argv_on(cpus);
         parts.push(quote(&program.display().to_string()));
         parts.extend(args.iter().map(|a| quote(a)));
 

@@ -1,6 +1,7 @@
 mod cmd;
 mod cpu;
 mod execute;
+mod fmt;
 mod label;
 mod pipeline;
 mod progress;

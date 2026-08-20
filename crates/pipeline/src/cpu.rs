@@ -15,7 +15,7 @@ use std::sync::{Condvar, Mutex};
 /// ever handed out and the rest sit idle, which is why a 32-CPU machine with
 /// hyperthreading has 24 of these rather than 32.
 #[derive(Debug, Default)]
-pub struct Cores {
+pub(crate) struct Cores {
     pool: Vec<usize>,
     /// The cpus currently leased out, and something to wait on for one to come
     /// back. A command that cannot be placed yet sleeps here rather than

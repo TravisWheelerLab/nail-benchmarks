@@ -121,10 +121,7 @@ impl<'a> Batch<'a> {
             Err(e) => Status::Failed(format!("{e:#}")),
             Ok((pid, start)) => {
                 self.add(pid);
-                let waited = wait(pid, start, cmd.timeout, || self.remove(pid));
-                // wait removes it on the way through, but not if it failed first
-                self.remove(pid);
-                outcome(waited)
+                outcome(wait(pid, start, cmd.timeout, || self.remove(pid)))
             }
         };
         cmd.report(status);
@@ -366,9 +363,6 @@ fn wait(
             deadline.set_finished();
             exited();
         });
-        // reap sets it on the way through, but not if it failed before it got
-        // there, and the other thread would sit on the limit for nothing
-        deadline.set_finished();
         let killed = waiting.join().unwrap_or(false);
         timing.map(|timing| (timing, killed))
     })
@@ -379,7 +373,9 @@ fn wait(
 /// Two waits rather than one. `waitid` says it is over but leaves the pid held,
 /// and only `wait4` hands it back — `exited` runs in the gap between them, which
 /// is the one moment anything else holding this pid can be told to stop
-/// signalling it.
+/// signalling it. It runs whether or not the first wait worked, so a caller
+/// never has to arrange it a second time: a wait that failed leaves nothing more
+/// to be done with this pid either.
 fn reap(pid: libc::pid_t, start: Instant, exited: impl FnOnce()) -> anyhow::Result<Timing> {
     let mut info: libc::siginfo_t = unsafe { std::mem::zeroed() };
     let rc = unsafe {
@@ -390,13 +386,15 @@ fn reap(pid: libc::pid_t, start: Instant, exited: impl FnOnce()) -> anyhow::Resu
             libc::WEXITED | libc::WNOWAIT,
         )
     };
-    if rc < 0 {
-        return Err(io::Error::last_os_error()).context("waitid failed");
-    }
+    let waited = (rc == 0)
+        .then_some(())
+        .ok_or_else(io::Error::last_os_error);
+
     // taken here rather than after the reap, so it is when the process ended
     let wall_s = start.elapsed().as_secs_f64();
 
     exited();
+    waited.context("waitid failed")?;
 
     let mut status: libc::c_int = 0;
     let mut usage: libc::rusage = unsafe { std::mem::zeroed() };

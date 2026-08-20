@@ -1,8 +1,8 @@
 use crate::cmd::Cmd;
 use crate::execute::Status;
+use crate::fmt::bytes;
 use crate::sink::Sink;
 use crate::step::Step;
-use crate::table::format_bytes;
 
 #[derive(Debug, Default)]
 pub struct Progress {
@@ -25,27 +25,22 @@ impl Sink for Progress {
         let name = cmd.label();
         eprintln!(
             "{}",
-            match cmd.status() {
-                Status::NotRun => format!("  {name:<32} not run"),
-                Status::Skipped => format!("  {name:<32} skipped"),
-                Status::Failed(why) => format!("  {name:<32} {why}"),
-                Status::Finished(t) => format!(
+            match (cmd.status(), cmd.status().timing()) {
+                (Status::NotRun, _) => format!("  {name:<32} not run"),
+                (Status::Skipped, _) => format!("  {name:<32} skipped"),
+                (Status::Failed(why), _) => format!("  {name:<32} {why}"),
+                (status, Some(t)) => format!(
                     "  {:<32} {:>9.2}s {:>9}  {}",
                     name,
                     t.wall_s,
-                    format_bytes(t.max_rss_kb),
-                    if t.ok() {
-                        "ok".to_string()
-                    } else {
-                        format!("exit {}", t.exit)
+                    bytes(t.max_rss_kb),
+                    match status {
+                        Status::TimedOut(_) => "timed out".to_string(),
+                        _ if t.ok() => "ok".to_string(),
+                        _ => format!("exit {}", t.exit),
                     }
                 ),
-                Status::TimedOut(t) => format!(
-                    "  {:<32} {:>9.2}s {:>9}  timed out",
-                    name,
-                    t.wall_s,
-                    format_bytes(t.max_rss_kb)
-                ),
+                (_, None) => format!("  {name:<32} -"),
             }
         );
 

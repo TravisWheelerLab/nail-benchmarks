@@ -55,13 +55,13 @@ impl Step {
 
     /// Pin each of this step's commands to `cores` physical cores.
     ///
-    /// Per command, not per step: a batch of four with `cores(2)` has eight
-    /// cores in flight, on eight distinct physical cores.
+    /// Per command, not per step: a batch of four with `cores(2)` asks for eight
+    /// cores. If the machine cannot spare that many at once, the commands that
+    /// cannot be placed wait for the ones that can.
     pub fn cores(mut self, cores: usize) -> Self {
         self.cores = Some(cores);
         self
     }
-
 
     pub fn name(mut self, name: impl Into<String>) -> Self {
         self.name = Some(name.into());
@@ -73,9 +73,13 @@ impl Step {
         self
     }
 
+    /// What to call this step. Empty until the pipeline is built, which is when
+    /// a step learns its number.
     pub fn label(&self) -> String {
-        let index = self.index.map(|index| index.to_string());
-        label::label(index.as_deref(), self.name.as_deref())
+        match self.index {
+            Some(index) => label::label(index, self.name.as_deref()),
+            None => self.name.clone().unwrap_or_default(),
+        }
     }
 
     pub fn cmds(&self) -> &[Cmd] {
@@ -88,6 +92,14 @@ impl Step {
 
     pub fn strategy(&self) -> Strategy {
         self.strategy
+    }
+
+    /// How many of this step's commands can be running at once.
+    pub fn width(&self) -> usize {
+        match self.strategy {
+            Strategy::Serial => 1,
+            Strategy::Batched { jobs } => jobs,
+        }
     }
 
     pub(crate) fn cmds_mut(&mut self) -> &mut [Cmd] {

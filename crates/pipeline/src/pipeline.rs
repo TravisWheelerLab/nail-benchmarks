@@ -69,11 +69,14 @@ impl PipelineBuilder {
 
         let maybe_dir = stderr_dir.map(|dir| dir.join(stamp()));
         let mut stderr_wanted = false;
+        let cores = Cores::read();
 
         for (s, step) in steps.iter_mut().enumerate() {
             let s_idx = s + 1;
             step.index = Some(s_idx);
             let step_part = label::filename(s_idx, step.name.as_deref());
+            let step_label = step.label();
+            let inherited = step.cores;
 
             for (c, cmd) in step.cmds_mut().iter_mut().enumerate() {
                 let c_idx = c + 1;
@@ -88,22 +91,25 @@ impl PipelineBuilder {
                         Output::OnFailure(dir.join(format!("{step_part}.{cmd_part}.stderr")));
                     stderr_wanted = true;
                 }
-            }
-        }
 
-        // resolved once here, so nothing downstream has to know a command's
-        // core count can come from the step holding it
-        for step in steps.iter_mut() {
-            let inherited = step.cores;
-            for cmd in step.cmds_mut() {
+                // resolved once here, so nothing downstream has to know a
+                // command's core count can come from the step holding it
                 if cmd.cores.is_none() {
                     cmd.cores = inherited;
                 }
+
+                // the only ask the machine could never satisfy: anything else is
+                // a matter of waiting, since commands hand their cores back
+                let want = cmd.cores.unwrap_or(0);
+                if want > cores.len() {
+                    bail!(
+                        "{step_label}.{} wants {want} cores, and the machine has {}",
+                        cmd.label(),
+                        cores.len()
+                    );
+                }
             }
         }
-
-        let cores = Cores::read();
-        fits(&steps, &cores)?;
 
         Ok(Pipeline {
             steps,
@@ -112,28 +118,6 @@ impl PipelineBuilder {
             cores,
         })
     }
-}
-
-/// Whether every command asks for something the machine could ever give it.
-///
-/// Only the one check: a command wanting more cores than exist would wait for
-/// them forever. Anything else is a matter of waiting, since commands hand
-/// their cores back when they finish.
-fn fits(steps: &[Step], cores: &Cores) -> anyhow::Result<()> {
-    for step in steps {
-        for cmd in step.cmds() {
-            let want = cmd.cores.unwrap_or(0);
-            if want > cores.len() {
-                bail!(
-                    "{}.{} wants {want} cores, and the machine has {}",
-                    step.label(),
-                    cmd.label(),
-                    cores.len()
-                );
-            }
-        }
-    }
-    Ok(())
 }
 
 pub struct Pipeline {
@@ -152,21 +136,15 @@ impl Pipeline {
             // is one a run could produce. only as many are held at once as the
             // step could run at once; which command gets which is a guess,
             // since that depends on the order workers pick them up
-            let width = match step.strategy {
-                Strategy::Serial => 1,
-                Strategy::Batched { jobs } => jobs,
-            };
             let mut held = VecDeque::new();
 
             for cmd in step.cmds() {
-                if held.len() >= width {
+                if held.len() >= step.width() {
                     held.pop_front();
                 }
                 let lease = self.cores.try_acquire(cmd.cores.unwrap_or(0));
-
-                let mut copy = cmd.clone();
-                copy.cpus = lease.as_ref().map(|l| l.cpus().to_vec()).unwrap_or_default();
-                println!("{} {}", copy.label(), copy.line());
+                let cpus = lease.as_ref().map(|l| l.cpus()).unwrap_or_default();
+                println!("{} {}", cmd.label(), cmd.line_on(cpus));
 
                 held.extend(lease);
             }

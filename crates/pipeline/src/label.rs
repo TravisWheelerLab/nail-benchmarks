@@ -1,12 +1,16 @@
-pub(crate) fn label(index: Option<&str>, name: Option<&str>) -> String {
-    match (index, name) {
-        (Some(index), Some(name)) => format!("[{index}]({name})"),
-        (Some(index), None) => format!("[{index}]"),
-        (None, Some(name)) => name.to_string(),
-        (None, None) => String::new(),
+//! Naming steps: once for a reader, once for a filename.
+
+/// What a step is called in the table and on the progress lines: its number, and
+/// its name if it was given one.
+pub(crate) fn label(index: usize, name: Option<&str>) -> String {
+    match name {
+        Some(name) => format!("[{index}]({name})"),
+        None => format!("[{index}]"),
     }
 }
 
+/// The same thing as a path component, for the stderr file a command may leave
+/// behind.
 pub(crate) fn filename(index: usize, name: Option<&str>) -> String {
     match name {
         Some(name) => format!("{index}-{}", safe(name)),

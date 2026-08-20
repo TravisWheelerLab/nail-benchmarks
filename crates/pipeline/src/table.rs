@@ -16,6 +16,7 @@ use anyhow::Context;
 
 use crate::cmd::Cmd;
 use crate::execute::{Status, Timing};
+use crate::fmt::{bytes, cpu_pct, dash, secs};
 use crate::sink::Sink;
 use crate::step::{Step, Strategy};
 
@@ -65,18 +66,17 @@ pub enum Mode {
 pub struct Table {
     path: PathBuf,
     mode: Mode,
-    /// Every field key and tag any command carries, worked out before anything
-    /// runs so blocks agree on their columns whatever order fields turn up in.
-    /// Unused by [`Mode::Ragged`], which asks each step instead.
-    keys: Vec<String>,
-    tags: Vec<String>,
+    /// The columns every block carries, worked out before anything runs so blocks
+    /// agree whatever order fields turn up in. Unused by [`Mode::Ragged`], which
+    /// asks each step instead.
+    columns: Columns,
     /// Every row so far, for [`Mode::Whole`].
     rows: Vec<Vec<Cell>>,
-    /// Column widths every block starts from, worked out before the run from
-    /// everything already known: names, fields, tags, argv. Only the numbers are
-    /// missing, and their headings are wider than they usually are. Empty for
-    /// the modes that do not share widths between blocks.
-    floor: Vec<usize>,
+    /// Widths every block starts from, worked out before the run from everything
+    /// already known: names, fields, tags, argv. Only the numbers are missing,
+    /// and their headings are wider than they usually are. `None` for the modes
+    /// that do not share widths between blocks.
+    floor: Option<Vec<usize>>,
     text: String,
 }
 
@@ -93,10 +93,9 @@ impl Table {
         Table {
             path: path.into(),
             mode: Mode::default(),
-            keys: Vec::new(),
-            tags: Vec::new(),
+            columns: Columns::default(),
             rows: Vec::new(),
-            floor: Vec::new(),
+            floor: None,
             text: String::new(),
         }
     }
@@ -118,23 +117,14 @@ impl Table {
 impl Sink for Table {
     fn start(&mut self, steps: &[Step]) -> anyhow::Result<()> {
         let cmds: Vec<&Cmd> = steps.iter().flat_map(|s| s.cmds()).collect();
-        (self.keys, self.tags) = dimensions(&cmds);
-
-        let head = header(&self.keys, &self.tags);
+        self.columns = Columns::of(&cmds);
 
         // Ragged blocks are meant to differ, and Whole renders in one go, so
         // neither has anything to share.
-        if !matches!(self.mode, Mode::Ragged | Mode::Whole) {
-            self.floor = vec![0; head.len()];
-            let blocks: Vec<Vec<Cell>> = steps
-                .iter()
-                .flat_map(|s| block(s, &self.keys, &self.tags))
-                .collect();
-            widen(&mut self.floor, &head_cells(&head));
-            for row in &blocks {
-                widen(&mut self.floor, row);
-            }
-        }
+        self.floor = match self.mode {
+            Mode::Ragged | Mode::Whole => None,
+            _ => Some(self.columns.measure(steps)),
+        };
 
         self.text.clear();
         if matches!(
@@ -143,7 +133,7 @@ impl Sink for Table {
                 headers: Headers::Once
             }
         ) {
-            self.text = render(&head, &[], true, &self.floor);
+            self.text = render(&self.columns.header(), &[], true, self.floor.as_deref());
         }
         self.flush()
     }
@@ -153,12 +143,12 @@ impl Sink for Table {
     // order a batch happened to finish them in
 
     fn step_done(&mut self, step: &Step) -> anyhow::Result<()> {
-        let (keys, tags) = match self.mode {
-            Mode::Ragged => dimensions(&step.cmds().iter().collect::<Vec<_>>()),
-            _ => (self.keys.clone(), self.tags.clone()),
+        let columns = match self.mode {
+            Mode::Ragged => Columns::of(&step.cmds().iter().collect::<Vec<_>>()),
+            _ => self.columns.clone(),
         };
 
-        let mut rows = block(step, &keys, &tags);
+        let mut rows = columns.block(step);
 
         let show_header = match self.mode {
             Mode::Whole => {
@@ -172,10 +162,10 @@ impl Sink for Table {
         };
 
         self.text.push_str(&render(
-            &header(&keys, &tags),
+            &columns.header(),
             &rows,
             show_header,
-            &self.floor,
+            self.floor.as_deref(),
         ));
         self.flush()
     }
@@ -183,46 +173,89 @@ impl Sink for Table {
     fn finish(&mut self) -> anyhow::Result<()> {
         if self.mode == Mode::Whole {
             let rows = std::mem::take(&mut self.rows);
-            self.text = render(&header(&self.keys, &self.tags), &rows, true, &[]);
+            self.text = render(&self.columns.header(), &rows, true, None);
             self.flush()?;
         }
         Ok(())
     }
 }
 
-/// One step's rows: its own line, then a line per command.
-fn block(step: &Step, keys: &[String], tags: &[String]) -> Vec<Vec<Cell>> {
-    let mut rows = Vec::new();
-
-    // a step of one would just repeat itself, so it gets no line of its own and
-    // keeps the first column instead, with its command filling in the rest
-    let first = if step.cmds().len() == 1 {
-        Cell::left(step.label())
-    } else {
-        rows.push(step_row(step, keys.len() + tags.len()));
-        Cell::right(match step.strategy() {
-            Strategy::Serial => SERIAL,
-            Strategy::Batched { .. } => BATCH,
-        })
-    };
-
-    for cmd in step.cmds() {
-        rows.push(cmd_row(first.clone(), cmd, keys, tags));
-    }
-    rows
+/// The field keys and tags a block carries, in front of [`METRICS`].
+///
+/// Which ones there are depends on the commands, so every part of a block —
+/// the header, the step line, each command line — has to agree about them. They
+/// live here rather than being handed to each in turn.
+#[derive(Clone, Debug, Default)]
+struct Columns {
+    keys: Vec<String>,
+    tags: Vec<String>,
 }
 
-/// The field keys and tags these commands carry, each in sorted order.
-fn dimensions(cmds: &[&Cmd]) -> (Vec<String>, Vec<String>) {
-    let keys = cmds
-        .iter()
-        .flat_map(|c| c.fields().keys().cloned())
-        .collect::<BTreeSet<_>>();
-    let tags = cmds
-        .iter()
-        .flat_map(|c| c.tags().iter().cloned())
-        .collect::<BTreeSet<_>>();
-    (keys.into_iter().collect(), tags.into_iter().collect())
+impl Columns {
+    /// The keys and tags these commands carry, each in sorted order.
+    fn of(cmds: &[&Cmd]) -> Columns {
+        Columns {
+            keys: cmds
+                .iter()
+                .flat_map(|c| c.fields().keys().cloned())
+                .collect::<BTreeSet<_>>()
+                .into_iter()
+                .collect(),
+            tags: cmds
+                .iter()
+                .flat_map(|c| c.tags().iter().cloned())
+                .collect::<BTreeSet<_>>()
+                .into_iter()
+                .collect(),
+        }
+    }
+
+    fn header(&self) -> Vec<String> {
+        let mut header: Vec<String> = vec!["step".into(), "cmd".into()];
+        header.extend(self.keys.iter().cloned());
+        header.extend(self.tags.iter().cloned());
+        header.extend(METRICS.iter().map(|s| s.to_string()));
+        header
+    }
+
+    /// One step's rows: its own line, then a line per command.
+    fn block(&self, step: &Step) -> Vec<Vec<Cell>> {
+        let mut rows = Vec::new();
+
+        // a step of one would just repeat itself, so it gets no line of its own
+        // and keeps the first column instead, with its command filling in the rest
+        let first = if step.cmds().len() == 1 {
+            Cell::left(step.label())
+        } else {
+            rows.push(self.step_row(step));
+            Cell::right(match step.strategy() {
+                Strategy::Serial => SERIAL,
+                Strategy::Batched { .. } => BATCH,
+            })
+        };
+
+        for cmd in step.cmds() {
+            rows.push(self.cmd_row(first.clone(), cmd));
+        }
+        rows
+    }
+
+    /// How wide each column has to be for every block to fit under one header.
+    ///
+    /// Everything but the numbers is already known before the run, and the
+    /// headings above the numbers are wider than the numbers usually are.
+    fn measure(&self, steps: &[Step]) -> Vec<usize> {
+        let header = self.header();
+        let mut widths = vec![0; header.len()];
+
+        widen(&mut widths, &head_cells(&header));
+        for step in steps {
+            for row in self.block(step) {
+                widen(&mut widths, &row);
+            }
+        }
+        widths
+    }
 }
 
 /// What one row has to say about what something cost and how it went. Anything
@@ -253,7 +286,7 @@ impl Metrics {
             Cell::left(secs(self.user_s)),
             Cell::left(secs(self.sys_s)),
             Cell::left(cpu),
-            Cell::left(self.max_rss_kb.map(format_bytes).unwrap_or_else(dash)),
+            Cell::left(self.max_rss_kb.map(bytes).unwrap_or_else(dash)),
             Cell::left(self.exit.map(|e| e.to_string()).unwrap_or_else(dash)),
             Cell::left(self.status.unwrap_or("-")),
             Cell::left(self.argv.unwrap_or_else(dash)),
@@ -261,85 +294,76 @@ impl Metrics {
     }
 }
 
-fn dash() -> String {
-    "-".to_string()
-}
+impl Columns {
+    /// The step's own line: measured wall clock, and its commands' CPU added up.
+    fn step_row(&self, step: &Step) -> Vec<Cell> {
+        let mut cells = vec![Cell::left(step.label()), Cell::left("-")];
+        cells.extend(std::iter::repeat_n(
+            Cell::left("-"),
+            self.keys.len() + self.tags.len(),
+        ));
 
-fn secs(s: Option<f64>) -> String {
-    s.map(|s| format!("{s:.2}")).unwrap_or_else(dash)
-}
+        let timings: Vec<&Timing> = step
+            .cmds()
+            .iter()
+            .filter_map(|c| c.status().timing())
+            .collect();
 
-fn header(keys: &[String], tags: &[String]) -> Vec<String> {
-    let mut header: Vec<String> = vec!["step".into(), "cmd".into()];
-    header.extend(keys.iter().cloned());
-    header.extend(tags.iter().cloned());
-    header.extend(METRICS.iter().map(|s| s.to_string()));
-    header
-}
+        // exit, status and argv belong to commands; a count or a rollup here
+        // would be a different quantity sharing a column
+        let mut metrics = Metrics {
+            wall_s: step.wall_s(),
+            ..Metrics::default()
+        };
 
-/// The step's own line: measured wall clock, and its commands' CPU added up.
-fn step_row(step: &Step, dimensions: usize) -> Vec<Cell> {
-    let mut cells = vec![Cell::left(step.label()), Cell::left("-")];
-    cells.extend(std::iter::repeat_n(Cell::left("-"), dimensions));
+        // no peak means nothing finished, so there is nothing to add up either
+        if let Some(peak) = timings.iter().map(|t| t.max_rss_kb).max() {
+            // summed CPU against measured wall is what shows whether a batch
+            // actually bought anything: a step that ran four at once reads about
+            // four times what any one of them did
+            metrics.user_s = Some(timings.iter().map(|t| t.user_s).sum());
+            metrics.sys_s = Some(timings.iter().map(|t| t.sys_s).sum());
+            // the largest any one process got, which is not the same as the most
+            // the step held at once — wait4 cannot tell us that
+            metrics.max_rss_kb = Some(peak);
+        }
 
-    let timings: Vec<&Timing> = step
-        .cmds()
-        .iter()
-        .filter_map(|c| c.status().timing())
-        .collect();
-
-    // exit, status and argv belong to commands; a count or a rollup here would
-    // be a different quantity sharing a column
-    let mut metrics = Metrics {
-        wall_s: step.wall_s(),
-        ..Metrics::default()
-    };
-
-    // no peak means nothing finished, so there is nothing to add up either
-    if let Some(peak) = timings.iter().map(|t| t.max_rss_kb).max() {
-        // summed CPU against measured wall is what shows whether a batch
-        // actually bought anything: a step that ran four at once reads about
-        // four times what any one of them did
-        metrics.user_s = Some(timings.iter().map(|t| t.user_s).sum());
-        metrics.sys_s = Some(timings.iter().map(|t| t.sys_s).sum());
-        // the largest any one process got, which is not the same as the most the
-        // step held at once — wait4 cannot tell us that
-        metrics.max_rss_kb = Some(peak);
+        cells.extend(metrics.cells());
+        cells
     }
 
-    cells.extend(metrics.cells());
-    cells
-}
+    /// One command's line. `first` is the step name for a collapsed step of one,
+    /// and a right-aligned `|` or `||` otherwise.
+    fn cmd_row(&self, first: Cell, cmd: &Cmd) -> Vec<Cell> {
+        let mut cells = vec![first, Cell::left(cmd.label())];
+        cells.extend(
+            self.keys
+                .iter()
+                .map(|k| Cell::left(cmd.fields().get(k).map(String::as_str).unwrap_or("-"))),
+        );
+        cells.extend(
+            self.tags
+                .iter()
+                .map(|t| Cell::left(if cmd.tags().contains(t) { "x" } else { "-" })),
+        );
 
-/// One command's line. `first` is the step name for a collapsed step of one,
-/// and a right-aligned `|` or `||` otherwise.
-fn cmd_row(first: Cell, cmd: &Cmd, keys: &[String], tags: &[String]) -> Vec<Cell> {
-    let mut cells = vec![first, Cell::left(cmd.label())];
-    cells.extend(
-        keys.iter()
-            .map(|k| Cell::left(cmd.fields().get(k).map(String::as_str).unwrap_or("-"))),
-    );
-    cells.extend(
-        tags.iter()
-            .map(|t| Cell::left(if cmd.tags().contains(t) { "x" } else { "-" })),
-    );
-
-    // two separate questions: what it cost, and how it went. a command that
-    // could not start has nothing to say about the first
-    let t = cmd.status().timing();
-    cells.extend(
-        Metrics {
-            wall_s: t.map(|t| t.wall_s),
-            user_s: t.map(|t| t.user_s),
-            sys_s: t.map(|t| t.sys_s),
-            max_rss_kb: t.map(|t| t.max_rss_kb),
-            exit: t.map(|t| t.exit),
-            status: Some(status_word(cmd.status())),
-            argv: Some(cmd.line()),
-        }
-        .cells(),
-    );
-    cells
+        // two separate questions: what it cost, and how it went. a command that
+        // could not start has nothing to say about the first
+        let t = cmd.status().timing();
+        cells.extend(
+            Metrics {
+                wall_s: t.map(|t| t.wall_s),
+                user_s: t.map(|t| t.user_s),
+                sys_s: t.map(|t| t.sys_s),
+                max_rss_kb: t.map(|t| t.max_rss_kb),
+                exit: t.map(|t| t.exit),
+                status: Some(status_word(cmd.status())),
+                argv: Some(cmd.line()),
+            }
+            .cells(),
+        );
+        cells
+    }
 }
 
 /// The status column. It answers one question — did this work — and leaves the
@@ -386,15 +410,18 @@ impl Cell {
 /// is what keeps blocks lined up under a header printed once at the top: they
 /// share its widths as a floor, and only drift apart where a value is wider than
 /// the label above it.
-fn render(header: &[String], rows: &[Vec<Cell>], show_header: bool, floor: &[usize]) -> String {
+fn render(
+    header: &[String],
+    rows: &[Vec<Cell>],
+    show_header: bool,
+    floor: Option<&[usize]>,
+) -> String {
     let head = head_cells(header);
 
-    // a floor from a different set of columns is no floor at all, which is also
-    // how the modes that pass an empty one opt out
-    let mut widths = if floor.len() == header.len() {
-        floor.to_vec()
-    } else {
-        vec![0; header.len()]
+    // a floor from a different set of columns is no floor at all
+    let mut widths = match floor.filter(|floor| floor.len() == header.len()) {
+        Some(floor) => floor.to_vec(),
+        None => vec![0; header.len()],
     };
     widen(&mut widths, &head);
     for row in rows {
@@ -452,38 +479,3 @@ fn write_row(out: &mut String, cells: &[Cell], widths: &[usize]) {
     out.push('\n');
 }
 
-/// `time`'s `%P`: the CPU something burned over the wall clock it took, so a
-/// command that kept four cores busy the whole way through reads 400%.
-///
-/// Truncated rather than rounded, since `time` divides two integers. `time`
-/// writes `?%` when there is no clock to divide by; the rest of this table says
-/// `-` when it has no number, so that is what goes here.
-fn cpu_pct(cpu_s: f64, wall_s: Option<f64>) -> String {
-    match wall_s.filter(|wall| *wall > 0.0) {
-        Some(wall) => format!("{:.0}%", (cpu_s / wall * 100.0).floor()),
-        None => "-".to_string(),
-    }
-}
-
-/// Peak memory in binary units, to about three significant figures so the
-/// column reads at a glance: 940KiB, 10.4MiB, 1.02GiB.
-pub(crate) fn format_bytes(kib: i64) -> String {
-    if kib < 0 {
-        return "-".to_string();
-    }
-
-    const STEP: f64 = 1024.0;
-    let (value, unit) = match kib as f64 {
-        v if v < STEP => (v, "KiB"),
-        v if v < STEP * STEP => (v / STEP, "MiB"),
-        v => (v / (STEP * STEP), "GiB"),
-    };
-
-    if value >= 100.0 {
-        format!("{value:.0}{unit}")
-    } else if value >= 10.0 {
-        format!("{value:.1}{unit}")
-    } else {
-        format!("{value:.2}{unit}")
-    }
-}
