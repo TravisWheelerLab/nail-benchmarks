@@ -9,11 +9,12 @@
 //! known until the last cell in it has arrived. [`Mode`] decides what happens
 //! to it then.
 
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 use std::path::PathBuf;
 
 use anyhow::Context;
 
+use crate::closure::Closure;
 use crate::cmd::Cmd;
 use crate::execute::{Status, Timing};
 use crate::fmt::{bytes, cpu_pct, dash, secs};
@@ -116,8 +117,7 @@ impl Table {
 
 impl Sink for Table {
     fn start(&mut self, steps: &[Step]) -> anyhow::Result<()> {
-        let cmds: Vec<&Cmd> = steps.iter().flat_map(|s| s.cmds()).collect();
-        self.columns = Columns::of(&cmds);
+        self.columns = Columns::of(steps);
 
         // Ragged blocks are meant to differ, and Whole renders in one go, so
         // neither has anything to share.
@@ -144,7 +144,7 @@ impl Sink for Table {
 
     fn step_done(&mut self, step: &Step) -> anyhow::Result<()> {
         let columns = match self.mode {
-            Mode::Ragged => Columns::of(&step.cmds().iter().collect::<Vec<_>>()),
+            Mode::Ragged => Columns::of(std::slice::from_ref(step)),
             _ => self.columns.clone(),
         };
 
@@ -192,21 +192,26 @@ struct Columns {
 }
 
 impl Columns {
-    /// The keys and tags these commands carry, each in sorted order.
-    fn of(cmds: &[&Cmd]) -> Columns {
+    /// The keys and tags these steps carry, each in sorted order. Commands and
+    /// closures share the columns, since they share the table.
+    fn of(steps: &[Step]) -> Columns {
+        let mut keys = BTreeSet::new();
+        let mut tags = BTreeSet::new();
+
+        for step in steps {
+            for cmd in step.cmds() {
+                keys.extend(cmd.fields().keys().cloned());
+                tags.extend(cmd.tags().iter().cloned());
+            }
+            for closure in step.closures() {
+                keys.extend(closure.fields().keys().cloned());
+                tags.extend(closure.tags().iter().cloned());
+            }
+        }
+
         Columns {
-            keys: cmds
-                .iter()
-                .flat_map(|c| c.fields().keys().cloned())
-                .collect::<BTreeSet<_>>()
-                .into_iter()
-                .collect(),
-            tags: cmds
-                .iter()
-                .flat_map(|c| c.tags().iter().cloned())
-                .collect::<BTreeSet<_>>()
-                .into_iter()
-                .collect(),
+            keys: keys.into_iter().collect(),
+            tags: tags.into_iter().collect(),
         }
     }
 
@@ -224,18 +229,21 @@ impl Columns {
 
         // a step of one would just repeat itself, so it gets no line of its own
         // and keeps the first column instead, with its command filling in the rest
-        let first = if step.cmds().len() == 1 {
+        let first = if step.cmds().len() + step.closures().len() == 1 {
             Cell::left(step.label())
         } else {
             rows.push(self.step_row(step));
             Cell::right(match step.strategy() {
-                Strategy::Serial => SERIAL,
-                Strategy::Batched { .. } => BATCH,
+                Some(Strategy::Batched { .. }) => BATCH,
+                _ => SERIAL,
             })
         };
 
         for cmd in step.cmds() {
             rows.push(self.cmd_row(first.clone(), cmd));
+        }
+        for closure in step.closures() {
+            rows.push(self.closure_row(first.clone(), closure));
         }
         rows
     }
@@ -307,6 +315,7 @@ impl Columns {
             .cmds()
             .iter()
             .filter_map(|c| c.status().timing())
+            .chain(step.closures().iter().filter_map(|c| c.status().timing()))
             .collect();
 
         // exit, status and argv belong to commands; a count or a rollup here
@@ -316,16 +325,20 @@ impl Columns {
             ..Metrics::default()
         };
 
-        // no peak means nothing finished, so there is nothing to add up either
-        if let Some(peak) = timings.iter().map(|t| t.max_rss_kb).max() {
+        if !timings.is_empty() {
             // summed CPU against measured wall is what shows whether a batch
             // actually bought anything: a step that ran four at once reads about
             // four times what any one of them did
-            metrics.user_s = Some(timings.iter().map(|t| t.user_s).sum());
-            metrics.sys_s = Some(timings.iter().map(|t| t.sys_s).sum());
+            //
+            // a closure has no cpu figure, and a sum over only what we did
+            // measure would read as the step's whole cost. std's Sum for Option
+            // gives up on the total instead, which is the honest answer
+            metrics.user_s = timings.iter().map(|t| t.user_s).sum();
+            metrics.sys_s = timings.iter().map(|t| t.sys_s).sum();
             // the largest any one process got, which is not the same as the most
             // the step held at once — wait4 cannot tell us that
-            metrics.max_rss_kb = Some(peak);
+            // a max, unlike a sum, is not spoiled by one with no number at all
+            metrics.max_rss_kb = timings.iter().filter_map(|t| t.max_rss_kb).max();
         }
 
         cells.extend(metrics.cells());
@@ -336,16 +349,7 @@ impl Columns {
     /// and a right-aligned `|` or `||` otherwise.
     fn cmd_row(&self, first: Cell, cmd: &Cmd) -> Vec<Cell> {
         let mut cells = vec![first, Cell::left(cmd.label())];
-        cells.extend(
-            self.keys
-                .iter()
-                .map(|k| Cell::left(cmd.fields().get(k).map(String::as_str).unwrap_or("-"))),
-        );
-        cells.extend(
-            self.tags
-                .iter()
-                .map(|t| Cell::left(if cmd.tags().contains(t) { "x" } else { "-" })),
-        );
+        cells.extend(self.key_cells(cmd.fields(), cmd.tags()));
 
         // two separate questions: what it cost, and how it went. a command that
         // could not start has nothing to say about the first
@@ -353,14 +357,46 @@ impl Columns {
         cells.extend(
             Metrics {
                 wall_s: t.map(|t| t.wall_s),
-                user_s: t.map(|t| t.user_s),
-                sys_s: t.map(|t| t.sys_s),
-                max_rss_kb: t.map(|t| t.max_rss_kb),
+                user_s: t.and_then(|t| t.user_s),
+                sys_s: t.and_then(|t| t.sys_s),
+                max_rss_kb: t.and_then(|t| t.max_rss_kb),
                 exit: t.map(|t| t.exit),
                 status: Some(status_word(cmd.status())),
                 argv: Some(cmd.line()),
             }
             .cells(),
+        );
+        cells
+    }
+
+    /// One closure's line. Only its wall clock was measured, so the cpu, memory,
+    /// exit and argv columns have nothing to put there.
+    fn closure_row(&self, first: Cell, closure: &Closure) -> Vec<Cell> {
+        let mut cells = vec![first, Cell::left(closure.label())];
+        cells.extend(self.key_cells(closure.fields(), closure.tags()));
+
+        cells.extend(
+            Metrics {
+                wall_s: closure.status().timing().map(|t| t.wall_s),
+                status: Some(status_word(closure.status())),
+                ..Metrics::default()
+            }
+            .cells(),
+        );
+        cells
+    }
+
+    /// The field and tag cells, which every row carries the same way.
+    fn key_cells(&self, fields: &BTreeMap<String, String>, tags: &BTreeSet<String>) -> Vec<Cell> {
+        let mut cells: Vec<Cell> = self
+            .keys
+            .iter()
+            .map(|k| Cell::left(fields.get(k).map(String::as_str).unwrap_or("-")))
+            .collect();
+        cells.extend(
+            self.tags
+                .iter()
+                .map(|t| Cell::left(if tags.contains(t) { "x" } else { "-" })),
         );
         cells
     }
@@ -490,9 +526,9 @@ mod tests {
     fn timing(exit: i32) -> Timing {
         Timing {
             wall_s: 1.5,
-            user_s: 2.0,
-            sys_s: 0.25,
-            max_rss_kb: 2048,
+            user_s: Some(2.0),
+            sys_s: Some(0.25),
+            max_rss_kb: Some(2048),
             exit,
         }
     }
@@ -509,6 +545,15 @@ mod tests {
         step.elapsed_s = Some(1.5);
         for cmd in step.cmds_mut() {
             cmd.status = Status::Finished(timing(0));
+        }
+        for closure in step.closures_mut() {
+            // a closure only ever has a wall clock behind it
+            closure.status = Status::Finished(Timing {
+                user_s: None,
+                sys_s: None,
+                max_rss_kb: None,
+                ..timing(0)
+            });
         }
     }
 
@@ -709,11 +754,11 @@ mod tests {
 
     #[test]
     fn columns_are_sorted_and_asked_for_only_once() {
-        let cmds = [
+        let step = Step::serial([
             cmd("/a", "a").field("zed", 1).field("alpha", 2).tag("slow"),
             cmd("/b", "b").field("alpha", 3).tag("slow").tag("first"),
-        ];
-        let columns = Columns::of(&cmds.iter().collect::<Vec<_>>());
+        ]);
+        let columns = Columns::of(&[step]);
 
         assert_eq!(columns.keys, ["alpha", "zed"]);
         assert_eq!(columns.tags, ["first", "slow"]);
@@ -767,5 +812,55 @@ mod tests {
         assert!(row.starts_with("[1](never) a"), "{row}");
         assert!(row.contains("skip"), "{row}");
     }
-}
 
+    #[test]
+    fn a_step_of_one_closure_collapses_and_shares_its_columns_with_commands() {
+        let mut setup = Step::serial([cmd("/mkdir", "mkdir").field("job", 1)]).name("setup");
+        finish(&mut setup, 1);
+
+        // `shard` is the closure's alone, so the column can only come from it;
+        // `job` is shared, so the two have to agree about where it sits
+        let mut check = Step::from_closures([Closure::new("verify", || Ok(()))
+            .field("job", 2)
+            .field("shard", 7)])
+        .name("check");
+        finish(&mut check, 2);
+
+        // the closure row carries a wall clock and a verdict, and dashes every
+        // column a thread has no answer for
+        let expected = "\
+# step     cmd    job shard wall(s) user(s) sys(s) cpu(%) max_rss exit status argv
+# -------- ------ --- ----- ------- ------- ------ ------ ------- ---- ------ ----
+[1](setup) mkdir  1   -     1.50    2.00    0.25   150%   2.00MiB 0    ok     /mkdir
+[2](check) verify 2   7     1.50    -       -      -      -       -    ok     -
+";
+
+        assert_eq!(
+            write("closure-collapse", Mode::default(), &[setup, check]),
+            expected
+        );
+    }
+
+    #[test]
+    fn a_step_of_two_closures_gets_a_line_of_its_own() {
+        let mut step = Step::from_closures([
+            Closure::new("first", || Ok(())),
+            Closure::new("second", || Ok(())),
+        ])
+        .name("check");
+        finish(&mut step, 1);
+
+        let text = write("closure-block", Mode::default(), &[step]);
+        let rows: Vec<&str> = text.lines().skip(2).collect();
+
+        assert_eq!(rows.len(), 3, "a step row and two closures: {rows:?}");
+        assert!(rows[0].starts_with("[1](check)"), "{}", rows[0]);
+        // serial, so the same marker a serial command step gets
+        assert!(rows[1].trim_start().starts_with("| first"), "{}", rows[1]);
+        assert!(rows[2].trim_start().starts_with("| second"), "{}", rows[2]);
+
+        // the step's own row has a wall clock but no cpu to add up
+        let step_row = rows[0];
+        assert!(step_row.contains("1.50"), "{step_row}");
+    }
+}

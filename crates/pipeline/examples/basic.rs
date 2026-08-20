@@ -5,7 +5,7 @@
 
 use std::time::Duration;
 
-use pipeline::{Cmd, OnError, PipelineBuilder, Progress, Step, Table};
+use pipeline::{Closure, Cmd, OnError, PipelineBuilder, Progress, Step, Table};
 
 fn main() -> anyhow::Result<()> {
     let dir = std::env::temp_dir().join("pipeline-basic");
@@ -72,6 +72,25 @@ fn main() -> anyhow::Result<()> {
             ])
             .name("count")
             // one bad command should not cost us the rest of the matrix
+            .on_error(OnError::Continue),
+        )
+        // rust in place of a command. only the wall clock gets measured, so the
+        // cpu, memory and argv columns come out empty, and a closure that
+        // returns an error says so where a command's exit code would go
+        .step(
+            Step::from_closures([
+                Closure::new("count-lines", {
+                    let data = data.clone();
+                    move || {
+                        let lines = std::fs::read_to_string(&data)?.lines().count();
+                        anyhow::ensure!(lines == 2000, "expected 2000 lines, found {lines}");
+                        Ok(())
+                    }
+                })
+                .field("mode", "lines"),
+                Closure::new("boom", || anyhow::bail!("a closure can fail too")),
+            ])
+            .name("check")
             .on_error(OnError::Continue),
         )
         .step(

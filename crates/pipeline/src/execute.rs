@@ -2,6 +2,7 @@
 
 use std::fs::{File, OpenOptions};
 use std::io;
+use std::panic::{AssertUnwindSafe, catch_unwind};
 use std::path::Path;
 use std::process::{Command, Stdio};
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -11,6 +12,7 @@ use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use anyhow::Context;
 
+use crate::closure::Closure;
 use crate::cmd::{Cmd, Output};
 use crate::cpu::{Cores, Lease};
 
@@ -20,9 +22,10 @@ const SIGTERM_GRACE: Duration = Duration::from_secs(5);
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct Timing {
     pub wall_s: f64,
-    pub user_s: f64,
-    pub sys_s: f64,
-    pub max_rss_kb: i64,
+    /// Absent for a closure: a thread has no `wait4` to ask for these.
+    pub user_s: Option<f64>,
+    pub sys_s: Option<f64>,
+    pub max_rss_kb: Option<i64>,
     pub exit: i32,
 }
 
@@ -75,6 +78,45 @@ impl Cores {
         };
         cmd.report(status);
     }
+}
+
+impl Closure {
+    /// Run it and time it.
+    ///
+    /// The wall clock is all there is. A panic is caught here, so one bad
+    /// closure costs one step's worth rather than the run — the default hook
+    /// still prints its backtrace on the way past, and `panic = "abort"` turns
+    /// catching off entirely.
+    pub(crate) fn execute(&mut self) {
+        // a closure that has already run has nothing left to do, and its status
+        // already says how it went
+        let Some(f) = self.f.take() else { return };
+
+        let start = Instant::now();
+        let out = catch_unwind(AssertUnwindSafe(f));
+        let timing = Timing {
+            wall_s: start.elapsed().as_secs_f64(),
+            user_s: None,
+            sys_s: None,
+            max_rss_kb: None,
+            // nothing exited, but `ok` reads this to say it went fine
+            exit: 0,
+        };
+
+        self.status = match out {
+            Ok(Ok(())) => Status::Finished(timing),
+            Ok(Err(e)) => Status::Failed(format!("{e:#}")),
+            Err(p) => Status::Failed(format!("panicked: {}", panic_msg(&*p))),
+        };
+    }
+}
+
+/// What a panic said, for the two payload types `panic!` actually produces.
+fn panic_msg(p: &(dyn std::any::Any + Send)) -> &str {
+    p.downcast_ref::<&str>()
+        .copied()
+        .or_else(|| p.downcast_ref::<String>().map(String::as_str))
+        .unwrap_or("no message")
 }
 
 /// One batch step: whether it has been cancelled, and the pids it has running.
@@ -414,10 +456,10 @@ fn reap(pid: libc::pid_t, start: Instant, exited: impl FnOnce()) -> anyhow::Resu
 
     Ok(Timing {
         wall_s,
-        user_s: secs(usage.ru_utime),
-        sys_s: secs(usage.ru_stime),
+        user_s: Some(secs(usage.ru_utime)),
+        sys_s: Some(secs(usage.ru_stime)),
         // ru_maxrss is already in kilobytes on Linux
-        max_rss_kb: usage.ru_maxrss,
+        max_rss_kb: Some(usage.ru_maxrss),
         exit,
     })
 }
@@ -466,8 +508,14 @@ mod tests {
         let (pid, at) = start("seq 1 400000 > /dev/null");
         let timing = reap(pid, at, || {}).expect("reap");
 
-        assert!(timing.user_s > 0.0, "no user time: {timing:?}");
-        assert!(timing.max_rss_kb > 0, "no peak rss: {timing:?}");
+        assert!(
+            timing.user_s.is_some_and(|s| s > 0.0),
+            "no user time: {timing:?}"
+        );
+        assert!(
+            timing.max_rss_kb.is_some_and(|k| k > 0),
+            "no peak rss: {timing:?}"
+        );
         assert!(timing.wall_s > 0.0, "no wall clock: {timing:?}");
     }
 
@@ -590,9 +638,9 @@ mod tests {
         let mut cmd = Cmd::new("/x").stderr(Output::OnFailure(path.clone()));
         cmd.report(Status::Finished(Timing {
             wall_s: 0.0,
-            user_s: 0.0,
-            sys_s: 0.0,
-            max_rss_kb: 0,
+            user_s: Some(0.0),
+            sys_s: Some(0.0),
+            max_rss_kb: Some(0),
             exit: 1,
         }));
 
@@ -618,9 +666,9 @@ mod tests {
         let mut cmd = Cmd::new("/x").stderr(Output::OnFailure(path.clone()));
         cmd.report(Status::Finished(Timing {
             wall_s: 0.0,
-            user_s: 0.0,
-            sys_s: 0.0,
-            max_rss_kb: 0,
+            user_s: Some(0.0),
+            sys_s: Some(0.0),
+            max_rss_kb: Some(0),
             exit: 0,
         }));
 
@@ -635,9 +683,9 @@ mod tests {
         let mut cmd = Cmd::new("/x").stderr(Output::File(path.clone()));
         cmd.report(Status::Finished(Timing {
             wall_s: 0.0,
-            user_s: 0.0,
-            sys_s: 0.0,
-            max_rss_kb: 0,
+            user_s: Some(0.0),
+            sys_s: Some(0.0),
+            max_rss_kb: Some(0),
             exit: 0,
         }));
 

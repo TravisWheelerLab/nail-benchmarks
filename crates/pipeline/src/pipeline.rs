@@ -8,12 +8,13 @@ use std::time::Instant;
 
 use anyhow::{Context, anyhow, bail};
 
+use crate::closure::Closure;
 use crate::cmd::{Cmd, Output};
 use crate::cpu::Cores;
 use crate::execute::{Batch, Status, stamp};
 use crate::label;
 use crate::sink::Sink;
-use crate::step::{Step, Strategy};
+use crate::step::{Items, Step, Strategy};
 
 /// Where failure logs go unless told otherwise.
 const STDERR_DIR: &str = "stderr";
@@ -76,9 +77,20 @@ impl PipelineBuilder {
             step.index = Some(s_idx);
             let step_part = label::filename(s_idx, step.name.as_deref());
             let step_label = step.label();
-            let inherited = step.cores;
 
-            for (c, cmd) in step.cmds_mut().iter_mut().enumerate() {
+            // a closure routes no stderr and asks for no cores, so there is
+            // nothing here for one to pick up
+            let Items::Cmds {
+                cmds,
+                cores: inherited,
+                ..
+            } = &mut step.items
+            else {
+                continue;
+            };
+            let inherited = *inherited;
+
+            for (c, cmd) in cmds.iter_mut().enumerate() {
                 let c_idx = c + 1;
 
                 // if we have a stderr dir, we redirect every un-routed stderr
@@ -148,6 +160,11 @@ impl Pipeline {
 
                 held.extend(lease);
             }
+
+            for closure in step.closures() {
+                // no line to paste, so its name is all there is to show
+                println!("{}", closure.label());
+            }
         }
     }
 
@@ -196,15 +213,16 @@ impl Pipeline {
         let mut remaining_steps = steps.iter_mut();
 
         for step in remaining_steps.by_ref() {
-            match step.strategy {
-                Strategy::Serial => self.serial(step)?,
-                Strategy::Batched { jobs } => self.batch(step, jobs)?,
+            match step.strategy() {
+                Some(Strategy::Serial) => self.serial(step)?,
+                Some(Strategy::Batched { jobs }) => self.batch(step, jobs)?,
+                None => self.closures(step)?,
             }
             self.skip_rest(step)?;
             self.sinks.step_done(step)?;
 
-            if let Some(cmd) = step.aborts() {
-                failure = Some(format!("{} failed: {}", cmd.label(), cmd.line()));
+            if let Some(why) = step.aborts() {
+                failure = Some(why);
                 break;
             }
         }
@@ -227,6 +245,25 @@ impl Pipeline {
             step.elapsed_s = Some(start.elapsed().as_secs_f64());
 
             self.sinks.record(step, &step.cmds()[j])?;
+            if step.skips() {
+                break;
+            }
+        }
+        Ok(())
+    }
+
+    /// One closure at a time, stopping early if the step says to.
+    ///
+    /// Always serial: a closure runs on the thread that reached it, and nothing
+    /// here spawns another.
+    fn closures(&mut self, step: &mut Step) -> anyhow::Result<()> {
+        let start = Instant::now();
+
+        for j in 0..step.closures().len() {
+            step.closures_mut()[j].execute();
+            step.elapsed_s = Some(start.elapsed().as_secs_f64());
+
+            self.sinks.record_closure(step, &step.closures()[j])?;
             if step.skips() {
                 break;
             }
@@ -322,6 +359,12 @@ impl Pipeline {
                 self.sinks.record(step, &step.cmds()[j])?;
             }
         }
+        for j in 0..step.closures().len() {
+            if matches!(step.closures()[j].status(), Status::NotRun) {
+                step.closures_mut()[j].status = Status::Skipped;
+                self.sinks.record_closure(step, &step.closures()[j])?;
+            }
+        }
         Ok(())
     }
 }
@@ -375,6 +418,19 @@ mod tests {
                 cmd.status().clone(),
             ));
             if self.broken_by.as_deref() == Some(cmd.label().as_str()) {
+                bail!("the sink cannot write");
+            }
+            Ok(())
+        }
+
+        fn record_closure(&mut self, step: &Step, closure: &Closure) -> anyhow::Result<()> {
+            // the same log, so `of` finds either kind by name
+            self.log.lock().unwrap().records.push((
+                step.label(),
+                closure.label().to_string(),
+                closure.status().clone(),
+            ));
+            if self.broken_by.as_deref() == Some(closure.label()) {
                 bail!("the sink cannot write");
             }
             Ok(())
@@ -669,6 +725,177 @@ mod tests {
             assert!(matches!(log.of(&format!("job-{i}"))[..], [Status::Finished(_)]));
         }
     }
+
+    #[test]
+    fn a_closure_that_returns_an_error_ends_the_run_and_names_itself() {
+        let recorder = Recorder::default();
+        let log = Arc::clone(&recorder.log);
+
+        let error = PipelineBuilder::new()
+            .step(Step::from_closures([Closure::new("boom", || {
+                bail!("no such database")
+            })]))
+            .step(Step::serial([sh("never", "exit 0")]))
+            .no_stderr()
+            .sink(recorder)
+            .build()
+            .unwrap()
+            .run()
+            .unwrap_err()
+            .to_string();
+
+        assert!(error.contains("boom"), "{error}");
+        // there is no stderr file to send anyone to, so the reason has to be in
+        // the error itself
+        assert!(error.contains("no such database"), "{error}");
+
+        let log = log.lock().unwrap();
+        match log.of("boom")[..] {
+            [Status::Failed(why)] => assert!(why.contains("no such database"), "{why}"),
+            ref other => panic!("expected one failure, got {other:?}"),
+        }
+        assert!(matches!(log.of("never")[..], [Status::Skipped]));
+    }
+
+    #[test]
+    fn a_tolerated_closure_failure_lets_the_rest_of_the_run_happen() {
+        let recorder = Recorder::default();
+        let log = Arc::clone(&recorder.log);
+
+        PipelineBuilder::new()
+            .step(
+                Step::from_closures([
+                    Closure::new("bad", || bail!("nope")),
+                    Closure::new("after", || Ok(())),
+                ])
+                .on_error(OnError::Continue),
+            )
+            .step(Step::serial([sh("later", "exit 0")]))
+            .no_stderr()
+            .sink(recorder)
+            .build()
+            .unwrap()
+            .run()
+            .expect("a tolerated failure should not end the run");
+
+        let log = log.lock().unwrap();
+        assert!(matches!(log.of("bad")[..], [Status::Failed(_)]));
+        assert!(matches!(log.of("after")[..], [Status::Finished(_)]));
+        assert!(matches!(log.of("later")[..], [Status::Finished(_)]));
+    }
+
+    /// This one prints a panic backtrace notice while it runs. That is the point
+    /// of it: the default hook still fires, and the run carries on regardless.
+    #[test]
+    fn a_panicking_closure_fails_only_itself() {
+        let recorder = Recorder::default();
+        let log = Arc::clone(&recorder.log);
+
+        PipelineBuilder::new()
+            .step(
+                Step::from_closures([
+                    Closure::new("panics", || panic!("boom {}", 7)),
+                    Closure::new("after", || Ok(())),
+                ])
+                .on_error(OnError::Continue),
+            )
+            .no_stderr()
+            .sink(recorder)
+            .build()
+            .unwrap()
+            .run()
+            .expect("a caught panic is a failed closure, not a failed run");
+
+        let log = log.lock().unwrap();
+        match log.of("panics")[..] {
+            [Status::Failed(why)] => {
+                assert!(why.contains("panicked"), "{why}");
+                assert!(why.contains("boom 7"), "{why}");
+            }
+            ref other => panic!("expected one caught panic, got {other:?}"),
+        }
+        assert!(matches!(log.of("after")[..], [Status::Finished(_)]));
+    }
+
+    #[test]
+    fn a_closure_reports_a_wall_clock_and_nothing_else() {
+        let recorder = Recorder::default();
+        let log = Arc::clone(&recorder.log);
+
+        PipelineBuilder::new()
+            .step(Closure::new("sleeps", || {
+                std::thread::sleep(std::time::Duration::from_millis(30));
+                Ok(())
+            }))
+            .no_stderr()
+            .sink(recorder)
+            .build()
+            .unwrap()
+            .run()
+            .unwrap();
+
+        let log = log.lock().unwrap();
+        match log.of("sleeps")[..] {
+            [Status::Finished(t)] => {
+                assert!(t.wall_s >= 0.03, "wall clock too short: {t:?}");
+                // the whole contract: a thread has no wait4 to ask for these
+                assert_eq!(t.user_s, None, "{t:?}");
+                assert_eq!(t.sys_s, None, "{t:?}");
+                assert_eq!(t.max_rss_kb, None, "{t:?}");
+                assert_eq!(t.exit, 0, "{t:?}");
+            }
+            ref other => panic!("expected one finished closure, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn a_closure_can_move_values_in_and_hand_one_back() {
+        let (tx, rx) = mpsc::channel();
+        let owned = vec![1u8, 2, 3];
+        // not Sync, so this would not compile against a shared `Fn` closure
+        let counter = std::cell::RefCell::new(0usize);
+
+        PipelineBuilder::new()
+            .step(Closure::new("hands-back", move || {
+                *counter.borrow_mut() += owned.len();
+                tx.send((owned, *counter.borrow())).ok();
+                Ok(())
+            }))
+            .no_stderr()
+            .build()
+            .unwrap()
+            .run()
+            .unwrap();
+
+        assert_eq!(rx.recv().unwrap(), (vec![1, 2, 3], 3));
+    }
+
+    #[test]
+    fn a_closure_that_never_ran_is_announced_once_as_skipped() {
+        let recorder = Recorder::default();
+        let log = Arc::clone(&recorder.log);
+
+        PipelineBuilder::new()
+            // the first stops its own step, so its sibling never runs
+            .step(Step::from_closures([
+                Closure::new("bad", || bail!("nope")),
+                Closure::new("sibling", || Ok(())),
+            ]))
+            // and this whole step is never reached
+            .step(Step::from_closures([Closure::new("unreached", || Ok(()))]))
+            .no_stderr()
+            .sink(recorder)
+            .build()
+            .unwrap()
+            .run()
+            .unwrap_err();
+
+        let log = log.lock().unwrap();
+        // exactly once each, and never as NotRun, which is what a sink is promised
+        assert!(matches!(log.of("sibling")[..], [Status::Skipped]));
+        assert!(matches!(log.of("unreached")[..], [Status::Skipped]));
+        assert_eq!(log.records.len(), 3, "{:?}", log.records);
+    }
 }
 
 /// Every sink registered on a pipeline, so the rest of this file can talk to
@@ -683,6 +910,12 @@ impl Sinks {
 
     fn record(&mut self, step: &Step, cmd: &Cmd) -> anyhow::Result<()> {
         self.0.iter_mut().try_for_each(|s| s.record(step, cmd))
+    }
+
+    fn record_closure(&mut self, step: &Step, closure: &Closure) -> anyhow::Result<()> {
+        self.0
+            .iter_mut()
+            .try_for_each(|s| s.record_closure(step, closure))
     }
 
     fn step_done(&mut self, step: &Step) -> anyhow::Result<()> {

@@ -5,11 +5,13 @@
 //! it. Printing progress and writing the summary table are both just sinks.
 //!
 //! Two things hold for every sink, which is what makes one easy to write: each
-//! command is announced exactly once, and never as [`Status::NotRun`] — by the
-//! time you see it, it has finished, failed to start, or been skipped.
+//! command and each closure is announced exactly once, and never as
+//! [`Status::NotRun`] — by the time you see one, it has finished, failed to
+//! start, or been skipped.
 //!
 //! [`Status::NotRun`]: crate::Status
 
+use crate::closure::Closure;
 use crate::cmd::Cmd;
 use crate::step::Step;
 
@@ -32,6 +34,13 @@ pub trait Sink {
     /// the name and whether its commands ran together.
     fn record(&mut self, step: &Step, cmd: &Cmd) -> anyhow::Result<()> {
         let _ = (step, cmd);
+        Ok(())
+    }
+
+    /// One closure reached its final state. Separate from `record` because only
+    /// its wall clock was measured, and it has no argv to show.
+    fn record_closure(&mut self, step: &Step, closure: &Closure) -> anyhow::Result<()> {
+        let _ = (step, closure);
         Ok(())
     }
 

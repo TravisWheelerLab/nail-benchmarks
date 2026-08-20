@@ -1,3 +1,4 @@
+mod closure;
 mod cmd;
 mod cpu;
 mod execute;
@@ -9,6 +10,7 @@ mod sink;
 mod step;
 mod table;
 
+pub use closure::Closure;
 pub use cmd::{Cmd, Output, Value};
 pub use execute::{Status, Timing};
 pub use pipeline::{Pipeline, PipelineBuilder};
