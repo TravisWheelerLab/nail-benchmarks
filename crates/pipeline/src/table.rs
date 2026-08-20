@@ -479,3 +479,293 @@ fn write_row(out: &mut String, cells: &[Cell], widths: &[usize]) {
     out.push('\n');
 }
 
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::cmd::Output;
+    use crate::step::OnError;
+
+    /// Fixed numbers so a rendered table is the same every time: 2.25s of CPU
+    /// over 1.5s of wall is 150%, and 2048 KiB is 2.00MiB.
+    fn timing(exit: i32) -> Timing {
+        Timing {
+            wall_s: 1.5,
+            user_s: 2.0,
+            sys_s: 0.25,
+            max_rss_kb: 2048,
+            exit,
+        }
+    }
+
+    fn cmd(program: &str, name: &str) -> Cmd {
+        Cmd::new(program)
+            .name(name)
+            .stdout(Output::Inherit)
+            .stderr(Output::Inherit)
+    }
+
+    fn finish(step: &mut Step, index: usize) {
+        step.index = Some(index);
+        step.elapsed_s = Some(1.5);
+        for cmd in step.cmds_mut() {
+            cmd.status = Status::Finished(timing(0));
+        }
+    }
+
+    /// A step of one that collapses, then a batch of two carrying a field.
+    fn steps() -> Vec<Step> {
+        let mut setup = Step::serial([cmd("/mkdir", "mkdir")]).name("setup");
+        finish(&mut setup, 1);
+
+        let mut burn = Step::batched(
+            2,
+            [
+                cmd("/a", "a").field("job", 1),
+                cmd("/b", "b").field("job", 2),
+            ],
+        )
+        .name("burn");
+        finish(&mut burn, 2);
+
+        vec![setup, burn]
+    }
+
+    /// A path of this test's own. Tests share a process and run at once, so a
+    /// shared one would have them deleting each other's output.
+    fn scratch(name: &str) -> std::path::PathBuf {
+        let dir = std::env::temp_dir().join(format!("pipeline-table-{name}"));
+        std::fs::remove_dir_all(&dir).ok();
+        dir.join("runs.tbl")
+    }
+
+    /// Drive the sink the way a pipeline would, and give back what it wrote.
+    fn write(name: &str, mode: Mode, steps: &[Step]) -> String {
+        let path = scratch(name);
+
+        let mut table = Table::new(&path).mode(mode);
+        table.start(steps).unwrap();
+        for step in steps {
+            table.step_done(step).unwrap();
+        }
+        table.finish().unwrap();
+
+        std::fs::read_to_string(&path).unwrap()
+    }
+
+    fn header_lines(text: &str) -> usize {
+        text.lines().filter(|l| l.starts_with("# step")).count()
+    }
+
+    #[test]
+    fn a_block_lays_out_under_its_header() {
+        let expected = "\
+# step     cmd   job wall(s) user(s) sys(s) cpu(%) max_rss exit status argv
+# -------- ----- --- ------- ------- ------ ------ ------- ---- ------ ----
+[1](setup) mkdir -   1.50    2.00    0.25   150%   2.00MiB 0    ok     /mkdir
+[2](burn)  -     -   1.50    4.00    0.50   300%   2.00MiB -    -      -
+        || a     1   1.50    2.00    0.25   150%   2.00MiB 0    ok     /a
+        || b     2   1.50    2.00    0.25   150%   2.00MiB 0    ok     /b
+";
+        assert_eq!(write("golden", Mode::default(), &steps()), expected);
+    }
+
+    #[test]
+    fn a_step_of_one_keeps_the_first_column_instead_of_a_line_of_its_own() {
+        let text = write("collapse", Mode::default(), &steps());
+        let rows: Vec<&str> = text.lines().skip(2).collect();
+
+        assert_eq!(rows.len(), 4, "one collapsed step plus a step row and two commands");
+        assert!(rows[0].starts_with("[1](setup) mkdir"), "{}", rows[0]);
+        assert!(rows[1].starts_with("[2](burn)  -"), "{}", rows[1]);
+    }
+
+    #[test]
+    fn a_batch_marks_its_commands_differently_from_a_serial_one() {
+        let mut serial = Step::serial([cmd("/a", "a"), cmd("/b", "b")]).name("s");
+        finish(&mut serial, 1);
+        let mut batched = Step::batched(2, [cmd("/a", "a"), cmd("/b", "b")]).name("b");
+        finish(&mut batched, 2);
+
+        let text = write("markers", Mode::default(), &[serial, batched]);
+        assert_eq!(text.matches(" | ").count(), 2, "{text}");
+        assert_eq!(text.matches("|| ").count(), 2, "{text}");
+    }
+
+    #[test]
+    fn a_step_that_never_ran_has_no_numbers_to_report() {
+        let mut step = Step::serial([cmd("/a", "a"), cmd("/b", "b")]).name("s");
+        step.index = Some(1);
+
+        let text = write("never-ran", Mode::default(), &[step]);
+        let step_row = text.lines().nth(2).unwrap();
+
+        assert!(step_row.starts_with("[1](s)"), "{step_row}");
+        assert!(
+            !step_row.contains('%'),
+            "no command finished, so there is no cpu figure: {step_row}"
+        );
+    }
+
+    #[test]
+    fn blocks_with_one_header_writes_it_before_anything_runs() {
+        let path = scratch("early");
+
+        let mut table = Table::new(&path).mode(Mode::default());
+        table.start(&steps()).unwrap();
+
+        let text = std::fs::read_to_string(&path).unwrap();
+        assert_eq!(header_lines(&text), 1);
+        assert_eq!(text.lines().count(), 2, "header and separator, no rows yet");
+    }
+
+    #[test]
+    fn one_header_serves_every_block() {
+        assert_eq!(header_lines(&write("one-header", Mode::default(), &steps())), 1);
+    }
+
+    #[test]
+    fn a_header_on_every_block_means_one_per_step() {
+        let steps = steps();
+        let text = write(
+            "each-header",
+            Mode::Blocks {
+                headers: Headers::Each,
+            },
+            &steps,
+        );
+        assert_eq!(header_lines(&text), steps.len());
+    }
+
+    #[test]
+    fn whole_holds_everything_back_until_the_run_is_over() {
+        let path = scratch("whole");
+        let steps = steps();
+
+        let mut table = Table::new(&path).mode(Mode::Whole);
+        table.start(&steps).unwrap();
+        for step in &steps {
+            table.step_done(step).unwrap();
+        }
+        assert_eq!(
+            std::fs::read_to_string(&path).unwrap(),
+            "",
+            "nothing should reach the file before finish"
+        );
+
+        table.finish().unwrap();
+        let text = std::fs::read_to_string(&path).unwrap();
+        assert_eq!(header_lines(&text), 1);
+        assert_eq!(text.lines().count(), 6);
+    }
+
+    #[test]
+    fn ragged_gives_each_block_only_the_columns_its_own_commands_use() {
+        let text = write("ragged", Mode::Ragged, &steps());
+        let heads: Vec<&str> = text.lines().filter(|l| l.starts_with("# step")).collect();
+
+        assert_eq!(heads.len(), 2, "ragged blocks each need their own header");
+        assert!(!heads[0].contains("job"), "setup has no fields: {}", heads[0]);
+        assert!(heads[1].contains("job"), "burn does: {}", heads[1]);
+    }
+
+    #[test]
+    fn every_block_shares_the_header_widths_as_a_floor() {
+        // the second step's names are shorter, but its columns stay lined up
+        // with the first block rather than closing up
+        let text = write("floor", Mode::default(), &steps());
+        let lines: Vec<&str> = text.lines().collect();
+
+        let column_of = |line: &str, n: usize| line.match_indices("1.50").nth(n).map(|(i, _)| i);
+        assert_eq!(column_of(lines[2], 0), column_of(lines[3], 0));
+        assert_eq!(column_of(lines[2], 0), column_of(lines[4], 0));
+    }
+
+    #[test]
+    fn a_value_wider_than_its_heading_widens_the_column() {
+        let mut step = Step::serial([cmd("/x", "an-unusually-long-command-name")]).name("s");
+        finish(&mut step, 1);
+
+        let text = write("wide", Mode::default(), &[step]);
+        let lines: Vec<&str> = text.lines().collect();
+        let head = lines[0].find("cmd").unwrap();
+
+        assert!(
+            lines[2][head..].starts_with("an-unusually-long-command-name"),
+            "{}",
+            lines[2]
+        );
+        assert!(lines[2].contains("1.50"), "the numbers still follow: {}", lines[2]);
+    }
+
+    #[test]
+    fn argv_is_the_last_column_and_never_padded() {
+        let text = write("argv", Mode::default(), &steps());
+        for line in text.lines().skip(2) {
+            assert_eq!(line.trim_end(), line, "trailing pad on: {line:?}");
+        }
+        // the separator underlines the label rather than the whole column
+        assert!(text.lines().nth(1).unwrap().ends_with("----"));
+    }
+
+    #[test]
+    fn columns_are_sorted_and_asked_for_only_once() {
+        let cmds = [
+            cmd("/a", "a").field("zed", 1).field("alpha", 2).tag("slow"),
+            cmd("/b", "b").field("alpha", 3).tag("slow").tag("first"),
+        ];
+        let columns = Columns::of(&cmds.iter().collect::<Vec<_>>());
+
+        assert_eq!(columns.keys, ["alpha", "zed"]);
+        assert_eq!(columns.tags, ["first", "slow"]);
+    }
+
+    #[test]
+    fn a_tag_reads_as_present_or_absent_rather_than_as_a_value() {
+        let mut step = Step::serial([cmd("/a", "a").tag("setup"), cmd("/b", "b")]).name("s");
+        finish(&mut step, 1);
+
+        let text = write("tags", Mode::default(), &[step]);
+        let lines: Vec<&str> = text.lines().collect();
+        let at = lines[0].find("setup").unwrap();
+
+        assert_eq!(&lines[3][at..at + 1], "x");
+        assert_eq!(&lines[4][at..at + 1], "-");
+    }
+
+    #[test]
+    fn a_row_with_nothing_measured_is_all_dashes() {
+        let cells = Metrics::default().cells();
+        assert_eq!(cells.len(), METRICS.len());
+        for cell in &cells {
+            assert_eq!(cell.text, "-");
+        }
+    }
+
+    #[test]
+    fn status_and_exit_answer_different_questions() {
+        // a command that never started has no exit code beside its "fail", which
+        // is how it tells itself apart from one that started and failed
+        assert_eq!(status_word(&Status::NotRun), "-");
+        assert_eq!(status_word(&Status::Skipped), "skip");
+        assert_eq!(status_word(&Status::Failed("x".into())), "fail");
+        assert_eq!(status_word(&Status::TimedOut(timing(143))), "time");
+        assert_eq!(status_word(&Status::Finished(timing(0))), "ok");
+        assert_eq!(status_word(&Status::Finished(timing(1))), "fail");
+    }
+
+    #[test]
+    fn a_skipped_step_still_gets_a_row() {
+        let mut step = Step::serial([cmd("/a", "a")])
+            .name("never")
+            .on_error(OnError::Continue);
+        step.index = Some(1);
+        step.cmds_mut()[0].status = Status::Skipped;
+
+        let text = write("skipped", Mode::default(), &[step]);
+        let row = text.lines().nth(2).unwrap();
+
+        assert!(row.starts_with("[1](never) a"), "{row}");
+        assert!(row.contains("skip"), "{row}");
+    }
+}
+

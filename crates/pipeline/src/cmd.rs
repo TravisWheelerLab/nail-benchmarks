@@ -354,3 +354,143 @@ fn quote(arg: &str) -> String {
         format!("'{}'", arg.replace('\'', r"'\''"))
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn quote_leaves_alone_what_a_shell_would_read_the_same_way() {
+        for plain in [
+            "nail",
+            "--allow-overwrite",
+            "/home/jack/tools/bin/nail",
+            "12.0",
+            "a_b-c.d/e=f:g+h,i@j%k^l",
+        ] {
+            assert_eq!(quote(plain), plain);
+        }
+    }
+
+    #[test]
+    fn quote_wraps_anything_a_shell_would_read_differently() {
+        assert_eq!(quote(""), "''");
+        assert_eq!(quote("two words"), "'two words'");
+        assert_eq!(quote("a*b"), "'a*b'");
+        assert_eq!(quote("$HOME"), "'$HOME'");
+        assert_eq!(quote("a\nb"), "'a\nb'");
+        assert_eq!(quote("a;rm -rf /"), "'a;rm -rf /'");
+        assert_eq!(quote("~/x"), "'~/x'");
+        assert_eq!(quote("café"), "'café'");
+    }
+
+    #[test]
+    fn quote_closes_and_reopens_around_a_single_quote() {
+        // 'it'\''s' is the only way to get a literal quote inside single quotes
+        assert_eq!(quote("it's"), r"'it'\''s'");
+        assert_eq!(quote("'"), r"''\'''");
+    }
+
+    #[test]
+    fn positionals_come_last_however_they_were_added() {
+        // the whole reason a Cmd keeps its pieces apart: several of these tools
+        // read a trailing option as another input file
+        let cmd = Cmd::new("/bin/mmseqs")
+            .path("query.fa")
+            .arg("-s", "7.5")
+            .path("target.fa")
+            .flag("--quiet")
+            .sub("search");
+
+        assert_eq!(
+            cmd.args(),
+            ["search", "-s", "7.5", "--quiet", "query.fa", "target.fa"]
+        );
+    }
+
+    #[test]
+    fn options_keep_the_order_they_were_given_in() {
+        let cmd = Cmd::new("/x").arg("-a", 1).flag("-b").arg("-c", 3);
+        assert_eq!(cmd.args(), ["-a", "1", "-b", "-c", "3"]);
+    }
+
+    #[test]
+    fn subcommands_nest_in_front() {
+        let cmd = Cmd::new("/x").sub("outer").sub("inner").flag("-q");
+        assert_eq!(cmd.args(), ["outer", "inner", "-q"]);
+    }
+
+    #[test]
+    fn pinning_wraps_the_program_without_becoming_it() {
+        let cmd = Cmd::new("/bin/nail").sub("search");
+        let (program, args) = cmd.argv_on(&[0, 2]);
+
+        assert_eq!(program, PathBuf::from("taskset"));
+        assert_eq!(args, ["-c", "0,2", "/bin/nail", "search"]);
+        // the label still follows the program, not the wrapper
+        assert_eq!(cmd.label(), "nail");
+    }
+
+    #[test]
+    fn no_pinning_means_no_wrapper() {
+        let cmd = Cmd::new("/bin/nail").sub("search");
+        let (program, args) = cmd.argv_on(&[]);
+
+        assert_eq!(program, PathBuf::from("/bin/nail"));
+        assert_eq!(args, ["search"]);
+    }
+
+    #[test]
+    fn a_line_carries_its_environment_in_front() {
+        let line = Cmd::new("/usr/bin/wc")
+            .env("LC_ALL", "C")
+            .flag("-l")
+            .stdout(Output::Inherit)
+            .stderr(Output::Inherit)
+            .line();
+
+        assert_eq!(line, "LC_ALL=C /usr/bin/wc -l");
+    }
+
+    #[test]
+    fn a_working_directory_becomes_a_subshell_with_the_redirects_outside_it() {
+        // the files are opened before the child moves anywhere, so a relative
+        // redirect lands in the same place whether or not you paste the cd
+        let line = Cmd::new("/usr/bin/wc")
+            .flag("-l")
+            .path("data.txt")
+            .dir("/tmp/work")
+            .stdout_to("out.txt")
+            .stderr(Output::Inherit)
+            .line();
+
+        assert_eq!(line, "(cd /tmp/work && /usr/bin/wc -l data.txt) > out.txt");
+    }
+
+    #[test]
+    fn a_line_says_where_each_stream_went() {
+        let base = || Cmd::new("/x").stderr(Output::Inherit);
+
+        assert_eq!(base().line(), "/x > /dev/null");
+        assert_eq!(base().stdout(Output::Inherit).line(), "/x");
+        assert_eq!(base().stdout_to("o").line(), "/x > o");
+        assert_eq!(base().stdout(Output::Append("o".into())).line(), "/x >> o");
+        // OnFailure still writes to the file, it just may not survive the run
+        assert_eq!(
+            base().stdout(Output::OnFailure("o".into())).line(),
+            "/x > o"
+        );
+        assert_eq!(
+            Cmd::new("/x").stderr_to("e").line(),
+            "/x > /dev/null 2> e",
+            "stdout comes before stderr"
+        );
+    }
+
+    #[test]
+    fn a_label_falls_back_to_the_program_with_the_path_dropped() {
+        assert_eq!(Cmd::new("/home/jack/tools/bin/nail").label(), "nail");
+        assert_eq!(Cmd::new("mkdir").label(), "mkdir");
+        assert_eq!(Cmd::new("/x").name("prep").label(), "prep");
+    }
+}

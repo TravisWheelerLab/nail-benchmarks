@@ -290,11 +290,17 @@ impl Pipeline {
                 step.cmds_mut()[k] = cmd;
                 step.elapsed_s = Some(start.elapsed().as_secs_f64());
 
-                // giving up on the run is not a reason to leave a batch of
-                // searches running behind us, so this cancels before it propagates
-                if let Err(e) = sinks.record(step, &step.cmds()[k]) {
-                    batch.cancel(scope);
-                    return Err(e);
+                // a command the batch was cancelled out from under comes back
+                // never having run. leaving it alone lets skip_rest announce it
+                // once, as skipped, alongside the ones no worker ever picked up
+                if !matches!(step.cmds()[k].status(), Status::NotRun) {
+                    // giving up on the run is not a reason to leave a batch of
+                    // searches running behind us, so this cancels before it
+                    // propagates
+                    if let Err(e) = sinks.record(step, &step.cmds()[k]) {
+                        batch.cancel(scope);
+                        return Err(e);
+                    }
                 }
 
                 if step.skips() {
@@ -317,6 +323,351 @@ impl Pipeline {
             }
         }
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::cpu::Cores;
+    use crate::step::OnError;
+    use std::sync::{Arc, Mutex};
+
+    #[derive(Default)]
+    struct Log {
+        /// One entry per `record`, so a command announced twice shows up twice.
+        records: Vec<(String, String, Status)>,
+        finished: usize,
+    }
+
+    impl Log {
+        fn of(&self, cmd: &str) -> Vec<&Status> {
+            self.records
+                .iter()
+                .filter(|(_, label, _)| label == cmd)
+                .map(|(_, _, status)| status)
+                .collect()
+        }
+    }
+
+    /// A sink that writes down everything it is told, and can be asked to fail
+    /// when a particular command arrives.
+    #[derive(Clone, Default)]
+    struct Recorder {
+        log: Arc<Mutex<Log>>,
+        broken_by: Option<String>,
+    }
+
+    impl Recorder {
+        fn broken_by(cmd: &str) -> Recorder {
+            Recorder {
+                broken_by: Some(cmd.to_string()),
+                ..Recorder::default()
+            }
+        }
+    }
+
+    impl Sink for Recorder {
+        fn record(&mut self, step: &Step, cmd: &Cmd) -> anyhow::Result<()> {
+            self.log.lock().unwrap().records.push((
+                step.label(),
+                cmd.label(),
+                cmd.status().clone(),
+            ));
+            if self.broken_by.as_deref() == Some(cmd.label().as_str()) {
+                bail!("the sink cannot write");
+            }
+            Ok(())
+        }
+
+        fn finish(&mut self) -> anyhow::Result<()> {
+            self.log.lock().unwrap().finished += 1;
+            Ok(())
+        }
+    }
+
+    fn sh(name: &str, script: &str) -> Cmd {
+        Cmd::new("/bin/sh").name(name).arg("-c", script)
+    }
+
+    #[test]
+    fn a_command_takes_its_core_count_from_the_step_unless_it_has_its_own() {
+        let pipeline = PipelineBuilder::new()
+            .step(Step::serial([Cmd::new("/a"), Cmd::new("/b").cores(2)]).cores(4))
+            .step(Step::serial([Cmd::new("/c")]))
+            .no_stderr()
+            .build()
+            .unwrap();
+
+        assert_eq!(pipeline.steps[0].cmds()[0].cores, Some(4));
+        assert_eq!(pipeline.steps[0].cmds()[1].cores, Some(2));
+        assert_eq!(pipeline.steps[1].cmds()[0].cores, None);
+    }
+
+    #[test]
+    fn asking_for_more_cores_than_the_machine_has_fails_the_build() {
+        let too_many = Cores::read().len() + 1;
+        let built = PipelineBuilder::new()
+            .step(Step::serial([Cmd::new("/a").name("greedy")]).name("big").cores(too_many))
+            .no_stderr()
+            .build();
+
+        let Err(error) = built else {
+            panic!("a pipeline that can never be placed should not build");
+        };
+        let error = error.to_string();
+
+        assert!(error.contains("greedy"), "{error}");
+        assert!(error.contains("big"), "{error}");
+        assert!(error.contains(&too_many.to_string()), "{error}");
+    }
+
+    #[test]
+    fn steps_are_numbered_from_one() {
+        let pipeline = PipelineBuilder::new()
+            .step(Cmd::new("/a"))
+            .step(Cmd::new("/b"))
+            .no_stderr()
+            .build()
+            .unwrap();
+
+        assert_eq!(pipeline.steps[0].label(), "[1]");
+        assert_eq!(pipeline.steps[1].label(), "[2]");
+    }
+
+    #[test]
+    fn an_unrouted_stderr_gets_a_file_of_its_own_and_a_routed_one_is_left_alone() {
+        let pipeline = PipelineBuilder::new()
+            .step(
+                Step::serial([
+                    Cmd::new("/a").name("x"),
+                    Cmd::new("/b").name("y").stderr(Output::Inherit),
+                ])
+                .name("s"),
+            )
+            .stderr_dir("/tmp/pipeline-test-stderr")
+            .build()
+            .unwrap();
+
+        let Output::OnFailure(path) = &pipeline.steps[0].cmds()[0].stderr else {
+            panic!("expected a failure log, got {:?}", pipeline.steps[0].cmds()[0].stderr);
+        };
+        assert!(path.ends_with("1-s.1-x.stderr"), "{}", path.display());
+        assert_eq!(pipeline.steps[0].cmds()[1].stderr, Output::Inherit);
+        assert!(pipeline.stderr_dir.is_some());
+    }
+
+    #[test]
+    fn no_directory_is_claimed_when_nothing_needed_a_failure_log() {
+        let pipeline = PipelineBuilder::new()
+            .step(Cmd::new("/a").stderr(Output::Inherit))
+            .stderr_dir("/tmp/pipeline-test-unused")
+            .build()
+            .unwrap();
+
+        assert!(pipeline.stderr_dir.is_none());
+    }
+
+    #[test]
+    fn a_failed_step_ends_the_run_and_says_which_command_did_it() {
+        let recorder = Recorder::default();
+        let log = Arc::clone(&recorder.log);
+
+        let error = PipelineBuilder::new()
+            .step(Step::serial([sh("first", "exit 0")]))
+            .step(Step::serial([sh("bad", "exit 1")]))
+            .step(Step::serial([sh("never", "exit 0")]))
+            .no_stderr()
+            .sink(recorder)
+            .build()
+            .unwrap()
+            .run()
+            .unwrap_err()
+            .to_string();
+
+        assert!(error.contains("bad"), "{error}");
+
+        let log = log.lock().unwrap();
+        assert!(matches!(log.of("first")[..], [Status::Finished(_)]));
+        assert!(matches!(log.of("never")[..], [Status::Skipped]));
+    }
+
+    #[test]
+    fn continue_lets_the_rest_of_the_run_happen() {
+        let recorder = Recorder::default();
+        let log = Arc::clone(&recorder.log);
+
+        PipelineBuilder::new()
+            .step(Step::serial([sh("bad", "exit 1"), sh("after", "exit 0")]).on_error(OnError::Continue))
+            .step(Step::serial([sh("later", "exit 0")]))
+            .no_stderr()
+            .sink(recorder)
+            .build()
+            .unwrap()
+            .run()
+            .expect("a tolerated failure should not end the run");
+
+        let log = log.lock().unwrap();
+        assert!(matches!(log.of("after")[..], [Status::Finished(_)]));
+        assert!(matches!(log.of("later")[..], [Status::Finished(_)]));
+    }
+
+    #[test]
+    fn skip_leaves_the_rest_of_its_own_step_and_nothing_else() {
+        let recorder = Recorder::default();
+        let log = Arc::clone(&recorder.log);
+
+        PipelineBuilder::new()
+            .step(
+                Step::serial([sh("bad", "exit 1"), sh("sibling", "exit 0")])
+                    .on_error(OnError::Skip),
+            )
+            .step(Step::serial([sh("later", "exit 0")]))
+            .no_stderr()
+            .sink(recorder)
+            .build()
+            .unwrap()
+            .run()
+            .expect("skip should not fail the run");
+
+        let log = log.lock().unwrap();
+        assert!(matches!(log.of("sibling")[..], [Status::Skipped]));
+        assert!(matches!(log.of("later")[..], [Status::Finished(_)]));
+    }
+
+    #[test]
+    fn a_sink_that_cannot_write_still_gets_told_the_run_is_over() {
+        let recorder = Recorder::broken_by("bad");
+        let log = Arc::clone(&recorder.log);
+
+        let error = PipelineBuilder::new()
+            .step(Step::serial([sh("bad", "exit 0")]))
+            .step(Step::serial([sh("later", "exit 0")]))
+            .no_stderr()
+            .sink(recorder)
+            .build()
+            .unwrap()
+            .run()
+            .unwrap_err()
+            .to_string();
+
+        assert!(error.contains("cannot write"), "{error}");
+        assert_eq!(
+            log.lock().unwrap().finished,
+            1,
+            "finish must run even when the walk gave up"
+        );
+    }
+
+    #[test]
+    fn every_command_is_announced_exactly_once_and_never_as_not_run() {
+        // the contract Sink promises: by the time you see a command it has
+        // finished, failed to start, or been skipped
+        let recorder = Recorder::default();
+        let log = Arc::clone(&recorder.log);
+
+        let names = [
+            "serial-ok",
+            "batched-a",
+            "batched-b",
+            "batched-c",
+            "stopper",
+            "sibling",
+            "unreached",
+        ];
+
+        PipelineBuilder::new()
+            .step(Step::serial([sh("serial-ok", "exit 0")]))
+            .step(Step::batched(
+                2,
+                [
+                    sh("batched-a", "exit 0"),
+                    sh("batched-b", "exit 0"),
+                    sh("batched-c", "exit 0"),
+                ],
+            ))
+            .step(
+                Step::batched(1, [sh("stopper", "exit 1"), sh("sibling", "sleep 5")])
+                    .on_error(OnError::Skip),
+            )
+            .step(Step::serial([sh("unreached", "exit 0")]))
+            .no_stderr()
+            .sink(recorder)
+            .build()
+            .unwrap()
+            .run()
+            .expect("skip should not fail the run");
+
+        let log = log.lock().unwrap();
+        for name in names {
+            let seen = log.of(name);
+            assert_eq!(seen.len(), 1, "{name} was announced {} times", seen.len());
+            assert!(
+                !matches!(seen[0], Status::NotRun),
+                "{name} was announced as NotRun"
+            );
+        }
+        assert_eq!(log.records.len(), names.len(), "something extra was announced");
+    }
+
+    #[test]
+    fn a_command_the_batch_gave_up_on_before_starting_it_is_announced_once() {
+        // the awkward case for the contract: a worker takes a command, parks
+        // waiting for cores that the hog is holding, and is woken by the cancel.
+        // it comes back never having run, and both the batch and skip_rest have
+        // an opinion about saying so
+        let whole_machine = Cores::read().len();
+        let recorder = Recorder::default();
+        let log = Arc::clone(&recorder.log);
+
+        PipelineBuilder::new()
+            .step(
+                Step::batched(
+                    3,
+                    [
+                        // slow enough that the other two are placed first
+                        sh("boom", "sleep 0.3; exit 1"),
+                        sh("hog", "sleep 5").cores(whole_machine),
+                        sh("waiter", "sleep 5").cores(1),
+                    ],
+                )
+                .on_error(OnError::Skip),
+            )
+            .no_stderr()
+            .sink(recorder)
+            .build()
+            .unwrap()
+            .run()
+            .expect("skip should not fail the run");
+
+        let log = log.lock().unwrap();
+        let seen = log.of("waiter");
+        assert_eq!(seen.len(), 1, "announced {} times: {seen:?}", seen.len());
+        assert!(!matches!(seen[0], Status::NotRun), "announced as NotRun");
+    }
+
+    #[test]
+    fn a_batch_reports_every_command_it_was_given() {
+        let recorder = Recorder::default();
+        let log = Arc::clone(&recorder.log);
+
+        PipelineBuilder::new()
+            .step(Step::batched(
+                3,
+                (0..6).map(|i| sh(&format!("job-{i}"), "exit 0")),
+            ))
+            .no_stderr()
+            .sink(recorder)
+            .build()
+            .unwrap()
+            .run()
+            .unwrap();
+
+        let log = log.lock().unwrap();
+        assert_eq!(log.records.len(), 6);
+        for i in 0..6 {
+            assert!(matches!(log.of(&format!("job-{i}"))[..], [Status::Finished(_)]));
+        }
     }
 }
 

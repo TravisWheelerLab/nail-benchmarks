@@ -124,3 +124,93 @@ impl From<Cmd> for Step {
         Step::serial([cmd])
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::execute::{Status, Timing};
+
+    fn timing(exit: i32) -> Timing {
+        Timing {
+            wall_s: 1.0,
+            user_s: 1.0,
+            sys_s: 0.0,
+            max_rss_kb: 1024,
+            exit,
+        }
+    }
+
+    /// Two commands, the second having gone however `outcome` says.
+    fn step(on_error: OnError, outcome: Status) -> Step {
+        let mut step = Step::serial([Cmd::new("/a"), Cmd::new("/b")]).on_error(on_error);
+        step.cmds[0].status = Status::Finished(timing(0));
+        step.cmds[1].status = outcome;
+        step
+    }
+
+    #[test]
+    fn nothing_failed_so_nothing_reaches_anywhere() {
+        for on_error in [OnError::Continue, OnError::Skip, OnError::Abort] {
+            let step = step(on_error, Status::Finished(timing(0)));
+            assert!(!step.skips(), "{on_error:?} skipped a clean step");
+            assert!(step.aborts().is_none(), "{on_error:?} aborted a clean step");
+        }
+    }
+
+    #[test]
+    fn continue_lets_a_failure_pass() {
+        let step = step(OnError::Continue, Status::Finished(timing(1)));
+        assert!(!step.skips());
+        assert!(step.aborts().is_none());
+    }
+
+    #[test]
+    fn skip_stops_the_step_and_stops_there() {
+        let step = step(OnError::Skip, Status::Finished(timing(1)));
+        assert!(step.skips());
+        assert!(step.aborts().is_none());
+    }
+
+    #[test]
+    fn abort_stops_the_step_and_names_what_did_it() {
+        let step = step(OnError::Abort, Status::Finished(timing(1)));
+        assert!(step.skips());
+        assert_eq!(step.aborts().map(|cmd| cmd.label()), Some("b".to_string()));
+    }
+
+    #[test]
+    fn abort_is_the_default() {
+        assert_eq!(OnError::default(), OnError::Abort);
+    }
+
+    #[test]
+    fn a_command_that_never_ran_is_not_a_failure() {
+        for outcome in [Status::NotRun, Status::Skipped] {
+            let step = step(OnError::Abort, outcome);
+            assert!(!step.skips());
+            assert!(step.aborts().is_none());
+        }
+    }
+
+    #[test]
+    fn every_way_of_failing_counts() {
+        for outcome in [
+            Status::Failed("could not spawn".into()),
+            Status::TimedOut(timing(143)),
+            Status::Finished(timing(1)),
+        ] {
+            let step = step(OnError::Abort, outcome);
+            assert!(step.skips());
+            assert!(step.aborts().is_some());
+        }
+    }
+
+    #[test]
+    fn a_batch_always_has_a_worker() {
+        // zero jobs would mean no workers at all, which hangs rather than
+        // finishing empty
+        assert_eq!(Step::batched(0, [Cmd::new("/a")]).width(), 1);
+        assert_eq!(Step::batched(4, [Cmd::new("/a")]).width(), 4);
+        assert_eq!(Step::serial([Cmd::new("/a")]).width(), 1);
+    }
+}

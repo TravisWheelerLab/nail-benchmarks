@@ -54,6 +54,17 @@ impl Cores {
         }
     }
 
+    /// A pool of exactly these cpus, so the handing-out can be exercised without
+    /// depending on what the machine happens to have.
+    #[cfg(test)]
+    pub(crate) fn with_pool(pool: Vec<usize>) -> Cores {
+        Cores {
+            pool,
+            taken: Mutex::new(Vec::new()),
+            freed: Condvar::new(),
+        }
+    }
+
     pub(crate) fn len(&self) -> usize {
         self.pool.len()
     }
@@ -195,4 +206,117 @@ fn parse_list(text: &str) -> Vec<usize> {
         }
     }
     out
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::time::Duration;
+
+    #[test]
+    fn parse_list_reads_what_the_kernel_writes() {
+        assert_eq!(parse_list("16"), vec![16]);
+        assert_eq!(parse_list("0-1"), vec![0, 1]);
+        assert_eq!(parse_list("0-3,8-11"), vec![0, 1, 2, 3, 8, 9, 10, 11]);
+        assert_eq!(parse_list("0,4,8"), vec![0, 4, 8]);
+        // sysfs files come with one
+        assert_eq!(parse_list("2-3\n"), vec![2, 3]);
+    }
+
+    #[test]
+    fn parse_list_gives_up_on_a_part_it_cannot_read_rather_than_the_whole_line() {
+        assert_eq!(parse_list(""), Vec::<usize>::new());
+        assert_eq!(parse_list("\n"), Vec::<usize>::new());
+        assert_eq!(parse_list("junk"), Vec::<usize>::new());
+        assert_eq!(parse_list("0,junk,2"), vec![0, 2]);
+        // a range that runs backwards yields nothing, not a panic
+        assert_eq!(parse_list("5-2"), Vec::<usize>::new());
+    }
+
+    #[test]
+    fn cores_go_out_lowest_first() {
+        let cores = Cores::with_pool(vec![0, 2, 4, 6]);
+        let lease = cores.acquire(2, &|| false).expect("two of four");
+        assert_eq!(lease.cpus(), [0, 2]);
+    }
+
+    #[test]
+    fn two_leases_never_share_a_core() {
+        let cores = Cores::with_pool(vec![0, 2, 4, 6]);
+        let first = cores.acquire(2, &|| false).expect("two of four");
+        let second = cores.acquire(2, &|| false).expect("the other two");
+
+        assert_eq!(first.cpus(), [0, 2]);
+        assert_eq!(second.cpus(), [4, 6]);
+        assert!(cores.try_acquire(1).is_none(), "pool should be empty");
+    }
+
+    #[test]
+    fn dropping_a_lease_hands_the_cores_back() {
+        let cores = Cores::with_pool(vec![0, 2, 4, 6]);
+        {
+            let _all = cores.acquire(4, &|| false).expect("the whole pool");
+            assert!(cores.try_acquire(1).is_none(), "nothing should be left");
+        }
+        assert_eq!(
+            cores.try_acquire(4).map(|l| l.cpus().to_vec()),
+            Some(vec![0, 2, 4, 6]),
+            "the whole pool should be back"
+        );
+    }
+
+    #[test]
+    fn packing_leaves_no_gap() {
+        let cores = Cores::with_pool(vec![0, 2, 4, 6, 8, 10]);
+        let small = cores.acquire(1, &|| false).expect("one");
+        let big = cores.acquire(3, &|| false).expect("three");
+
+        assert_eq!(small.cpus(), [0]);
+        assert_eq!(big.cpus(), [2, 4, 6], "should start right after the small one");
+    }
+
+    #[test]
+    fn asking_for_more_than_exists_is_refused_rather_than_waited_on() {
+        let cores = Cores::with_pool(vec![0, 2]);
+        assert!(cores.acquire(3, &|| false).is_none());
+        assert!(cores.try_acquire(3).is_none());
+    }
+
+    #[test]
+    fn asking_for_none_gets_none() {
+        let cores = Cores::with_pool(vec![0, 2]);
+        assert!(cores.acquire(0, &|| false).is_none());
+        // and it did not quietly take anything on the way past
+        assert_eq!(cores.try_acquire(2).map(|l| l.cpus().to_vec()), Some(vec![0, 2]));
+    }
+
+    #[test]
+    fn a_wait_can_be_abandoned() {
+        let cores = Cores::with_pool(vec![0, 2]);
+        let _all = cores.acquire(2, &|| false).expect("the whole pool");
+        // nothing is free, and the predicate says do not wait for it
+        assert!(cores.acquire(1, &|| true).is_none());
+    }
+
+    /// Note: if the wake ever breaks, this hangs rather than failing — there is
+    /// no timeout on the inner wait to bound it with.
+    #[test]
+    fn a_waiting_thread_gets_the_cores_when_they_come_back() {
+        let cores = Cores::with_pool(vec![0, 2, 4, 6]);
+        let all = cores.acquire(4, &|| false).expect("the whole pool");
+
+        std::thread::scope(|scope| {
+            let waiting = scope.spawn(|| cores.acquire(2, &|| false).map(|l| l.cpus().to_vec()));
+            // long enough that the other thread is parked rather than racing us
+            std::thread::sleep(Duration::from_millis(50));
+            drop(all);
+            assert_eq!(waiting.join().unwrap(), Some(vec![0, 2]));
+        });
+    }
+
+    #[test]
+    fn wrapper_only_appears_when_there_is_something_to_pin_to() {
+        assert!(wrapper(&[]).is_empty());
+        assert_eq!(wrapper(&[0, 2]), ["taskset", "-c", "0,2"]);
+    }
 }

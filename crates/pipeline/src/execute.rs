@@ -425,3 +425,242 @@ fn reap(pid: libc::pid_t, start: Instant, exited: impl FnOnce()) -> anyhow::Resu
 fn secs(tv: libc::timeval) -> f64 {
     tv.tv_sec as f64 + tv.tv_usec as f64 / 1_000_000.0
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::sync::atomic::AtomicUsize;
+
+    fn sh(script: &str) -> Cmd {
+        Cmd::new("/bin/sh").arg("-c", script)
+    }
+
+    fn start(script: &str) -> (libc::pid_t, Instant) {
+        sh(script).spawn().expect("spawn")
+    }
+
+    fn scratch(name: &str) -> std::path::PathBuf {
+        let dir = std::env::temp_dir().join(format!("pipeline-test-{name}"));
+        std::fs::remove_dir_all(&dir).ok();
+        std::fs::create_dir_all(&dir).unwrap();
+        dir
+    }
+
+    #[test]
+    fn reap_reports_the_exit_code() {
+        let (pid, at) = start("exit 3");
+        let timing = reap(pid, at, || {}).expect("reap");
+        assert_eq!(timing.exit, 3);
+        assert!(!timing.ok());
+    }
+
+    #[test]
+    fn reap_turns_a_signal_into_128_plus_it() {
+        let (pid, at) = start("kill -TERM $$");
+        let timing = reap(pid, at, || {}).expect("reap");
+        assert_eq!(timing.exit, 128 + libc::SIGTERM);
+    }
+
+    #[test]
+    fn reap_collects_what_the_process_actually_cost() {
+        let (pid, at) = start("seq 1 400000 > /dev/null");
+        let timing = reap(pid, at, || {}).expect("reap");
+
+        assert!(timing.user_s > 0.0, "no user time: {timing:?}");
+        assert!(timing.max_rss_kb > 0, "no peak rss: {timing:?}");
+        assert!(timing.wall_s > 0.0, "no wall clock: {timing:?}");
+    }
+
+    #[test]
+    fn the_pid_is_still_ours_when_exited_runs_and_gone_after() {
+        // this is the whole reason for waitid(WNOWAIT): anything holding the pid
+        // has to be told to let go while it is still a zombie, because once the
+        // reap lands it could belong to someone else
+        let (pid, at) = start("exit 0");
+
+        let mut ours_in_the_gap = None;
+        reap(pid, at, || {
+            ours_in_the_gap = Some(unsafe { libc::kill(pid, 0) });
+        })
+        .expect("reap");
+
+        assert_eq!(ours_in_the_gap, Some(0), "pid should still be ours");
+        assert!(
+            reap(pid, at, || {}).is_err(),
+            "a second reap should find nothing, so the first one really reaped"
+        );
+    }
+
+    #[test]
+    fn exited_runs_even_when_the_wait_fails() {
+        // nothing is ever told twice, so the one call has to happen on both paths
+        let ran = AtomicUsize::new(0);
+        let bogus = -424242;
+
+        let result = reap(bogus, Instant::now(), || {
+            ran.fetch_add(1, Ordering::Relaxed);
+        });
+
+        assert!(result.is_err(), "waiting on a pid we never spawned");
+        assert_eq!(ran.load(Ordering::Relaxed), 1);
+    }
+
+    #[test]
+    fn a_command_that_beats_its_deadline_does_not_wait_for_it() {
+        // if the thread minding the deadline is not woken, this takes the full
+        // minute instead of no time at all
+        let cores = Cores::with_pool(vec![]);
+        let mut cmd = sh("exit 0").timeout(Duration::from_secs(60));
+
+        let at = Instant::now();
+        cores.execute(&mut cmd);
+
+        assert!(matches!(cmd.status(), Status::Finished(_)), "{:?}", cmd.status());
+        assert!(
+            at.elapsed() < Duration::from_secs(5),
+            "took {:?}, so the deadline was slept out",
+            at.elapsed()
+        );
+    }
+
+    #[test]
+    fn a_command_that_outstays_its_deadline_is_terminated() {
+        let cores = Cores::with_pool(vec![]);
+        let mut cmd = sh("sleep 30").timeout(Duration::from_millis(200));
+
+        let at = Instant::now();
+        cores.execute(&mut cmd);
+
+        let Status::TimedOut(timing) = cmd.status() else {
+            panic!("expected a timeout, got {:?}", cmd.status());
+        };
+        assert_eq!(timing.exit, 128 + libc::SIGTERM);
+        assert!(at.elapsed() < Duration::from_secs(5), "{:?}", at.elapsed());
+    }
+
+    #[test]
+    fn a_command_with_no_deadline_is_left_to_finish() {
+        let cores = Cores::with_pool(vec![]);
+        let mut cmd = sh("exit 0");
+        cores.execute(&mut cmd);
+
+        let Status::Finished(timing) = cmd.status() else {
+            panic!("expected a clean finish, got {:?}", cmd.status());
+        };
+        assert_eq!(timing.exit, 0);
+    }
+
+    #[test]
+    fn a_command_that_ignores_the_deadline_is_killed_once_the_grace_is_up() {
+        // the slow one: SIGTERM_GRACE has to elapse before the SIGKILL lands
+        let cores = Cores::with_pool(vec![]);
+        let mut cmd = sh("trap '' TERM; sleep 30").timeout(Duration::from_millis(200));
+
+        let at = Instant::now();
+        cores.execute(&mut cmd);
+
+        let Status::TimedOut(timing) = cmd.status() else {
+            panic!("expected a timeout, got {:?}", cmd.status());
+        };
+        assert_eq!(timing.exit, 128 + libc::SIGKILL, "should have been killed");
+        assert!(
+            at.elapsed() >= SIGTERM_GRACE,
+            "killed before the grace was up: {:?}",
+            at.elapsed()
+        );
+    }
+
+    #[test]
+    fn a_command_that_cannot_start_says_so_rather_than_panicking() {
+        let cores = Cores::with_pool(vec![]);
+        let mut cmd = Cmd::new("/no/such/tool");
+        cores.execute(&mut cmd);
+
+        let Status::Failed(why) = cmd.status() else {
+            panic!("expected a failure to launch, got {:?}", cmd.status());
+        };
+        assert!(why.contains("/no/such/tool"), "unhelpful message: {why}");
+    }
+
+    #[test]
+    fn a_failure_with_something_to_say_keeps_its_stderr() {
+        let path = scratch("keep").join("e.stderr");
+        std::fs::write(&path, b"no such database").unwrap();
+
+        let mut cmd = Cmd::new("/x").stderr(Output::OnFailure(path.clone()));
+        cmd.report(Status::Finished(Timing {
+            wall_s: 0.0,
+            user_s: 0.0,
+            sys_s: 0.0,
+            max_rss_kb: 0,
+            exit: 1,
+        }));
+
+        assert!(path.exists(), "a failure with output should be kept");
+    }
+
+    #[test]
+    fn a_failure_with_nothing_to_say_leaves_no_file_behind() {
+        let path = scratch("empty").join("e.stderr");
+        std::fs::write(&path, b"").unwrap();
+
+        let mut cmd = Cmd::new("/x").stderr(Output::OnFailure(path.clone()));
+        cmd.report(Status::Failed("could not spawn".into()));
+
+        assert!(!path.exists(), "an empty log is not worth keeping");
+    }
+
+    #[test]
+    fn a_command_that_worked_leaves_no_file_behind() {
+        let path = scratch("ok").join("e.stderr");
+        std::fs::write(&path, b"a warning, perhaps").unwrap();
+
+        let mut cmd = Cmd::new("/x").stderr(Output::OnFailure(path.clone()));
+        cmd.report(Status::Finished(Timing {
+            wall_s: 0.0,
+            user_s: 0.0,
+            sys_s: 0.0,
+            max_rss_kb: 0,
+            exit: 0,
+        }));
+
+        assert!(!path.exists(), "nothing failed, so there is nothing to read");
+    }
+
+    #[test]
+    fn a_stderr_the_caller_asked_for_is_kept_whatever_happened() {
+        let path = scratch("asked").join("e.stderr");
+        std::fs::write(&path, b"").unwrap();
+
+        let mut cmd = Cmd::new("/x").stderr(Output::File(path.clone()));
+        cmd.report(Status::Finished(Timing {
+            wall_s: 0.0,
+            user_s: 0.0,
+            sys_s: 0.0,
+            max_rss_kb: 0,
+            exit: 0,
+        }));
+
+        assert!(path.exists(), "only OnFailure files are tidied away");
+    }
+
+    #[test]
+    fn an_output_file_brings_its_directory_with_it() {
+        let path = scratch("mkdir").join("a/b/c.txt");
+        Output::File(path.clone()).stdio().expect("stdio");
+        assert!(path.exists());
+    }
+
+    #[test]
+    fn appending_adds_to_what_is_there_and_a_file_replaces_it() {
+        let dir = scratch("append");
+        let path = dir.join("out.txt");
+        std::fs::write(&path, b"first\n").unwrap();
+
+        drop(Output::Append(path.clone()).stdio().expect("stdio"));
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), "first\n");
+
+        drop(Output::File(path.clone()).stdio().expect("stdio"));
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), "");
+    }
+}
