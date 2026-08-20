@@ -42,7 +42,7 @@ fn main() -> anyhow::Result<()> {
                 .stdout_to(&data)
                 .tag("setup"),
         )
-        .step(Step::batch(2, burns).name("burn"))
+        .step(Step::batched(2, burns).name("burn"))
         .step(
             Step::serial([
                 // dir means the argument can be relative, and the variable rides
@@ -83,7 +83,7 @@ fn main() -> anyhow::Result<()> {
             .on_error(OnError::Continue),
         )
         .step(
-            Step::batch(
+            Step::batched(
                 3,
                 std::iter::once(
                     Cmd::new("/bin/sh")

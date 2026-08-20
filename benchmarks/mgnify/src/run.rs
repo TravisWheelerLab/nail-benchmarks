@@ -134,7 +134,7 @@ pub fn main(args: Args) -> anyhow::Result<()> {
                     })
                     .collect::<Vec<_>>(),
             ))
-            .step(Step::batch(
+            .step(Step::batched(
                 parts.len(),
                 parts.iter().enumerate().map(|(i, part)| {
                     Cmd::new(&hmmsearch)

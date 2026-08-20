@@ -3,14 +3,14 @@
 use std::collections::VecDeque;
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicUsize, Ordering};
-use std::sync::{Arc, mpsc};
+use std::sync::mpsc;
 use std::time::Instant;
 
 use anyhow::{Context, anyhow, bail};
 
 use crate::cmd::{Cmd, Output};
 use crate::cpu::Cores;
-use crate::execute::{Live, Status, stamp};
+use crate::execute::{Batch, Status, stamp};
 use crate::label;
 use crate::sink::Sink;
 use crate::step::{Step, Strategy};
@@ -154,7 +154,7 @@ impl Pipeline {
             // since that depends on the order workers pick them up
             let width = match step.strategy {
                 Strategy::Serial => 1,
-                Strategy::Batch { jobs } => jobs,
+                Strategy::Batched { jobs } => jobs,
             };
             let mut held = VecDeque::new();
 
@@ -173,34 +173,57 @@ impl Pipeline {
         }
     }
 
-    pub fn run(self) -> anyhow::Result<()> {
-        let Pipeline {
-            mut steps,
-            mut sinks,
-            stderr_dir,
-            cores,
-        } = self;
+    pub fn run(mut self) -> anyhow::Result<()> {
+        // the steps come out so that the rest of the pipeline can be borrowed
+        // while they are worked through. run consumes self, so nobody sees the
+        // field it leaves behind
+        let mut steps = std::mem::take(&mut self.steps);
 
-        sinks.start(&steps)?;
+        self.sinks.start(&steps)?;
 
-        if let Some(dir) = &stderr_dir {
+        if let Some(dir) = &self.stderr_dir {
             std::fs::create_dir_all(dir)
                 .with_context(|| format!("failed to create {}", dir.display()))?;
         }
 
-        let live = Arc::new(Live::with_cores(cores));
-        let _watchdog = Live::watch(&live);
+        let outcome = self.run_steps(&mut steps);
 
-        // run steps until one of them aborts
-        let mut failure = None;
-        let mut left = steps.iter_mut();
-        for step in left.by_ref() {
-            match step.strategy {
-                Strategy::Serial => serial(step, &live, &mut sinks)?,
-                Strategy::Batch { jobs } => batch(step, jobs, &live, &mut sinks)?,
+        // both of these happen whichever way the run went, so the table is
+        // finished and the stderr log is where it says it is by the time the
+        // caller hears about anything
+        let finished = self.sinks.finish();
+        if let Some(dir) = &self.stderr_dir {
+            std::fs::remove_dir(dir).ok();
+            if let Some(parent) = dir.parent() {
+                std::fs::remove_dir(parent).ok();
             }
-            skip_rest(step, &mut sinks)?;
-            sinks.step_done(step)?;
+        }
+
+        // a sink that could not write comes first: if the table never made it to
+        // disk, which command failed is not on record anyway
+        let failure = outcome?;
+        finished?;
+
+        // last, so everything above has already happened
+        match failure {
+            Some(failure) => Err(anyhow!(failure)),
+            None => Ok(()),
+        }
+    }
+
+    /// Every step in turn, stopping at the first one that ends the run. Gives
+    /// back the command that ended it, if one did.
+    fn run_steps(&mut self, steps: &mut [Step]) -> anyhow::Result<Option<String>> {
+        let mut failure = None;
+        let mut remaining_steps = steps.iter_mut();
+
+        for step in remaining_steps.by_ref() {
+            match step.strategy {
+                Strategy::Serial => self.serial(step)?,
+                Strategy::Batched { jobs } => self.batch(step, jobs)?,
+            }
+            self.skip_rest(step)?;
+            self.sinks.step_done(step)?;
 
             if let Some(cmd) = step.aborts() {
                 failure = Some(format!("{} failed: {}", cmd.label(), cmd.line()));
@@ -209,27 +232,113 @@ impl Pipeline {
         }
 
         // any steps after an early abort get to report here
-        for step in left {
-            skip_rest(step, &mut sinks)?;
-            sinks.step_done(step)?;
+        for step in remaining_steps {
+            self.skip_rest(step)?;
+            self.sinks.step_done(step)?;
         }
 
-        sinks.finish()?;
+        Ok(failure)
+    }
 
-        // cleanup
-        if let Some(dir) = &stderr_dir {
-            std::fs::remove_dir(dir).ok();
-            if let Some(parent) = dir.parent() {
-                std::fs::remove_dir(parent).ok();
+    /// One command at a time, stopping early if the step says to.
+    fn serial(&mut self, step: &mut Step) -> anyhow::Result<()> {
+        let start = Instant::now();
+
+        for j in 0..step.cmds().len() {
+            self.cores.execute(&mut step.cmds_mut()[j]);
+            step.elapsed_s = Some(start.elapsed().as_secs_f64());
+
+            self.sinks.record(step, &step.cmds()[j])?;
+            if step.skips() {
+                break;
             }
         }
+        Ok(())
+    }
 
-        // last, so the table is finished and the stderr log is still there to
-        // read by the time the caller hears about it
-        match failure {
-            Some(failure) => Err(anyhow!(failure)),
-            None => Ok(()),
+    /// `jobs` at a time. Workers take the next command whenever they are free, so
+    /// one slow command does not idle the rest.
+    ///
+    /// A step that has failed and is set to stop does not wait for the rest of
+    /// the batch to finish: nothing new is taken, and what is already running is
+    /// killed. Those come back as `exit 143`, which is a real failure and reads
+    /// as one, so a step that stopped shows the one command that broke it and the
+    /// ones it took down with it.
+    fn batch(&mut self, step: &mut Step, jobs: usize) -> anyhow::Result<()> {
+        let start = Instant::now();
+
+        // the workers run against a copy, which leaves the step free for the main
+        // thread to write results into; cloning a Cmd costs nothing next to
+        // spawning a process
+        let copies: Vec<Cmd> = step.cmds().to_vec();
+        let next = AtomicUsize::new(0);
+        let (tx, rx) = mpsc::channel();
+        // made here and dropped here, so a cancel reaches this step's commands
+        // and nothing else
+        let batch = Batch::new(&self.cores);
+        let sinks = &mut self.sinks;
+
+        std::thread::scope(|scope| -> anyhow::Result<()> {
+            for _ in 0..jobs {
+                let tx = tx.clone();
+                let next = &next;
+                let copies = &copies;
+                let batch = &batch;
+                scope.spawn(move || {
+                    loop {
+                        if batch.cancelled() {
+                            break;
+                        }
+                        let k = next.fetch_add(1, Ordering::Relaxed);
+                        if k >= copies.len() {
+                            break;
+                        }
+                        let mut cmd = copies[k].clone();
+                        batch.execute(&mut cmd);
+                        // a closed channel means the main thread gave up on us
+                        if tx.send((k, cmd)).is_err() {
+                            break;
+                        }
+                    }
+                });
+            }
+            drop(tx);
+
+            // results are applied here rather than in the workers, so sinks stay
+            // single-threaded and the table keeps up during a long batch
+            // the whole command comes back, not just its status, so the cpus the
+            // worker actually pinned it to are what the table reports
+            for (k, cmd) in rx {
+                step.cmds_mut()[k] = cmd;
+                step.elapsed_s = Some(start.elapsed().as_secs_f64());
+
+                // giving up on the run is not a reason to leave a batch of
+                // searches running behind us, so this cancels before it propagates
+                if let Err(e) = sinks.record(step, &step.cmds()[k]) {
+                    batch.cancel(scope);
+                    return Err(e);
+                }
+
+                if step.skips() {
+                    batch.cancel(scope);
+                }
+            }
+            Ok(())
+        })
+    }
+
+    /// Marks anything that never ran as skipped and tells the sinks about it.
+    ///
+    /// Two cases end up here: the tail of a step that stopped partway, and every
+    /// command of a step the pipeline never got to.
+    fn skip_rest(&mut self, step: &mut Step) -> anyhow::Result<()> {
+        for j in 0..step.cmds().len() {
+            if matches!(step.cmds()[j].status(), Status::NotRun) {
+                step.cmds_mut()[j].status = Status::Skipped;
+                self.sinks.record(step, &step.cmds()[j])?;
+            }
         }
+        Ok(())
     }
 }
 
@@ -256,92 +365,3 @@ impl Sinks {
     }
 }
 
-/// One command at a time, stopping early if the step says to.
-fn serial(step: &mut Step, live: &Live, sinks: &mut Sinks) -> anyhow::Result<()> {
-    let start = Instant::now();
-
-    for j in 0..step.cmds().len() {
-        live.execute(&mut step.cmds_mut()[j]);
-        step.elapsed_s = Some(start.elapsed().as_secs_f64());
-
-        sinks.record(step, &step.cmds()[j])?;
-        if step.skips() {
-            break;
-        }
-    }
-    Ok(())
-}
-
-/// `jobs` at a time. Workers take the next command whenever they are free, so
-/// one slow command does not idle the rest.
-///
-/// A step that has failed and is set to stop does not wait for the rest of the
-/// batch to finish: nothing new is taken, and what is already running is killed.
-/// Those come back as `exit 143`, which is a real failure and reads as one, so a
-/// step that stopped shows the one command that broke it and the ones it took
-/// down with it.
-fn batch(step: &mut Step, jobs: usize, live: &Live, sinks: &mut Sinks) -> anyhow::Result<()> {
-    let start = Instant::now();
-
-    // the workers run against a copy, which leaves the step free for the main
-    // thread to write results into; cloning a Cmd costs nothing next to
-    // spawning a process
-    let copies: Vec<Cmd> = step.cmds().to_vec();
-    let next = AtomicUsize::new(0);
-    let (tx, rx) = mpsc::channel();
-
-    std::thread::scope(|scope| -> anyhow::Result<()> {
-        for _ in 0..jobs {
-            let tx = tx.clone();
-            let next = &next;
-            let copies = &copies;
-            scope.spawn(move || {
-                loop {
-                    if live.stopping() {
-                        break;
-                    }
-                    let k = next.fetch_add(1, Ordering::Relaxed);
-                    if k >= copies.len() {
-                        break;
-                    }
-                    let mut cmd = copies[k].clone();
-                    live.execute(&mut cmd);
-                    // a closed channel means the main thread gave up on us
-                    if tx.send((k, cmd)).is_err() {
-                        break;
-                    }
-                }
-            });
-        }
-        drop(tx);
-
-        // results are applied here rather than in the workers, so sinks stay
-        // single-threaded and the table keeps up during a long batch
-        // the whole command comes back, not just its status, so the cpus the
-        // worker actually pinned it to are what the table reports
-        for (k, cmd) in rx {
-            step.cmds_mut()[k] = cmd;
-            step.elapsed_s = Some(start.elapsed().as_secs_f64());
-            sinks.record(step, &step.cmds()[k])?;
-
-            if step.skips() {
-                live.stop();
-            }
-        }
-        Ok(())
-    })
-}
-
-/// Marks anything that never ran as skipped and tells the sinks about it.
-///
-/// Two cases end up here: the tail of a step that stopped partway, and every
-/// command of a step the pipeline never got to.
-fn skip_rest(step: &mut Step, sinks: &mut Sinks) -> anyhow::Result<()> {
-    for j in 0..step.cmds().len() {
-        if matches!(step.cmds()[j].status(), Status::NotRun) {
-            step.cmds_mut()[j].status = Status::Skipped;
-            sinks.record(step, &step.cmds()[j])?;
-        }
-    }
-    Ok(())
-}

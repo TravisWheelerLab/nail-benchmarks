@@ -16,7 +16,7 @@ pub enum OnError {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Strategy {
     Serial,
-    Batch { jobs: usize },
+    Batched { jobs: usize },
 }
 
 #[derive(Clone, Debug)]
@@ -37,8 +37,8 @@ impl Step {
         Step::new(cmds, Strategy::Serial)
     }
 
-    pub fn batch(jobs: usize, cmds: impl IntoIterator<Item = Cmd>) -> Self {
-        Step::new(cmds, Strategy::Batch { jobs: jobs.max(1) })
+    pub fn batched(jobs: usize, cmds: impl IntoIterator<Item = Cmd>) -> Self {
+        Step::new(cmds, Strategy::Batched { jobs: jobs.max(1) })
     }
 
     fn new(cmds: impl IntoIterator<Item = Cmd>, strategy: Strategy) -> Self {

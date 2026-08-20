@@ -24,6 +24,12 @@ const SERIAL: &str = "|";
 /// Marks a command that ran alongside the others in its step.
 const BATCH: &str = "||";
 
+/// The columns every row ends with, after whatever fields and tags the run
+/// carries.
+const METRICS: [&str; 8] = [
+    "wall(s)", "user(s)", "sys(s)", "cpu(%)", "max_rss", "exit", "status", "argv",
+];
+
 /// Whether every block gets its own header.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Headers {
@@ -196,7 +202,7 @@ fn block(step: &Step, keys: &[String], tags: &[String]) -> Vec<Vec<Cell>> {
         rows.push(step_row(step, keys.len() + tags.len()));
         Cell::right(match step.strategy() {
             Strategy::Serial => SERIAL,
-            Strategy::Batch { .. } => BATCH,
+            Strategy::Batched { .. } => BATCH,
         })
     };
 
@@ -219,17 +225,55 @@ fn dimensions(cmds: &[&Cmd]) -> (Vec<String>, Vec<String>) {
     (keys.into_iter().collect(), tags.into_iter().collect())
 }
 
+/// What one row has to say about what something cost and how it went. Anything
+/// left out prints as `-`, which is how a command that never started says it has
+/// no numbers.
+#[derive(Default)]
+struct Metrics {
+    wall_s: Option<f64>,
+    user_s: Option<f64>,
+    sys_s: Option<f64>,
+    max_rss_kb: Option<i64>,
+    exit: Option<i32>,
+    status: Option<&'static str>,
+    argv: Option<String>,
+}
+
+impl Metrics {
+    /// The cells, in the order [`METRICS`] names them. A column added to one
+    /// without the other does not compile.
+    fn cells(self) -> [Cell; METRICS.len()] {
+        let cpu = match (self.user_s, self.sys_s) {
+            (Some(user), Some(sys)) => cpu_pct(user + sys, self.wall_s),
+            _ => dash(),
+        };
+
+        [
+            Cell::left(secs(self.wall_s)),
+            Cell::left(secs(self.user_s)),
+            Cell::left(secs(self.sys_s)),
+            Cell::left(cpu),
+            Cell::left(self.max_rss_kb.map(format_bytes).unwrap_or_else(dash)),
+            Cell::left(self.exit.map(|e| e.to_string()).unwrap_or_else(dash)),
+            Cell::left(self.status.unwrap_or("-")),
+            Cell::left(self.argv.unwrap_or_else(dash)),
+        ]
+    }
+}
+
+fn dash() -> String {
+    "-".to_string()
+}
+
+fn secs(s: Option<f64>) -> String {
+    s.map(|s| format!("{s:.2}")).unwrap_or_else(dash)
+}
+
 fn header(keys: &[String], tags: &[String]) -> Vec<String> {
     let mut header: Vec<String> = vec!["step".into(), "cmd".into()];
     header.extend(keys.iter().cloned());
     header.extend(tags.iter().cloned());
-    header.extend(
-        [
-            "wall(s)", "user(s)", "sys(s)", "cpu(%)", "max_rss", "exit", "status", "argv",
-        ]
-        .iter()
-        .map(|s| s.to_string()),
-    );
+    header.extend(METRICS.iter().map(|s| s.to_string()));
     header
 }
 
@@ -238,45 +282,32 @@ fn step_row(step: &Step, dimensions: usize) -> Vec<Cell> {
     let mut cells = vec![Cell::left(step.label()), Cell::left("-")];
     cells.extend(std::iter::repeat_n(Cell::left("-"), dimensions));
 
-    cells.push(Cell::left(match step.wall_s() {
-        Some(wall) => format!("{wall:.2}"),
-        None => "-".to_string(),
-    }));
-
     let timings: Vec<&Timing> = step
         .cmds()
         .iter()
-        .filter_map(|c| match c.status() {
-            // a command killed on its deadline still burned everything it says
-            // it burned, so it counts toward the step
-            Status::Finished(t) | Status::TimedOut(t) => Some(t),
-            _ => None,
-        })
+        .filter_map(|c| c.status().timing())
         .collect();
 
+    // exit, status and argv belong to commands; a count or a rollup here would
+    // be a different quantity sharing a column
+    let mut metrics = Metrics {
+        wall_s: step.wall_s(),
+        ..Metrics::default()
+    };
+
     // no peak means nothing finished, so there is nothing to add up either
-    match timings.iter().map(|t| t.max_rss_kb).max() {
-        None => cells.extend(std::iter::repeat_n(Cell::left("-"), 4)),
-        Some(peak) => {
-            // summed CPU against measured wall is what shows whether a batch
-            // actually bought anything
-            let user_s: f64 = timings.iter().map(|t| t.user_s).sum();
-            let sys_s: f64 = timings.iter().map(|t| t.sys_s).sum();
-            cells.push(Cell::left(format!("{user_s:.2}")));
-            cells.push(Cell::left(format!("{sys_s:.2}")));
-            // the same ratio the commands report, over the step's own clock, so
-            // a batch that ran four commands at once reads about four times what
-            // any one of them did
-            cells.push(Cell::left(cpu_pct(user_s + sys_s, step.wall_s())));
-            // the largest any one process got, which is not the same as the most
-            // the step held at once — wait4 cannot tell us that
-            cells.push(Cell::left(format_bytes(peak)));
-        }
+    if let Some(peak) = timings.iter().map(|t| t.max_rss_kb).max() {
+        // summed CPU against measured wall is what shows whether a batch
+        // actually bought anything: a step that ran four at once reads about
+        // four times what any one of them did
+        metrics.user_s = Some(timings.iter().map(|t| t.user_s).sum());
+        metrics.sys_s = Some(timings.iter().map(|t| t.sys_s).sum());
+        // the largest any one process got, which is not the same as the most the
+        // step held at once — wait4 cannot tell us that
+        metrics.max_rss_kb = Some(peak);
     }
 
-    // exit and status belong to commands; a count or a rollup here would be a
-    // different quantity sharing a column
-    cells.extend(std::iter::repeat_n(Cell::left("-"), 3));
+    cells.extend(metrics.cells());
     cells
 }
 
@@ -295,20 +326,19 @@ fn cmd_row(first: Cell, cmd: &Cmd, keys: &[String], tags: &[String]) -> Vec<Cell
 
     // two separate questions: what it cost, and how it went. a command that
     // could not start has nothing to say about the first
-    match cmd.status() {
-        Status::Finished(t) | Status::TimedOut(t) => {
-            cells.push(Cell::left(format!("{:.2}", t.wall_s)));
-            cells.push(Cell::left(format!("{:.2}", t.user_s)));
-            cells.push(Cell::left(format!("{:.2}", t.sys_s)));
-            cells.push(Cell::left(cpu_pct(t.user_s + t.sys_s, Some(t.wall_s))));
-            cells.push(Cell::left(format_bytes(t.max_rss_kb)));
-            cells.push(Cell::left(t.exit.to_string()));
+    let t = cmd.status().timing();
+    cells.extend(
+        Metrics {
+            wall_s: t.map(|t| t.wall_s),
+            user_s: t.map(|t| t.user_s),
+            sys_s: t.map(|t| t.sys_s),
+            max_rss_kb: t.map(|t| t.max_rss_kb),
+            exit: t.map(|t| t.exit),
+            status: Some(status_word(cmd.status())),
+            argv: Some(cmd.line()),
         }
-        _ => cells.extend(std::iter::repeat_n(Cell::left("-"), 6)),
-    }
-
-    cells.push(Cell::left(status_word(cmd.status())));
-    cells.push(Cell::left(cmd.line()));
+        .cells(),
+    );
     cells
 }
 
