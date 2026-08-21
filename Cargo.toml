@@ -10,6 +10,7 @@ members = [
     "benchmarks/mgnify",
     "benchmarks/long-seqs", "crates/tools",
     "benchmarks/search-size",
+    "benchmarks/cloud-search",
 ]
 
 [workspace.dependencies]
