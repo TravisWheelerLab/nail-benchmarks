@@ -315,6 +315,11 @@ impl Cmd {
             .spawn()
             .with_context(|| format!("failed to spawn {}", self.program.display()))?;
 
+        // the handle is dropped here and the pid outlives it. std's Child has
+        // no Drop, so nothing waits on the process and nothing frees the
+        // number — which is what leaves it there for reap to find. giving this
+        // function something that reaps on drop would hand reap a pid the
+        // kernel is free to have reused.
         Ok((child.id() as libc::pid_t, start))
     }
 
