@@ -11,6 +11,9 @@
 **/figures*/
 **/profmark/
 **/results/
+# a pipeline run keeps the stderr of whatever failed, next to wherever it was
+# started from
+**/stderr/
 **/tmp/
 **/tmp-*/
 **/__pycache__/

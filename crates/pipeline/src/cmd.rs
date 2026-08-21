@@ -265,48 +265,29 @@ impl Cmd {
         out
     }
 
-    /// What actually gets exec'd, with the pinning wrapper in front of it if
-    /// this command was given cpus.
-    ///
-    /// `program` is left alone rather than being rewritten to `taskset`, so an
-    /// unnamed command still labels itself after the thing it runs.
+    /// The program and everything after it, as they get handed to exec.
     pub(crate) fn argv(&self) -> (PathBuf, Vec<String>) {
-        self.argv_on(&self.cpus)
+        (self.program.clone(), self.args())
     }
 
-    fn argv_on(&self, cpus: &[usize]) -> (PathBuf, Vec<String>) {
-        let mut wrapper = crate::cpu::wrapper(cpus);
-        if wrapper.is_empty() {
-            return (self.program.clone(), self.args());
-        }
-
-        let program = PathBuf::from(wrapper.remove(0));
-        let mut args = wrapper;
-        args.push(self.program.display().to_string());
-        args.extend(self.args());
-        (program, args)
-    }
-
-    /// The command as a line you can paste into a shell and get the same thing.
+    /// The command as a shell line.
     ///
-    /// A working directory becomes a subshell so pasting it leaves your own
+    /// A working directory becomes a subshell, so running it leaves your own
     /// shell where it was. The redirects sit outside it, because the files are
     /// opened before the child moves anywhere, so a relative one lands in the
     /// same place either way.
+    ///
+    /// Pinning is not in here. The child sets its own affinity rather than
+    /// being wrapped in something that sets it, so there is nothing on the
+    /// command line to write down; the cpus column says where it ran instead.
     pub fn line(&self) -> String {
-        self.line_on(&self.cpus)
-    }
-
-    /// The same line, but pinned to `cpus` rather than to whatever this command
-    /// was given. For showing what a run would look like before it happens.
-    pub(crate) fn line_on(&self, cpus: &[usize]) -> String {
         let mut parts: Vec<String> = self
             .env
             .iter()
             .map(|(key, value)| format!("{key}={}", quote(value)))
             .collect();
 
-        let (program, args) = self.argv_on(cpus);
+        let (program, args) = self.argv();
         parts.push(quote(&program.display().to_string()));
         parts.extend(args.iter().map(|a| quote(a)));
 
@@ -421,23 +402,14 @@ mod tests {
     }
 
     #[test]
-    fn pinning_wraps_the_program_without_becoming_it() {
-        let cmd = Cmd::new("/bin/nail").sub("search");
-        let (program, args) = cmd.argv_on(&[0, 2]);
-
-        assert_eq!(program, PathBuf::from("taskset"));
-        assert_eq!(args, ["-c", "0,2", "/bin/nail", "search"]);
-        // the label still follows the program, not the wrapper
-        assert_eq!(cmd.label(), "nail");
-    }
-
-    #[test]
-    fn no_pinning_means_no_wrapper() {
-        let cmd = Cmd::new("/bin/nail").sub("search");
-        let (program, args) = cmd.argv_on(&[]);
+    fn pinning_stays_out_of_the_argv() {
+        let mut cmd = Cmd::new("/bin/nail").sub("search");
+        cmd.cpus = vec![0, 2];
+        let (program, args) = cmd.argv();
 
         assert_eq!(program, PathBuf::from("/bin/nail"));
         assert_eq!(args, ["search"]);
+        assert_eq!(cmd.line(), "/bin/nail search > /dev/null 2> /dev/null");
     }
 
     #[test]

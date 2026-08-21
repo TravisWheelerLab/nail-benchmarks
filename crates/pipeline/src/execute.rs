@@ -2,6 +2,7 @@
 
 use std::fs::{File, OpenOptions};
 use std::io;
+use std::os::unix::process::CommandExt;
 use std::panic::{AssertUnwindSafe, catch_unwind};
 use std::path::Path;
 use std::process::{Command, Stdio};
@@ -287,6 +288,27 @@ impl Cmd {
         }
         proc.stdout(self.stdout.stdio()?);
         proc.stderr(self.stderr.stdio()?);
+
+        // the child pins itself on its way to exec, so the pid we end up
+        // waiting on is the program's own and every number we measure is still
+        // the program's. the mask is made out here because the hook runs
+        // between the fork and the exec, where anything that allocates or takes
+        // a lock can hang for good. affinity survives an exec, so setting it
+        // now is enough.
+        //
+        // (a machine with more than one memory node wants `set_mempolicy` here
+        // too, bound to the node its cpus sit on.)
+        if !self.cpus.is_empty() {
+            let set = crate::cpu::mask(&self.cpus);
+            unsafe {
+                proc.pre_exec(move || {
+                    match libc::sched_setaffinity(0, size_of::<libc::cpu_set_t>(), &set) {
+                        0 => Ok(()),
+                        _ => Err(std::io::Error::last_os_error()),
+                    }
+                });
+            }
+        }
 
         let start = Instant::now();
         let child = proc

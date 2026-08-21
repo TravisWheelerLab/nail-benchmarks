@@ -75,4 +75,24 @@ impl<'a> Item<'a> {
             Item::Closure(_) => None,
         }
     }
+
+    /// How many cores it asked for, zero for one that asked for none. This is
+    /// answerable before it runs; which cpus it ends up on is not, so the two
+    /// are separate questions.
+    pub fn cores(self) -> usize {
+        match self {
+            Item::Cmd(cmd) => cmd.cores.unwrap_or(0),
+            Item::Closure(_) => 0,
+        }
+    }
+
+    /// The cpus it was pinned to, which is empty until it holds them and again
+    /// once it lets them go. `None` for a closure, which runs wherever the
+    /// pipeline itself is allowed to.
+    pub fn cpus(self) -> Option<&'a [usize]> {
+        match self {
+            Item::Cmd(cmd) => Some(&cmd.cpus),
+            Item::Closure(_) => None,
+        }
+    }
 }

@@ -2,7 +2,8 @@
 //!
 //! A command asks for a number of cores and never says which. [`Cores`] keeps
 //! track of what is free, hands out that many, and takes them back when the
-//! command is done; `taskset` does the pinning.
+//! command is done. The pinning happens in the child itself, between the fork
+//! and the exec.
 
 use std::sync::{Condvar, Mutex};
 
@@ -149,20 +150,38 @@ impl Drop for Lease<'_> {
     }
 }
 
-/// The wrapper that pins a command to `cpus`, or nothing at all if it was never
-/// given any.
+/// The affinity mask for `cpus`, built while there is still a whole program to
+/// build it in. What installs it runs after the fork, where about the only
+/// thing left that is safe to do is make one syscall.
 ///
-/// `taskset` execs into the program rather than supervising it, so the pid we
-/// end up waiting on is the program's own and every number we measure is still
-/// the program's. (`numactl` belongs here too, for a machine with more than one
-/// node: it would want the node its cpus sit on, via `--membind`.)
-pub(crate) fn wrapper(cpus: &[usize]) -> Vec<String> {
-    if cpus.is_empty() {
-        return Vec::new();
+/// A cpu at or past `CPU_SETSIZE` would write outside the set, so it is dropped
+/// rather than trusted. `allowed` cannot produce one, and this is what keeps
+/// that true if a pool ever comes from somewhere else.
+pub(crate) fn mask(cpus: &[usize]) -> libc::cpu_set_t {
+    let mut set: libc::cpu_set_t = unsafe { std::mem::zeroed() };
+    for cpu in cpus.iter().filter(|cpu| **cpu < libc::CPU_SETSIZE as usize) {
+        unsafe { libc::CPU_SET(*cpu, &mut set) };
     }
+    set
+}
 
-    let list: Vec<String> = cpus.iter().map(|cpu| cpu.to_string()).collect();
-    vec!["taskset".to_string(), "-c".to_string(), list.join(",")]
+/// A cpu list the way the kernel writes one: `0`, `0,2`, empty for nothing.
+pub(crate) fn list(cpus: &[usize]) -> String {
+    let parts: Vec<String> = cpus.iter().map(|cpu| cpu.to_string()).collect();
+    parts.join(",")
+}
+
+/// How wide the list for `cores` cpus comes out if every one of them is a
+/// single digit: one digit each, and a comma between them.
+///
+/// Room to reserve before anything has run and we know which cpus they are.
+/// The low guess on purpose — a cpu past the first ten grows the column past
+/// this, and nothing is reserved for a width most runs will not use.
+pub(crate) fn list_width(cores: usize) -> usize {
+    match cores {
+        0 => 0,
+        cores => 2 * cores - 1,
+    }
 }
 
 /// The CPUs this process may run on, which is not the same as every CPU the
@@ -315,8 +334,13 @@ mod tests {
     }
 
     #[test]
-    fn wrapper_only_appears_when_there_is_something_to_pin_to() {
-        assert!(wrapper(&[]).is_empty());
-        assert_eq!(wrapper(&[0, 2]), ["taskset", "-c", "0,2"]);
+    fn a_mask_holds_exactly_the_cpus_it_was_given() {
+        let set = mask(&[0, 2]);
+        let held: Vec<usize> = (0..8)
+            .filter(|cpu| unsafe { libc::CPU_ISSET(*cpu, &set) })
+            .collect();
+
+        assert_eq!(held, [0, 2]);
+        assert_eq!(list(&held), "0,2");
     }
 }

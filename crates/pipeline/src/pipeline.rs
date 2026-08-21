@@ -156,7 +156,13 @@ impl Pipeline {
                 }
                 let lease = self.cores.try_acquire(cmd.cores.unwrap_or(0));
                 let cpus = lease.as_ref().map(|l| l.cpus()).unwrap_or_default();
-                println!("{} {}", cmd.label(), cmd.line_on(cpus));
+                // the pinning is no longer part of the command, so it gets said
+                // beside it rather than shown in it
+                let pin = match cpus {
+                    [] => String::new(),
+                    cpus => format!(" [cpu {}]", crate::cpu::list(cpus)),
+                };
+                println!("{} {}{pin}", cmd.label(), cmd.line());
 
                 held.extend(lease);
             }

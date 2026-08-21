@@ -188,6 +188,12 @@ impl Sink for Table {
 struct Columns {
     keys: Vec<String>,
     tags: Vec<String>,
+    /// Whether anything in the run asks to be pinned. A run where nothing does
+    /// gets no cpus column at all, rather than one of nothing but dashes.
+    ///
+    /// This asks what was requested and not where anything landed, because the
+    /// columns are settled before the run and nothing has landed anywhere yet.
+    cpus: bool,
 }
 
 impl Columns {
@@ -196,15 +202,18 @@ impl Columns {
     fn of(steps: &[Step]) -> Columns {
         let mut keys = BTreeSet::new();
         let mut tags = BTreeSet::new();
+        let mut cpus = false;
 
         for item in steps.iter().flat_map(Step::items) {
             keys.extend(item.fields().keys().cloned());
             tags.extend(item.tags().iter().cloned());
+            cpus |= item.cores() > 0;
         }
 
         Columns {
             keys: keys.into_iter().collect(),
             tags: tags.into_iter().collect(),
+            cpus,
         }
     }
 
@@ -213,7 +222,28 @@ impl Columns {
         header.extend(self.keys.iter().cloned());
         header.extend(self.tags.iter().cloned());
         header.extend(METRICS.iter().map(|s| s.to_string()));
+        if self.cpus {
+            header.insert(header.len() - 1, "cpus".into());
+        }
         header
+    }
+
+    /// Slots the cpus cell into a row that is otherwise finished, second to
+    /// last. It sits there rather than out with the fields because the width
+    /// reserved for it is only a guess, and everything a wider one shifts along
+    /// is then just argv, which is last and unpadded anyway.
+    fn put_cpus(&self, cells: &mut Vec<Cell>, cpus: Option<&[usize]>) {
+        if !self.cpus {
+            return;
+        }
+
+        // empty rather than absent means it asked for cpus and never got as far
+        // as holding any, which reads the same as having none to report
+        let text = match cpus {
+            Some([]) | None => dash(),
+            Some(cpus) => crate::cpu::list(cpus),
+        };
+        cells.insert(cells.len() - 1, Cell::left(text));
     }
 
     /// One step's rows: its own line, then a line per command.
@@ -252,6 +282,21 @@ impl Columns {
                 widen(&mut widths, &row);
             }
         }
+
+        // every cpus cell above still says `-`, since nothing has been given
+        // any cpus yet. how many each command gets is settled though, so the
+        // column can be sized for the widest of those rather than for a dash
+        if self.cpus {
+            let at = widths.len() - 2;
+            let most = steps
+                .iter()
+                .flat_map(Step::items)
+                .map(|item| crate::cpu::list_width(item.cores()))
+                .max()
+                .unwrap_or(0);
+            widths[at] = widths[at].max(most);
+        }
+
         widths
     }
 }
@@ -330,6 +375,9 @@ impl Columns {
         }
 
         cells.extend(metrics.cells());
+        // the cpus a whole step held is not the cpus any one command held, so
+        // like exit and argv beside it, the step line leaves it alone
+        self.put_cpus(&mut cells, None);
         cells
     }
 
@@ -356,6 +404,7 @@ impl Columns {
             }
             .cells(),
         );
+        self.put_cpus(&mut cells, item.cpus());
         cells
     }
 
