@@ -1,11 +1,9 @@
-//! A pipeline end to end: a bare command, a batch, a serial step, a deadline, a
-//! step that gives up, and two sinks.
+//! A pipeline end to end: one command on its own, a serial step, a batch, some
+//! rust, and two sinks.
 //!
 //! `cargo run -p pipeline --example basic`
 
-use std::time::Duration;
-
-use pipeline::{Closure, Cmd, OnError, PipelineBuilder, Progress, Step, Table};
+use pipeline::{Closure, Cmd, PipelineBuilder, Progress, Step, Table};
 
 fn main() -> anyhow::Result<()> {
     let dir = std::env::temp_dir().join("pipeline-basic");
@@ -13,109 +11,57 @@ fn main() -> anyhow::Result<()> {
     let data = dir.join("data.txt");
     let table = dir.join("runs.tbl");
 
-    // four commands that each burn some cpu, run two at a time: the step's wall
-    // clock comes out near double one command's, and the summed user time shows
-    // what the parallelism bought
-    let burns = (1..=4).map(|i| {
-        Cmd::new("/bin/sh")
-            .name(format!("burn-{i}"))
-            // a value can be anything printable, so the count needs no to_string
-            .arg("-c", format_args!("seq 1 {} > /dev/null", i * 5_000_000))
-            .field("job", i)
-    });
-
-    // three that would take half a minute each, alongside one that fails at
-    // once. the step is set to stop, so the sleeps get killed rather than run to
-    // the end for nothing
-    let sleeps = (1..=2).map(|i| {
-        Cmd::new("/bin/sh")
-            .name(format!("sleep-{i}"))
-            .arg("-c", "sleep 30")
-    });
-
     PipelineBuilder::new()
         // a bare Cmd is a step of one
         .step(
             Cmd::new("/bin/sh")
                 .name("make-data")
                 .arg("-c", "seq 1 2000")
-                .stdout_to(&data)
-                .tag("setup"),
+                .stdout_to(&data),
         )
-        .step(Step::batched(2, burns).name("burn"))
+        // one after another
         .step(
             Step::serial([
-                // dir means the argument can be relative, and the variable rides
-                // along in the pasteable line
-                Cmd::new("/usr/bin/wc")
-                    .name("lines")
-                    .flag("-l")
-                    .path("data.txt")
-                    .dir(&dir)
-                    .env("LC_ALL", "C")
-                    .stdout_to(dir.join("lines"))
-                    .field("mode", "lines"),
-                Cmd::new("/usr/bin/wc")
-                    .name("bytes")
-                    .flag("-c")
-                    .path("data.txt")
-                    .dir(&dir)
-                    .env("LC_ALL", "C")
-                    .stdout_to(dir.join("bytes"))
-                    .field("mode", "bytes"),
-                // no name: it goes by its number alone
-                Cmd::new("/no/such/tool"),
-                // fails with something to say, so its stderr is kept
-                Cmd::new("/bin/sh")
-                    .name("boom")
-                    .arg("-c", "echo 'no such database' >&2; exit 3"),
+                Cmd::new("/usr/bin/wc").name("lines").flag("-l").path(&data),
+                Cmd::new("/usr/bin/wc").name("bytes").flag("-c").path(&data),
             ])
-            .name("count")
-            // one bad command should not cost us the rest of the matrix
-            .on_error(OnError::Continue),
+            .name("count"),
         )
-        // rust in place of a command. only the wall clock gets measured, so the
-        // cpu, memory and argv columns come out empty, and a closure that
-        // returns an error says so where a command's exit code would go
-        .step(
-            Step::from_closures([
-                Closure::new("count-lines", {
-                    let data = data.clone();
-                    move || {
-                        let lines = std::fs::read_to_string(&data)?.lines().count();
-                        anyhow::ensure!(lines == 2000, "expected 2000 lines, found {lines}");
-                        Ok(())
-                    }
-                })
-                .field("mode", "lines"),
-                Closure::new("boom", || anyhow::bail!("a closure can fail too")),
-            ])
-            .name("check")
-            .on_error(OnError::Continue),
-        )
-        .step(
-            Step::serial([Cmd::new("/bin/sh")
-                .name("slow")
-                .arg("-c", "sleep 30")
-                .timeout(Duration::from_millis(300))])
-            .name("limit")
-            .on_error(OnError::Continue),
-        )
+        // three at a time: the step's wall clock comes out near a third of the
+        // summed user time
         .step(
             Step::batched(
                 3,
-                std::iter::once(
+                [
                     Cmd::new("/bin/sh")
-                        .name("early")
-                        .arg("-c", "exit 1")
-                        .field("job", 0),
-                )
-                .chain(sleeps),
+                        .name("burn-1")
+                        .arg("-c", "seq 1 5000000 > /dev/null"),
+                    Cmd::new("/bin/sh")
+                        .name("burn-2")
+                        .arg("-c", "seq 1 10000000 > /dev/null"),
+                    Cmd::new("/bin/sh")
+                        .name("burn-3")
+                        .arg("-c", "seq 1 15000000 > /dev/null"),
+                ],
             )
-            .name("race"),
+            .name("burn"),
         )
-        // never gets a turn, because the step above stops the run
-        .step(Cmd::new("/bin/echo").name("after").path("unreachable"))
+        // rust in place of a command. only the wall clock gets measured, so the
+        // cpu, memory and argv columns come out empty
+        .step(
+            Step::from_closures([
+                Closure::new("count-lines", move || {
+                    let lines = std::fs::read_to_string(&data)?.lines().count();
+                    anyhow::ensure!(lines == 2000, "expected 2000 lines, found {lines}");
+                    Ok(())
+                }),
+                Closure::new("wait", || {
+                    std::thread::sleep(std::time::Duration::from_millis(200));
+                    Ok(())
+                }),
+            ])
+            .name("check"),
+        )
         .sink(Progress::new())
         .sink(Table::new(&table))
         .build()?
