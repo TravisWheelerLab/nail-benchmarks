@@ -73,6 +73,11 @@ $(PFAM_STO): | $(DATA_DIR)
 	@wget -O $(PFAM_GZ) $(PFAM_URL)
 	@gunzip $(PFAM_GZ)
 
+.PHONY: pfam swissprot mgnify
+pfam: $(PFAM_STO)
+
+swissprot: $(SWISSPROT_FA)
+
 mgnify: | $(MGY_DIR)
 	@set -e; \
 	if command -v aria2c >/dev/null 2>&1; then \
@@ -85,8 +90,8 @@ mgnify: | $(MGY_DIR)
 	  done; \
 	fi
 
-DATA := $(PFAM_STO) $(SWISSPROT_FA) mgnify
-setup: $(DATA)
+.PHONY: setup
+setup: pfam swissprot mgnify
 
 ####################################
 ####################################
