@@ -11,6 +11,7 @@ members = [
     "benchmarks/long-seqs", "crates/tools",
     "benchmarks/search-size",
     "benchmarks/cloud-search",
+    "benchmarks/hit-loss",
 ]
 
 [workspace.dependencies]

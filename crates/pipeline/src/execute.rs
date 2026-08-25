@@ -2,6 +2,7 @@
 
 use std::fs::{File, OpenOptions};
 use std::io;
+#[cfg(target_os = "linux")]
 use std::os::unix::process::CommandExt;
 use std::panic::{AssertUnwindSafe, catch_unwind};
 use std::path::Path;
@@ -298,6 +299,9 @@ impl Cmd {
         //
         // (a machine with more than one memory node wants `set_mempolicy` here
         // too, bound to the node its cpus sit on.)
+        // note: no pinning syscall exists on macOS, so cpus are still leased
+        // and counted there but the child is never actually bound to one.
+        #[cfg(target_os = "linux")]
         if !self.cpus.is_empty() {
             let set = crate::cpu::mask(&self.cpus);
             unsafe {
@@ -491,10 +495,21 @@ fn reap(pid: libc::pid_t, start: Instant, exited: impl FnOnce()) -> anyhow::Resu
         wall_s,
         user_s: Some(secs(usage.ru_utime)),
         sys_s: Some(secs(usage.ru_stime)),
-        // ru_maxrss is already in kilobytes on Linux
-        max_rss_kb: Some(usage.ru_maxrss),
+        max_rss_kb: Some(max_rss_kb(&usage)),
         exit,
     })
+}
+
+/// `ru_maxrss` in kilobytes. The kernel hands it back in kilobytes on Linux
+/// and bytes on macOS, so only macOS needs the conversion.
+#[cfg(target_os = "linux")]
+fn max_rss_kb(usage: &libc::rusage) -> i64 {
+    usage.ru_maxrss
+}
+
+#[cfg(not(target_os = "linux"))]
+fn max_rss_kb(usage: &libc::rusage) -> i64 {
+    usage.ru_maxrss / 1024
 }
 
 fn secs(tv: libc::timeval) -> f64 {

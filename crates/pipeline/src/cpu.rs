@@ -157,6 +157,7 @@ impl Drop for Lease<'_> {
 /// A cpu at or past `CPU_SETSIZE` would write outside the set, so it is dropped
 /// rather than trusted. `allowed` cannot produce one, and this is what keeps
 /// that true if a pool ever comes from somewhere else.
+#[cfg(target_os = "linux")]
 pub(crate) fn mask(cpus: &[usize]) -> libc::cpu_set_t {
     let mut set: libc::cpu_set_t = unsafe { std::mem::zeroed() };
     for cpu in cpus.iter().filter(|cpu| **cpu < libc::CPU_SETSIZE as usize) {
@@ -187,6 +188,7 @@ pub(crate) fn list_width(cores: usize) -> usize {
 /// The CPUs this process may run on, which is not the same as every CPU the
 /// machine has — a benchmark started under `taskset` gets a smaller set, and
 /// handing out anything outside it would pin commands nowhere.
+#[cfg(target_os = "linux")]
 fn allowed() -> Vec<usize> {
     let mut set: libc::cpu_set_t = unsafe { std::mem::zeroed() };
     let rc = unsafe { libc::sched_getaffinity(0, size_of::<libc::cpu_set_t>(), &mut set) };
@@ -197,6 +199,14 @@ fn allowed() -> Vec<usize> {
     (0..libc::CPU_SETSIZE as usize)
         .filter(|cpu| unsafe { libc::CPU_ISSET(*cpu, &set) })
         .collect()
+}
+
+/// Every CPU the machine has. There is no `taskset` here to ask for a
+/// smaller set, so this is the honest answer rather than an approximation.
+#[cfg(not(target_os = "linux"))]
+fn allowed() -> Vec<usize> {
+    let cpus = std::thread::available_parallelism().map_or(0, |n| n.get());
+    (0..cpus).collect()
 }
 
 /// Every logical CPU sharing a physical core with this one, itself included.
@@ -334,6 +344,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(target_os = "linux")]
     fn a_mask_holds_exactly_the_cpus_it_was_given() {
         let set = mask(&[0, 2]);
         let held: Vec<usize> = (0..8)
