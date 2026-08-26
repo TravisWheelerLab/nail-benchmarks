@@ -1,7 +1,7 @@
 //! Pfam against MGnify, four ways.
 //!
-//! `build` cuts the two sources into an input set, and every pipeline that
-//! reads a set of that shape searches those same files. What a pipeline owns
+//! `build` cuts the two sources into an input set under `inputs/<kind>/`, and
+//! every pipeline that reads a set of that shape searches those same files. What a pipeline owns
 //! is everything downstream of them -- its own seeds, its own hmmer run, its
 //! own results -- so a directory under `runs/` can be read on its own without
 //! asking what else has been run.

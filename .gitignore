@@ -15,8 +15,7 @@
 **/benchmark/
 # mgy keeps its inputs and its pipelines' output at the crate root rather than
 # under a benchmark directory, so the generated ones are named one by one
-/benchmarks/mgy/queries/
-/benchmarks/mgy/targets/
+/benchmarks/mgy/inputs/
 /benchmarks/mgy/runs/
 /benchmarks/mgy/cutoffs/
 # pct-id keeps the same shape: one input set per size, one run directory each

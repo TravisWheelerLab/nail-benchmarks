@@ -10,6 +10,11 @@
 //! A kind names a shape; a pipeline names a question. Which kind a pipeline
 //! reads is fixed when it is written, so nothing here takes a kind at runtime
 //! -- a pipeline reaches into its own kind's module and gets paths back.
+//!
+//! ```text
+//! inputs/<kind>/queries/   what is being searched with
+//! inputs/<kind>/targets/   what is being searched
+//! ```
 
 use std::path::{Path, PathBuf};
 
@@ -23,19 +28,28 @@ pub enum Kind {
 }
 
 impl Kind {
-    fn dir(self) -> &'static str {
+    fn name(self) -> &'static str {
         match self {
             Kind::Fixed => "fixed",
             Kind::Ladder => "ladder",
         }
     }
 
+    /// The set's own directory: both axes, and anything else it holds.
+    ///
+    /// A set is one thing -- `build` draws both axes in one pass, and they are
+    /// only comparable to each other -- so it is one directory to remove, to
+    /// refuse to build over, and to name in an error.
+    pub fn dir(self) -> PathBuf {
+        crate::dir().join("inputs").join(self.name())
+    }
+
     pub fn queries(self) -> PathBuf {
-        crate::dir().join("queries").join(self.dir())
+        self.dir().join("queries")
     }
 
     pub fn targets(self) -> PathBuf {
-        crate::dir().join("targets").join(self.dir())
+        self.dir().join("targets")
     }
 }
 
@@ -48,6 +62,11 @@ pub mod fixed {
     use super::*;
 
     const KIND: Kind = Kind::Fixed;
+
+    /// The whole set, for a caller that wants it rather than one axis.
+    pub fn dir() -> PathBuf {
+        KIND.dir()
+    }
 
     pub fn queries() -> PathBuf {
         KIND.queries()
@@ -93,6 +112,11 @@ pub mod ladder {
     use super::*;
 
     const KIND: Kind = Kind::Ladder;
+
+    /// The whole set, for a caller that wants it rather than one axis.
+    pub fn dir() -> PathBuf {
+        KIND.dir()
+    }
 
     pub fn queries() -> PathBuf {
         KIND.queries()
@@ -187,7 +211,10 @@ fn numbered(dir: &Path, ext: Option<&str>) -> anyhow::Result<Vec<(usize, PathBuf
             Some(ext) => format!("files named <n>.{ext}"),
             None => "directories named <n>".to_string(),
         };
-        bail!("no {what} in {}; run `mgy build` first", dir.display());
+        bail!(
+            "no {what} in {}; has `mgy build` been run for this kind?",
+            dir.display()
+        );
     }
 
     Ok(out)

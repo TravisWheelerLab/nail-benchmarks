@@ -77,20 +77,24 @@ const HMMER_DECOY: &str = "hmmer";
 
 /// Where every artifact of a calibration lives.
 ///
-/// The whole thing hangs off one directory at the crate root, so several
-/// calibrations — different shard counts, different parameters — can sit side
-/// by side and be deleted as a unit. The inputs it reads are the shared ones
-/// every pipeline reads.
+/// The whole thing hangs off one directory at the crate root rather than under
+/// `runs/`, so several calibrations — different shard counts, different
+/// parameters — can sit side by side and be deleted as a unit. What it produces
+/// is a data file to be promoted by hand, not a benchmark's results.
+///
+/// The inputs it reads are the fixed set every recall pipeline reads.
 struct Layout {
     root: PathBuf,
 }
 
 impl Layout {
     fn new(out: &str) -> anyhow::Result<Self> {
-        for dir in [inputs::fixed::queries(), inputs::fixed::targets()] {
-            if !dir.is_dir() {
-                bail!("{} does not exist; run `mgy build` first", dir.display());
-            }
+        let set = inputs::fixed::dir();
+        if !set.is_dir() {
+            bail!(
+                "{} does not exist; run `mgy build fixed` first",
+                set.display()
+            );
         }
 
         Ok(Layout {

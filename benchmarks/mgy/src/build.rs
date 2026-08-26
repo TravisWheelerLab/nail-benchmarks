@@ -1,9 +1,9 @@
 //! Cuts Pfam and MGnify into an input set for the pipelines to search.
 //!
 //! There is no benchmark-directory axis here the way there was in the crates
-//! this replaces: an input set lives at the crate root under its kind, and
-//! every pipeline of that kind reads it, so a number from one is comparable to
-//! a number from another without anyone having to check that the two draws
+//! this replaces: an input set is one directory, `inputs/<kind>/`, and every
+//! pipeline of that kind reads it -- so a number from one is comparable to a
+//! number from another without anyone having to check that the two draws
 //! happened to match.
 //!
 //! The two kinds differ in how they cut, not in what they cut -- see
@@ -78,9 +78,11 @@ pub struct FixedArgs {
 fn fixed(args: FixedArgs) -> anyhow::Result<()> {
     let src = Sources::find()?;
 
+    let set = inputs::fixed::dir();
+    claim(&set)?;
+
     let queries = inputs::fixed::queries();
     let targets = inputs::fixed::targets();
-    claim(&[&queries, &targets])?;
 
     let (query_hmm, query_sto) = (inputs::fixed::query_hmm(), inputs::fixed::query_sto());
 
@@ -129,11 +131,7 @@ fn fixed(args: FixedArgs) -> anyhow::Result<()> {
         .build()?
         .run()?;
 
-    println!(
-        "\nbuilt {} and {}",
-        inputs::fixed::queries().display(),
-        inputs::fixed::targets().display()
-    );
+    println!("\nbuilt {}", set.display());
     Ok(())
 }
 
@@ -226,9 +224,11 @@ pub struct LadderArgs {
 fn ladder(args: LadderArgs) -> anyhow::Result<()> {
     let src = Sources::find()?;
 
+    let set = inputs::ladder::dir();
+    claim(&set)?;
+
     let queries = inputs::ladder::queries();
     let targets = inputs::ladder::targets();
-    claim(&[&queries, &targets])?;
 
     // ---- queries
 
@@ -295,7 +295,7 @@ fn ladder(args: LadderArgs) -> anyhow::Result<()> {
 
     write_sizes(&inputs::ladder::sizes(&targets), &sizes)?;
 
-    println!("\nbuilt {} and {}", queries.display(), targets.display());
+    println!("\nbuilt {}", set.display());
     Ok(())
 }
 
@@ -469,11 +469,9 @@ impl Sources {
 /// Rebuilding in place would leave whatever the last build wrote alongside
 /// whatever this one does, and the pipelines read a directory rather than a
 /// manifest, so the mixture would be searched as if it were one set.
-fn claim(dirs: &[&Path]) -> anyhow::Result<()> {
-    for dir in dirs {
-        if dir.exists() {
-            bail!("{} already exists; remove it to rebuild", dir.display());
-        }
+fn claim(set: &Path) -> anyhow::Result<()> {
+    if set.exists() {
+        bail!("{} already exists; remove it to rebuild", set.display());
     }
     Ok(())
 }

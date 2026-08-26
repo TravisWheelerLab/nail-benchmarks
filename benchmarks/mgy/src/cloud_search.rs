@@ -126,7 +126,7 @@ pub fn main(args: Args) -> anyhow::Result<()> {
 
     ensure!(
         query_hmm.is_file() && target.is_file(),
-        "{} or {} is missing; run `mgy build` first",
+        "{} or {} is missing; run `mgy build fixed` first",
         query_hmm.display(),
         target.display()
     );
