@@ -26,6 +26,9 @@ use crate::search::{self, Bins, Dirs, Split};
 const MMSEQS_S: &str = "12.0";
 const SEED_MODE: &str = "prog";
 
+/// The column hmmer's run becomes, which every cell is measured against.
+const HMMER: &str = "hmmer";
+
 #[derive(Parser, Debug)]
 pub struct Args {
     /// Which target shard to search.
@@ -148,7 +151,7 @@ pub fn main(args: Args) -> anyhow::Result<()> {
             SEED_MODE,
         ));
 
-    for step in search::truth(&bins.hmmsearch, &split, &dirs, &args.shard, &target) {
+    for step in search::hmmer(&bins.hmmsearch, &split, &dirs, HMMER, &args.shard, &target) {
         pl = pl.step(step);
     }
 
@@ -196,7 +199,7 @@ pub fn main(args: Args) -> anyhow::Result<()> {
     let pipeline = pl
         .stderr_dir(dirs.tmp.join("stderr"))
         .sink(Progress::new())
-        .sink(Table::new(dirs.root.join("runs.tbl")))
+        .sink(Table::new(dirs.root.join("manifest.tbl")))
         .build()
         .context("failed to build the sweep")?;
 

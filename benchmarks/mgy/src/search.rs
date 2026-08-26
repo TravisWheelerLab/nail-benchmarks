@@ -2,13 +2,13 @@
 //!
 //! These return [`Step`]s and [`Cmd`]s for a pipeline to compose. Nothing here
 //! owns a pipeline or decides what a run measures — a pipeline that wants
-//! hmmer truth against a shard asks for those steps and puts them where it
-//! wants them.
+//! hmmer against a shard asks for those steps and puts them where it wants
+//! them.
 //!
 //! Every search command carries the fields `parse` reads back: `name` for the
 //! column it becomes, `tool` for how to read its table, and `shard` for which
-//! target it ran against. Seeding and truth carry `stage` instead, because
-//! neither is a column.
+//! target it ran against. Seeding carries `stage` instead, since it produces
+//! pairs rather than scores and so is not a column.
 
 use std::path::{Path, PathBuf};
 
@@ -28,7 +28,7 @@ pub const EVALUE: &str = "10";
 
 /// Where one pipeline's output lives.
 ///
-/// Everything a run produces -- hit tables, hmmer's truth, the seed list --
+/// Everything a run produces -- hit tables, domain tables, the seed list --
 /// lands in `results/`, told apart by name rather than by directory. `tmp/`
 /// holds the scratch that gets thrown away.
 pub struct Dirs {
@@ -39,7 +39,7 @@ pub struct Dirs {
 
 impl Dirs {
     pub fn new(name: &str) -> Dirs {
-        let root = crate::dir().join(name);
+        let root = crate::runs().join(name);
         Dirs {
             results: root.join("results"),
             tmp: root.join("tmp"),
@@ -154,58 +154,65 @@ impl Split {
     }
 }
 
-/// hmmer over one shard, and the two tables it leaves behind.
+/// One hmmer run over one shard, and the two tables it leaves behind.
 ///
-/// Two steps: the parts searched together, then their output concatenated into
-/// `results/hmmer.<shard>.tbl` and `.domtbl`, which is where `parse` looks.
-pub fn truth(
+/// Two steps: the query's parts searched together, then their output
+/// concatenated into `results/<name>.<shard>.tbl` and `.domtbl`. It is an
+/// ordinary run and carries the ordinary fields -- the domain table is the
+/// only thing about it the other tools have no equivalent of.
+pub fn hmmer(
     hmmsearch: &Path,
     split: &Split,
     dirs: &Dirs,
+    name: &str,
     shard_name: &str,
     target: &Path,
 ) -> Vec<Step> {
     let parts = &split.parts;
     let scratch = dirs.tmp.join("hmmer");
 
-    let out = |ext: &str| manifest::truth_path(&dirs.results, shard_name, ext);
+    let fields = |cmd: Cmd| {
+        cmd.field(manifest::NAME, name)
+            .field(manifest::TOOL, "hmmer")
+            .field(manifest::SHARD, shard_name)
+    };
 
     vec![
         Step::batched(
             parts.len(),
             parts.iter().enumerate().map(|(i, part)| {
-                Cmd::new(hmmsearch)
-                    .name(i.to_string())
-                    .arg("--cpu", HMMER_CPU)
-                    .arg("--tblout", scratch.join(format!("{i}.tbl")))
-                    .arg("--domtblout", scratch.join(format!("{i}.domtbl")))
-                    .arg("-E", EVALUE)
-                    .path(part)
-                    .path(target)
-                    .field(manifest::STAGE, "truth")
-                    .field(manifest::SHARD, shard_name)
+                fields(
+                    Cmd::new(hmmsearch)
+                        .name(i.to_string())
+                        .arg("--cpu", HMMER_CPU)
+                        .arg("--tblout", scratch.join(format!("{i}.tbl")))
+                        .arg("--domtblout", scratch.join(format!("{i}.domtbl")))
+                        .arg("-E", EVALUE)
+                        .path(part)
+                        .path(target),
+                )
             }),
         )
-        .name(format!("hmmer.{shard_name}"))
+        .name(format!("{name}.{shard_name}"))
         // per command, not per step, so this asks for HMMER_CPU x parts, which
         // is --threads again. a machine with a smaller pool than that won't
         // fail, it will just run fewer of the parts at once
         .cores(HMMER_CPU),
         Step::serial([
-            cat(
-                (0..parts.len()).map(|i| scratch.join(format!("{i}.tbl"))),
-                out("tbl"),
-            )
-            .name("tbl")
-            .field(manifest::STAGE, "truth")
-            .field(manifest::SHARD, shard_name),
+            fields(
+                cat(
+                    (0..parts.len()).map(|i| scratch.join(format!("{i}.tbl"))),
+                    manifest::table_path(&dirs.results, name, shard_name),
+                )
+                .name("tbl"),
+            ),
             cat(
                 (0..parts.len()).map(|i| scratch.join(format!("{i}.domtbl"))),
-                out("domtbl"),
+                manifest::dom_path(&dirs.results, name, shard_name),
             )
             .name("domtbl"),
         ])
-        .name(format!("truth.{shard_name}")),
+        .name(format!("cat.{name}.{shard_name}")),
     ]
 }
 

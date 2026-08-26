@@ -1,6 +1,6 @@
 //! Which stage of the nail pipeline drops the hits hmmer finds.
 //!
-//! Seeds once, runs hmmer for truth, then runs nail once at its defaults.
+//! Seeds once, runs hmmer, then runs nail once at its defaults.
 //! There is no grid here the way there is in cloud-search: this isn't asking
 //! how a knob trades off, it's asking where a single default run loses hits
 //! hmmer would have found. One nail invocation is the whole point.
@@ -30,8 +30,9 @@ use crate::search::{self, Bins, Dirs, Split};
 const MMSEQS_S: &str = "12.0";
 const SEED_MODE: &str = "prog";
 
-/// The column nail's one run becomes.
+/// The columns the two runs become.
 const RUN: &str = "nail";
+const HMMER: &str = "hmmer";
 
 #[derive(Parser, Debug)]
 pub struct Args {
@@ -101,7 +102,7 @@ pub fn main(args: Args) -> anyhow::Result<()> {
             SEED_MODE,
         ));
 
-    for step in search::truth(&bins.hmmsearch, &split, &dirs, &args.shard, &target) {
+    for step in search::hmmer(&bins.hmmsearch, &split, &dirs, HMMER, &args.shard, &target) {
         pl = pl.step(step);
     }
 
@@ -126,7 +127,7 @@ pub fn main(args: Args) -> anyhow::Result<()> {
         )
         .stderr_dir(dirs.tmp.join("stderr"))
         .sink(Progress::new())
-        .sink(Table::new(dirs.root.join("runs.tbl")))
+        .sink(Table::new(dirs.root.join("manifest.tbl")))
         .build()
         .context("failed to build the run")?;
 

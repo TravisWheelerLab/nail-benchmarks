@@ -6,9 +6,9 @@
 //! rather than a variable: every tool sees all of them, and a run's column in
 //! the scores table spans the lot.
 //!
-//! hmmer is the truth here, not a column. Its scores land in `hmmer_seq` and
-//! `hmmer_dom` like they do for every pipeline, so "hmmer's recall is 1.0"
-//! falls out rather than being computed.
+//! hmmer is a column like nail and mmseqs. What makes it the thing the others
+//! are measured against is the analysis holding them to it, not anything about
+//! how it is run or recorded.
 
 use std::path::PathBuf;
 
@@ -26,6 +26,9 @@ const MMSEQS_MAX_SEQS: usize = 2000;
 
 /// nail's seeding mode, matching what cloud-search and hit-loss seed with.
 const SEED_MODE: &str = "prog";
+
+/// The column hmmer's run becomes, which the other two are measured against.
+const HMMER: &str = "hmmer";
 
 #[derive(Parser, Debug)]
 pub struct Args {
@@ -110,9 +113,7 @@ pub fn main(args: Args) -> anyhow::Result<()> {
         search::jobs(args.threads),
     );
 
-    let mut pl = PipelineBuilder::new()
-        .step(dirs.mkdir())
-        .step(split.step());
+    let mut pl = PipelineBuilder::new().step(dirs.mkdir()).step(split.step());
 
     for (idx, target) in &shards {
         let shard = idx.to_string();
@@ -221,9 +222,9 @@ pub fn main(args: Args) -> anyhow::Result<()> {
             .cores(args.threads),
         );
 
-        // ---- hmmer truth
+        // ---- hmmer
 
-        for step in search::truth(&bins.hmmsearch, &split, &dirs, &shard, target) {
+        for step in search::hmmer(&bins.hmmsearch, &split, &dirs, HMMER, &shard, target) {
             pl = pl.step(step);
         }
 
@@ -235,7 +236,7 @@ pub fn main(args: Args) -> anyhow::Result<()> {
     let pipeline = pl
         .stderr_dir(dirs.tmp.join("stderr"))
         .sink(Progress::new())
-        .sink(Table::new(dirs.root.join("runs.tbl")))
+        .sink(Table::new(dirs.root.join("manifest.tbl")))
         .build()
         .context("failed to build the run")?;
 

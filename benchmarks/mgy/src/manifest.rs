@@ -1,7 +1,7 @@
 //! Reading back the table a [`pipeline::Table`] sink wrote.
 //!
-//! A run records what it did in `runs.tbl`, and `parse` learns the shape of a
-//! pipeline from that rather than from filenames or from knowing which
+//! A run records what it did in `manifest.tbl`, and `parse` learns the shape
+//! of a pipeline from that rather than from filenames or from knowing which
 //! pipeline it is looking at. What makes a row a column of the scores table is
 //! a `name` field on it -- see [`Manifest::runs`].
 //!
@@ -22,7 +22,7 @@ pub const TOOL: &str = "tool";
 /// Which target file they were produced against.
 pub const SHARD: &str = "shard";
 /// What part of the pipeline a command belongs to, for the ones that aren't
-/// runs: seeding and hmmer truth.
+/// runs -- seeding, which produces pairs rather than scores.
 pub const STAGE: &str = "stage";
 
 /// Everything a pipeline produces lands in one `results/` directory, named
@@ -32,15 +32,14 @@ pub const STAGE: &str = "stage";
 /// the field names rather than at either end. A pipeline with no shard axis
 /// leaves the shard out.
 ///
-/// `hmmer` and `seeds` are reserved stems: a run named either would land on
-/// top of the truth tables or the seed list.
+/// `seeds` is a reserved stem: a run named it would land on the seed list.
 pub fn table_path(results: &Path, name: &str, shard: &str) -> PathBuf {
     results.join(stem(name, shard, Some("tbl")))
 }
 
-/// hmmer's truth for one shard. `ext` is `tbl` or `domtbl`.
-pub fn truth_path(results: &Path, shard: &str, ext: &str) -> PathBuf {
-    results.join(stem("hmmer", shard, Some(ext)))
+/// The per-domain table an hmmer run writes alongside its hits.
+pub fn dom_path(results: &Path, name: &str, shard: &str) -> PathBuf {
+    results.join(stem(name, shard, Some("domtbl")))
 }
 
 /// The (query, target) pairs seeding found for one shard. No extension: it is
@@ -63,7 +62,10 @@ fn stem(name: &str, shard: &str, ext: Option<&str>) -> String {
 const WALL: &str = "wall(s)";
 const EXIT: &str = "exit";
 
-/// Everything one command line of `runs.tbl` had to say.
+/// What a batched step puts in the step cell of each of its commands.
+const BATCH: &str = "||";
+
+/// Everything one command line of `manifest.tbl` had to say.
 pub struct Row {
     cells: BTreeMap<String, String>,
 }
@@ -87,6 +89,18 @@ impl Row {
     /// never ran, which is not success.
     pub fn ok(&self) -> bool {
         self.get(EXIT) == Some("0")
+    }
+
+    /// Whether this command ran alongside the others in its step rather than
+    /// after them.
+    ///
+    /// A batched step marks its commands with `||` in the step cell. Their
+    /// wall clocks overlap, so the longest of them is what the step took --
+    /// adding them up would report the work rather than the time. A step
+    /// holding one command collapses to a single row and reads as serial,
+    /// which for one command comes to the same thing either way.
+    pub fn batched(&self) -> bool {
+        self.cells.get("step").map(String::as_str) == Some(BATCH)
     }
 
     /// Everything this row set that isn't part of the contract: the parameters
@@ -190,7 +204,7 @@ impl Manifest {
             .filter(|row| row.get(NAME).is_some() && !row.ok())
     }
 
-    /// Command rows belonging to one stage of the pipeline: `seed` or `truth`.
+    /// Command rows belonging to one stage of the pipeline, such as `seed`.
     pub fn stage(&self, stage: &str) -> impl Iterator<Item = &Row> {
         self.rows
             .iter()

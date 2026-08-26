@@ -6,7 +6,7 @@
 //! split by whether a pair was seeded, a sensitivity surface is a count per
 //! column, a recall number is the same count per tool.
 //!
-//! What the columns are is read out of `runs.tbl` rather than known here, so
+//! What the columns are is read out of `manifest.tbl` rather than known here, so
 //! nothing in this file can tell which pipeline it is reading.
 //!
 //! A run that never reported a pair holds `-` rather than a zero or a NaN.
@@ -43,7 +43,7 @@ impl Tool {
             "nail" => Ok(Tool::Nail),
             "mmseqs" => Ok(Tool::Mmseqs),
             "hmmer" => Ok(Tool::Hmmer),
-            other => bail!("unknown tool {other:?} in runs.tbl"),
+            other => bail!("unknown tool {other:?} in manifest.tbl"),
         }
     }
 
@@ -102,8 +102,14 @@ pub struct Run {
     /// Whatever else the commands recorded — the settings that tell this run
     /// apart from the others of the same tool.
     pub params: BTreeMap<String, String>,
-    /// The shards it ran against, in manifest order. Empty string for a
-    /// pipeline that never named one.
+}
+
+/// A run and the shards it covered, which is what `collect` needs and what the
+/// written table has no use for: the shards are a property of the pipeline,
+/// listed once in its `#= target` lines rather than once per column.
+struct Column {
+    run: Run,
+    /// In manifest order. Empty string for a pipeline that never named one.
     shards: Vec<String>,
 }
 
@@ -117,14 +123,12 @@ pub struct Row {
     pub cut_mmseqs: Option<f32>,
     /// Whether seeding found this pair. `None` when the pipeline kept no seeds.
     pub seeded: Option<bool>,
-    /// One per column, in the same order.
+    /// One per run, in the same order.
     pub scores: Vec<Option<f32>>,
-    /// hmmer's score for the whole sequence, `None` if hmmer never reported
-    /// the pair. This is the one an analysis compares against; a domain score
-    /// is a piece of it.
-    pub hmmer_seq: Option<f32>,
-    /// Every domain score hmmer gave the pair, best first.
-    pub hmmer_dom: Vec<f32>,
+    /// One per run, in the same order: the domain scores behind that run's
+    /// score, best first. Empty for every run but hmmer's, which is the only
+    /// tool that breaks a hit down.
+    pub domains: Vec<Vec<f32>>,
 }
 
 #[derive(Debug)]
@@ -132,10 +136,8 @@ pub struct Scores {
     pub query: Size,
     /// One per shard the runs covered, in manifest order.
     pub targets: Vec<(String, Size)>,
-    /// Per shard, what seeding and hmmer cost. Empty when a pipeline had no
-    /// such stage.
+    /// Per shard, what seeding cost. Empty when a pipeline never seeded.
     pub seed_wall_s: Vec<(String, f64)>,
-    pub truth_wall_s: Vec<(String, f64)>,
     pub runs: Vec<Run>,
     pub rows: Vec<Row>,
 }
@@ -157,7 +159,7 @@ impl Scores {
         let cutoffs = cutoffs(cutoffs_path, c)
             .with_context(|| format!("failed to read {}", cutoffs_path.display()))?;
 
-        let manifest = Manifest::read(&dir.join("runs.tbl"))?;
+        let manifest = Manifest::read(&dir.join("manifest.tbl"))?;
 
         let failed: Vec<&str> = manifest
             .failed()
@@ -171,34 +173,31 @@ impl Scores {
             );
         }
 
-        let runs = runs(&manifest)?;
+        let columns = runs(&manifest)?;
         ensure!(
-            !runs.is_empty(),
-            "no finished runs in {}/runs.tbl",
+            !columns.is_empty(),
+            "no finished runs in {}/manifest.tbl",
             dir.display()
         );
 
-        // hmmer's parts run at the same time, so the longest of them is about
-        // what the shard's truth cost; seeding is one command per shard
-        let truth_wall_s = walls(&manifest, "truth", f64::max);
-        let seed_wall_s = walls(&manifest, "seed", f64::max);
+        let seed_wall_s = walls(&manifest, "seed");
 
-        let shards = shards(&runs);
+        let shards = shards(&columns);
 
         let results = dir.join("results");
-
-        let truth = truth(&results, &shards)?;
         let seeded = seeds(&results, &shards)?;
 
         // one pass per column, keeping each column's scores while the union of
         // pairs grows
-        let mut per_run: Vec<HashMap<Pair, f32>> = Vec::with_capacity(runs.len());
-        let mut pairs: HashSet<Pair> = truth.keys().cloned().collect();
+        let mut per_run: Vec<HashMap<Pair, f32>> = Vec::with_capacity(columns.len());
+        let mut per_run_dom: Vec<HashMap<Pair, Vec<f32>>> = Vec::with_capacity(columns.len());
+        let mut pairs: HashSet<Pair> = HashSet::new();
 
-        for run in &runs {
+        for Column { run, shards } in &columns {
             let mut scores: HashMap<Pair, f32> = HashMap::new();
+            let mut domains: HashMap<Pair, Vec<f32>> = HashMap::new();
 
-            for shard in &run.shards {
+            for shard in shards {
                 let path = manifest::table_path(&results, &run.name, shard);
                 for (pair, score) in run.tool.read(&path)? {
                     scores
@@ -206,17 +205,33 @@ impl Scores {
                         .and_modify(|s| *s = s.max(score))
                         .or_insert(score);
                 }
+
+                if run.tool == Tool::Hmmer {
+                    let path = manifest::dom_path(&results, &run.name, shard);
+                    domains.extend(read_domains(&path)?);
+                }
             }
 
-            // a pair earns a row by clearing the cutoff somewhere, so which
-            // pairs are in the table is settled before any of them is built
+            // which pairs are in the table is settled before any of them is
+            // built: a pair earns a row by clearing a cutoff somewhere, or by
+            // hmmer having reported it at all.
+            //
+            // hmmer's whole reported set is kept, cutoff or not, because it is
+            // what the other columns are measured against -- a pair it found
+            // weakly is still a pair they can be asked about. That is a rule
+            // about the comparison, not about how hmmer is run: it is an
+            // ordinary column everywhere else in this file.
             for (pair, score) in &scores {
-                if cutoffs.get(run.tool, &pair.0).is_some_and(|c| *score >= c) {
+                let kept = run.tool == Tool::Hmmer
+                    || cutoffs.get(run.tool, &pair.0).is_some_and(|c| *score >= c);
+
+                if kept {
                     pairs.insert(pair.clone());
                 }
             }
 
             per_run.push(scores);
+            per_run_dom.push(domains);
         }
 
         // sorted so the file is stable across runs and diffs mean something
@@ -227,15 +242,16 @@ impl Scores {
             .into_iter()
             .map(|(query, target)| {
                 let key = (query.clone(), target.clone());
-                let found = truth.get(&key);
 
                 Row {
                     cut_nail: cutoffs.nail.get(&query).copied(),
                     cut_mmseqs: cutoffs.mmseqs.get(&query).copied(),
                     seeded: seeded.as_ref().map(|set| set.contains(&key)),
                     scores: per_run.iter().map(|r| r.get(&key).copied()).collect(),
-                    hmmer_seq: found.map(|(seq, _)| *seq),
-                    hmmer_dom: found.map(|(_, dom)| dom.clone()).unwrap_or_default(),
+                    domains: per_run_dom
+                        .iter()
+                        .map(|d| d.get(&key).cloned().unwrap_or_default())
+                        .collect(),
                     query,
                     target,
                 }
@@ -254,8 +270,7 @@ impl Scores {
             query: hmm_size(inputs.query_hmm)?,
             targets,
             seed_wall_s,
-            truth_wall_s,
-            runs,
+            runs: columns.into_iter().map(|c| c.run).collect(),
             rows,
         })
     }
@@ -291,9 +306,6 @@ impl Scores {
         for (shard, wall) in &self.seed_wall_s {
             writeln!(out, "#= seed {} {wall:.4}", label(shard))?;
         }
-        for (shard, wall) in &self.truth_wall_s {
-            writeln!(out, "#= truth {} {wall:.4}", label(shard))?;
-        }
 
         for run in &self.runs {
             let params: String = run
@@ -319,8 +331,13 @@ impl Scores {
             headers.push("seeded".to_string());
         }
         headers.extend(self.runs.iter().map(|r| r.name.clone()));
-        headers.push("hmmer_seq".to_string());
-        headers.push("hmmer_dom".to_string());
+
+        // a domain breakdown is as wide as the pair has domains, so those
+        // columns go on the end where a ragged one costs nothing
+        let dom: Vec<usize> = (0..self.runs.len())
+            .filter(|&i| self.runs[i].tool == Tool::Hmmer)
+            .collect();
+        headers.extend(dom.iter().map(|&i| format!("{}_dom", self.runs[i].name)));
 
         let cells: Vec<Vec<String>> = self
             .rows
@@ -340,8 +357,7 @@ impl Scores {
                     });
                 }
                 row.extend(r.scores.iter().map(|s| score(*s)));
-                row.push(score(r.hmmer_seq));
-                row.push(domains(&r.hmmer_dom));
+                row.extend(dom.iter().map(|&i| domains(&r.domains[i])));
                 row
             })
             .collect();
@@ -360,7 +376,7 @@ impl Scores {
             .collect();
 
         // the domain list is as wide as the pair has domains, so like argv in
-        // runs.tbl the last column is written as it comes and never padded
+        // manifest.tbl the last column is written as it comes and never padded
         let last = headers.len() - 1;
 
         write!(out, "#")?;
@@ -399,6 +415,178 @@ impl Scores {
         out.flush()?;
         Ok(())
     }
+
+    /// Reads back what [`Scores::write`] wrote.
+    ///
+    /// The `#= run` lines give the columns and the `#` header says whether a
+    /// `seeded` column sits in front of them, so a row's fields are placed by
+    /// what the file declares rather than by a count agreed on in advance.
+    pub fn read(path: &Path) -> anyhow::Result<Scores> {
+        let file =
+            File::open(path).with_context(|| format!("failed to open {}", path.display()))?;
+
+        let mut query: Option<Size> = None;
+        let mut targets: Vec<(String, Size)> = Vec::new();
+        let mut seed_wall_s: Vec<(String, f64)> = Vec::new();
+        let mut runs: Vec<Run> = Vec::new();
+        let mut seeded_col = false;
+        let mut rows: Vec<Row> = Vec::new();
+
+        for line in BufReader::new(file).lines() {
+            let line = line?;
+
+            if let Some(rest) = line.strip_prefix("#=") {
+                let mut it = rest.split_whitespace();
+                let Some(key) = it.next() else { continue };
+                let f: Vec<&str> = it.collect();
+
+                match key {
+                    "query" => query = Some(size(&f)?),
+                    "target" => targets.push((shard_of(&f)?, size(&f[1..])?)),
+                    "seed" => {
+                        let wall = f.get(1).context("a `#= seed` line wants a wall time")?;
+                        seed_wall_s.push((shard_of(&f)?, wall.parse()?));
+                    }
+                    "run" => runs.push(run(&f)?),
+                    other => bail!("unknown `#= {other}` line in {}", path.display()),
+                }
+                continue;
+            }
+
+            if let Some(rest) = line.strip_prefix('#') {
+                // the header names the columns; the rule under it is dashes
+                let rest = rest.trim_start();
+                if rest.starts_with("query ") {
+                    seeded_col = rest.split_whitespace().any(|h| h == "seeded");
+                }
+                continue;
+            }
+
+            if line.trim().is_empty() {
+                continue;
+            }
+
+            // query, target, both cutoffs, maybe seeded, one per run, then one
+            // domain list per hmmer run. every cell is a single token, the
+            // comma-joined domain lists included.
+            let f: Vec<&str> = line.split_whitespace().collect();
+            let doms = runs.iter().filter(|r| r.tool == Tool::Hmmer).count();
+            let want = 4 + usize::from(seeded_col) + runs.len() + doms;
+            ensure!(
+                f.len() == want,
+                "a row of {} has {} fields, expected {want}",
+                path.display(),
+                f.len()
+            );
+
+            let at = 4 + usize::from(seeded_col);
+            let end = at + runs.len();
+
+            let mut dom = f[end..].iter();
+            let domains = runs
+                .iter()
+                .map(|r| match r.tool {
+                    Tool::Hmmer => parse_domains(dom.next().expect("counted above")),
+                    _ => Ok(Vec::new()),
+                })
+                .collect::<anyhow::Result<Vec<_>>>()?;
+
+            rows.push(Row {
+                query: f[0].to_string(),
+                target: f[1].to_string(),
+                cut_nail: parse_score(f[2])?,
+                cut_mmseqs: parse_score(f[3])?,
+                seeded: match seeded_col {
+                    true => Some(f[4] == "y"),
+                    false => None,
+                },
+                scores: f[at..end]
+                    .iter()
+                    .map(|s| parse_score(s))
+                    .collect::<anyhow::Result<Vec<_>>>()?,
+                domains,
+            });
+        }
+
+        ensure!(!runs.is_empty(), "no `#= run` lines in {}", path.display());
+
+        Ok(Scores {
+            query: query.context("no `#= query` line")?,
+            targets,
+            seed_wall_s,
+            runs,
+            rows,
+        })
+    }
+
+    /// Which column is hmmer's, which is what everything else is measured
+    /// against.
+    ///
+    /// A pipeline runs one, so more than one is a table the analyses have no
+    /// answer for rather than a choice to make quietly.
+    pub fn hmmer(&self) -> anyhow::Result<usize> {
+        let mut it = self
+            .runs
+            .iter()
+            .enumerate()
+            .filter(|(_, r)| r.tool == Tool::Hmmer);
+
+        let (i, _) = it.next().context("no hmmer run to measure against")?;
+        ensure!(it.next().is_none(), "more than one hmmer run");
+
+        Ok(i)
+    }
+
+    /// What everything is a fraction of: the pairs hmmer found and scored over
+    /// their family's cutoff.
+    pub fn denominator(&self, hmmer: usize) -> usize {
+        self.rows
+            .iter()
+            .filter(|r| r.clears(Tool::Hmmer, r.scores[hmmer]))
+            .count()
+    }
+}
+
+impl Row {
+    /// The threshold a run of `tool` is held to on this row's family.
+    pub fn cutoff(&self, tool: Tool) -> Option<f32> {
+        match tool {
+            // hmmer takes nail's, as it does in the calibration
+            Tool::Nail | Tool::Hmmer => self.cut_nail,
+            Tool::Mmseqs => self.cut_mmseqs,
+        }
+    }
+
+    /// Whether a score of that tool's counts as a hit here. A pair the tool
+    /// never reported does not, and neither does one whose family it has no
+    /// threshold for -- an unmeasurable pair is not a found one.
+    pub fn clears(&self, tool: Tool, score: Option<f32>) -> bool {
+        match (self.cutoff(tool), score) {
+            (Some(cutoff), Some(score)) => score >= cutoff,
+            _ => false,
+        }
+    }
+
+    /// How many of an hmmer column's domains carry enough of the hit to count
+    /// as their own.
+    ///
+    /// The measure is against the best domain rather than an absolute score:
+    /// what is being asked is whether the hit is one region of the sequence or
+    /// several, and a weak family's several are still several.
+    pub fn domain_count(&self, run: usize) -> usize {
+        /// A tenth of the best domain, which is mgnify's threshold.
+        const SIGNIFICANT: f32 = 0.1;
+
+        let domains = &self.domains[run];
+        let Some(&best) = domains.first() else {
+            return 0;
+        };
+
+        match best > 0.0 {
+            true => domains.iter().filter(|d| *d / best >= SIGNIFICANT).count(),
+            false => domains.len(),
+        }
+    }
 }
 
 // ------------------------------------------------------------------- fields
@@ -422,6 +610,13 @@ fn score(s: Option<f32>) -> String {
     }
 }
 
+fn parse_score(s: &str) -> anyhow::Result<Option<f32>> {
+    match s {
+        "-" => Ok(None),
+        s => Ok(Some(s.parse().with_context(|| format!("bad score {s:?}"))?)),
+    }
+}
+
 /// Every domain score on one line, comma-joined so the whole list is a single
 /// whitespace token however long it gets.
 fn domains(scores: &[f32]) -> String {
@@ -435,55 +630,147 @@ fn domains(scores: &[f32]) -> String {
     }
 }
 
-// ----------------------------------------------------------------- runs.tbl
+fn parse_domains(s: &str) -> anyhow::Result<Vec<f32>> {
+    match s {
+        "-" => Ok(Vec::new()),
+        s => s
+            .split(',')
+            .map(|x| x.parse().with_context(|| format!("bad domain score {x:?}")))
+            .collect(),
+    }
+}
+
+/// The shard a `#= target` or `#= seed` line is about, back from its label.
+fn shard_of(fields: &[&str]) -> anyhow::Result<String> {
+    match *fields.first().context("a metadata line names no shard")? {
+        "-" => Ok(String::new()),
+        shard => Ok(shard.to_string()),
+    }
+}
+
+fn size(fields: &[&str]) -> anyhow::Result<Size> {
+    let [count, residues, bytes] = fields else {
+        bail!("a size wants a count, a residue count and a byte count");
+    };
+
+    Ok(Size {
+        count: count.parse()?,
+        residues: residues.parse()?,
+        bytes: bytes.parse()?,
+    })
+}
+
+/// One `#= run` line: a name, a tool, a wall time, then whatever settings told
+/// this run apart from the others.
+fn run(fields: &[&str]) -> anyhow::Result<Run> {
+    let [name, tool, wall, params @ ..] = fields else {
+        bail!("a `#= run` line wants a name, a tool and a wall time");
+    };
+
+    Ok(Run {
+        name: name.to_string(),
+        tool: Tool::parse(tool)?,
+        wall_s: wall.parse()?,
+        params: params
+            .iter()
+            .filter_map(|p| p.split_once('='))
+            .map(|(k, v)| (k.to_string(), v.to_string()))
+            .collect(),
+    })
+}
+
+// ----------------------------------------------------------------- manifest.tbl
 
 /// The columns a pipeline ran, in the order it declared them.
 ///
 /// A run is one `name`; a name that turns up against several shards is one
 /// column covering all of them, since what changed between those commands is
 /// the target rather than the parameterization.
-fn runs(manifest: &Manifest) -> anyhow::Result<Vec<Run>> {
-    let mut out: Vec<Run> = Vec::new();
+fn runs(manifest: &Manifest) -> anyhow::Result<Vec<Column>> {
+    let mut out: Vec<Column> = Vec::new();
     let mut at: HashMap<String, usize> = HashMap::new();
+    let mut walls: Vec<Wall> = Vec::new();
 
     for row in manifest.runs() {
         let name = row.get(manifest::NAME).expect("runs() filters on name");
         let shard = row.get(manifest::SHARD).unwrap_or_default().to_string();
-        let wall = row.wall_s().unwrap_or(0.0);
 
-        match at.get(name) {
-            Some(&i) => {
-                let run: &mut Run = &mut out[i];
-                run.wall_s += wall;
-                if !run.shards.contains(&shard) {
-                    run.shards.push(shard);
-                }
-            }
+        let i = match at.get(name) {
+            Some(&i) => i,
             None => {
                 let tool = row
                     .get(manifest::TOOL)
                     .with_context(|| format!("run {name:?} has no tool"))?;
 
                 at.insert(name.to_string(), out.len());
-                out.push(Run {
-                    name: name.to_string(),
-                    tool: Tool::parse(tool)?,
-                    wall_s: wall,
-                    params: row.params(),
-                    shards: vec![shard],
+                walls.push(Wall::default());
+                out.push(Column {
+                    run: Run {
+                        name: name.to_string(),
+                        tool: Tool::parse(tool)?,
+                        wall_s: 0.0,
+                        params: row.params(),
+                    },
+                    shards: Vec::new(),
                 });
+                out.len() - 1
             }
+        };
+
+        if !out[i].shards.contains(&shard) {
+            out[i].shards.push(shard.clone());
         }
+        walls[i].add(&shard, row);
+    }
+
+    for (column, wall) in out.iter_mut().zip(&walls) {
+        column.run.wall_s = wall.total();
     }
 
     Ok(out)
 }
 
+/// What a set of commands cost, kept per shard so overlapping work isn't
+/// counted twice.
+///
+/// Within a shard, whatever ran in a batched step overlapped and contributes
+/// the longest of itself; everything else ran one after another and adds up.
+/// Shards run in sequence, so their totals add.
+#[derive(Default)]
+struct Wall {
+    /// Per shard: what ran consecutively, and the longest of what overlapped.
+    by_shard: BTreeMap<String, (f64, f64)>,
+}
+
+impl Wall {
+    fn add(&mut self, shard: &str, row: &manifest::Row) {
+        let wall = row.wall_s().unwrap_or(0.0);
+        let at = self.by_shard.entry(shard.to_string()).or_default();
+
+        match row.batched() {
+            true => at.1 = at.1.max(wall),
+            false => at.0 += wall,
+        }
+    }
+
+    fn total(&self) -> f64 {
+        self.by_shard.values().map(|(s, b)| s + b).sum()
+    }
+
+    /// The same totals, shard by shard, in shard order.
+    fn per_shard(&self) -> Vec<(String, f64)> {
+        self.by_shard
+            .iter()
+            .map(|(shard, (s, b))| (shard.clone(), s + b))
+            .collect()
+    }
+}
+
 /// Every shard any run covered, in the order the runs named them.
-fn shards(runs: &[Run]) -> Vec<String> {
+fn shards(columns: &[Column]) -> Vec<String> {
     let mut out: Vec<String> = Vec::new();
-    for run in runs {
-        for shard in &run.shards {
+    for column in columns {
+        for shard in &column.shards {
             if !out.contains(shard) {
                 out.push(shard.clone());
             }
@@ -492,22 +779,16 @@ fn shards(runs: &[Run]) -> Vec<String> {
     out
 }
 
-/// What one stage cost per shard, folded across the commands that shared a
-/// shard — hmmer's parts run together, so `max` is what that step took.
-fn walls(manifest: &Manifest, stage: &str, fold: fn(f64, f64) -> f64) -> Vec<(String, f64)> {
-    let mut out: Vec<(String, f64)> = Vec::new();
+/// What one stage of the pipeline cost, per shard.
+fn walls(manifest: &Manifest, stage: &str) -> Vec<(String, f64)> {
+    let mut wall = Wall::default();
 
     for row in manifest.stage(stage) {
-        let shard = row.get(manifest::SHARD).unwrap_or_default().to_string();
-        let wall = row.wall_s().unwrap_or(0.0);
-
-        match out.iter_mut().find(|(s, _)| *s == shard) {
-            Some((_, at)) => *at = fold(*at, wall),
-            None => out.push((shard, wall)),
-        }
+        let shard = row.get(manifest::SHARD).unwrap_or_default();
+        wall.add(shard, row);
     }
 
-    out
+    wall.per_shard()
 }
 
 fn shard_path(targets: &Path, shard: &str) -> std::path::PathBuf {
@@ -518,42 +799,28 @@ fn shard_path(targets: &Path, shard: &str) -> std::path::PathBuf {
     }
 }
 
-// -------------------------------------------------------------------- truth
+// ------------------------------------------------------------------ domains
 
-/// What hmmer scored every pair: the whole-sequence score, and every domain
-/// score behind it.
+/// The domain scores behind each of one hmmer run's hits, best first.
 ///
-/// Both come off the domain table, which carries the sequence score on every
-/// one of a pair's rows. The sequence table can still name a pair the domain
-/// table doesn't, and such a pair belongs in the union with no score beside it.
-fn truth(results: &Path, shards: &[String]) -> anyhow::Result<HashMap<Pair, (f32, Vec<f32>)>> {
-    let mut out: HashMap<Pair, (f32, Vec<f32>)> = HashMap::new();
+/// Only hmmer breaks a hit down this way, so this is the one thing a run of it
+/// carries that a run of anything else does not. A pair in the hit table but
+/// not here simply has no breakdown.
+fn read_domains(path: &Path) -> anyhow::Result<HashMap<Pair, Vec<f32>>> {
+    let dom = HmmerDomainTable::from_path(path, |_| true)
+        .with_context(|| format!("failed to read {}", path.display()))?;
 
-    for shard in shards {
-        let tbl = manifest::truth_path(results, shard, "tbl");
-        let domtbl = manifest::truth_path(results, shard, "domtbl");
-
-        let dom = HmmerDomainTable::from_path(&domtbl, |_| true)
-            .with_context(|| format!("failed to read {}", domtbl.display()))?;
-
-        for (pair, hit) in dom.hits {
+    Ok(dom
+        .hits
+        .into_iter()
+        .map(|(pair, hit)| {
             let mut domains: Vec<f32> = hit.domains.iter().map(|d| d.score).collect();
-            // best first, so the one a cutoff is held against is in front and
-            // the rest read as the tail behind it
+            // best first, so the one a threshold would see is in front and the
+            // rest read as the tail behind it
             domains.sort_by(|x, y| y.total_cmp(x));
-            out.insert(pair, (hit.score, domains));
-        }
-
-        let seq = HitTable::from_path::<_, HmmerTable>(&tbl)
-            .with_context(|| format!("failed to read {}", tbl.display()))?;
-
-        for hit in seq.hits {
-            out.entry((hit.query, hit.target))
-                .or_insert((hit.score, Vec::new()));
-        }
-    }
-
-    Ok(out)
+            (pair, domains)
+        })
+        .collect())
 }
 
 /// The (query, target) pairs `--seeds-out` wrote: nail's own prf/seq column

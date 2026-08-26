@@ -13,13 +13,11 @@
 # matters, or this also swallows the benchmarks/ source tree.
 **/benchmark-*/
 **/benchmark/
-# mgy keeps its inputs and each pipeline's output at the crate root rather than
+# mgy keeps its inputs and its pipelines' output at the crate root rather than
 # under a benchmark directory, so the generated ones are named one by one
 /benchmarks/mgy/queries/
 /benchmarks/mgy/targets/
-/benchmarks/mgy/recall/
-/benchmarks/mgy/cloud-search/
-/benchmarks/mgy/hit-loss/
+/benchmarks/mgy/runs/
 /benchmarks/mgy/cutoffs/
 **/figures*/
 **/profmark/

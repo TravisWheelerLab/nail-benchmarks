@@ -36,10 +36,10 @@ use std::fs::File;
 use std::io::{BufWriter, Write};
 use std::path::{Path, PathBuf};
 use std::process::Command;
-use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Mutex;
+use std::sync::atomic::{AtomicUsize, Ordering};
 
-use anyhow::{bail, Context};
+use anyhow::{Context, bail};
 use clap::{Parser, Subcommand};
 use rayon::iter::{IntoParallelRefIterator, ParallelIterator};
 
@@ -826,12 +826,8 @@ fn learn(args: LearnArgs) -> anyhow::Result<()> {
         families
             .par_iter()
             .try_for_each(|family| -> anyhow::Result<()> {
-                let nail_scores = decoy_scores::<NailTable>(
-                    &results,
-                    NAIL_DECOY,
-                    family,
-                    args.reverse_e_cutoff,
-                )?;
+                let nail_scores =
+                    decoy_scores::<NailTable>(&results, NAIL_DECOY, family, args.reverse_e_cutoff)?;
                 let mmseqs_scores = decoy_scores::<BlastTable>(
                     &results,
                     MMSEQS_DECOY,
