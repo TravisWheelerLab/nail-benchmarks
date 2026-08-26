@@ -30,8 +30,7 @@ const HMMER_CPU: usize = 2;
 // every tool reports down to here, so they can be compared
 const EVALUE: &str = "10";
 
-// the seeding settings mgnify's bench.toml uses. matching them is what keeps
-// mgnify's cutoffs.txt applicable to these results
+// the seeding settings this benchmark searches with
 const MMSEQS_S: &str = "12.0";
 const SEED_MODE: &str = "prog";
 

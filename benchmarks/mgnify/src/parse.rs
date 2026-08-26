@@ -15,6 +15,145 @@ use glob::glob;
 use rayon::iter::{IntoParallelRefIterator, ParallelIterator};
 use regex::Regex;
 
+const RUNS_TBL: &str = "runs.tbl";
+
+/// A `pipeline::Table` runs.tbl read back as an index: which run names exist
+/// and which shards each one covered, so `recall` never has to infer either
+/// from filenames.
+struct Runs {
+    dir: PathBuf,
+    rows: Vec<(String, String, String, bool)>, // name, tool, search, exit == 0
+}
+
+impl Runs {
+    fn load(table: &Path, results_dir: &Path) -> anyhow::Result<Self> {
+        let text = std::fs::read_to_string(table)
+            .with_context(|| format!("failed to read {}; has this benchmark been run?", table.display()))?;
+
+        let mut columns: Vec<String> = Vec::new();
+        let mut rows = Vec::new();
+
+        for line in text.lines() {
+            if let Some(rest) = line.strip_prefix('#') {
+                let rest = rest.trim_start();
+                if columns.is_empty() && !rest.starts_with('-') {
+                    columns = rest.split_whitespace().map(str::to_string).collect();
+                }
+                continue;
+            }
+
+            if line.trim().is_empty() {
+                continue;
+            }
+
+            let idx = |key: &str| columns.iter().position(|c| c == key);
+            let (Some(name_i), Some(tool_i), Some(search_i), Some(exit_i)) =
+                (idx("name"), idx("tool"), idx("search"), idx("exit"))
+            else {
+                continue;
+            };
+
+            let f: Vec<&str> = line.split_whitespace().collect();
+            let (Some(&name), Some(&tool), Some(&search), Some(&exit)) =
+                (f.get(name_i), f.get(tool_i), f.get(search_i), f.get(exit_i))
+            else {
+                continue;
+            };
+
+            if name == "-" {
+                continue;
+            }
+
+            rows.push((
+                name.to_string(),
+                tool.to_string(),
+                if search == "-" { String::new() } else { search.to_string() },
+                exit == "0",
+            ));
+        }
+
+        anyhow::ensure!(!rows.is_empty(), "no runs recorded in {}", table.display());
+
+        Ok(Runs {
+            dir: results_dir.to_path_buf(),
+            rows,
+        })
+    }
+
+    fn names(&self) -> Vec<&str> {
+        let mut seen = std::collections::BTreeSet::new();
+        let mut out = Vec::new();
+        for (name, ..) in &self.rows {
+            if seen.insert(name.as_str()) {
+                out.push(name.as_str());
+            }
+        }
+        out
+    }
+
+    fn only_for_tool(&self, tool: &str) -> anyhow::Result<&str> {
+        let mut seen = std::collections::BTreeSet::new();
+        let names: Vec<&str> = self
+            .rows
+            .iter()
+            .filter(|(_, t, ..)| t == tool)
+            .map(|(n, ..)| n.as_str())
+            .filter(|n| seen.insert(*n))
+            .collect();
+
+        match names.len() {
+            0 => anyhow::bail!("no runs for tool {tool:?} in {}", self.dir.display()),
+            1 => Ok(names[0]),
+            _ => anyhow::bail!(
+                "{} runs for tool {tool:?}; pass one of: {}",
+                names.len(),
+                names.join(", ")
+            ),
+        }
+    }
+
+    fn searches(&self, name: &str) -> Vec<&str> {
+        self.rows
+            .iter()
+            .filter(|(n, ..)| n == name)
+            .map(|(_, _, s, _)| s.as_str())
+            .collect()
+    }
+
+    fn shared_searches(&self, names: &[&str]) -> Vec<String> {
+        let mut common: Option<std::collections::BTreeSet<String>> = None;
+
+        for name in names {
+            let set: std::collections::BTreeSet<String> = self
+                .rows
+                .iter()
+                .filter(|(n, _, _, ok)| n == name && *ok)
+                .map(|(_, _, s, _)| s.clone())
+                .collect();
+
+            common = Some(match common {
+                None => set,
+                Some(prev) => prev.intersection(&set).cloned().collect(),
+            });
+        }
+
+        let mut out: Vec<String> = common.unwrap_or_default().into_iter().collect();
+        out.sort_by(|a, b| match (a.parse::<u64>(), b.parse::<u64>()) {
+            (Ok(x), Ok(y)) => x.cmp(&y),
+            _ => a.cmp(b),
+        });
+        out
+    }
+
+    fn table_path(&self, name: &str, search: &str) -> PathBuf {
+        if search.is_empty() {
+            self.dir.join(format!("{name}.tbl"))
+        } else {
+            self.dir.join(format!("{name}.{search}.tbl"))
+        }
+    }
+}
+
 mod util {
     use std::{
         collections::HashMap,
@@ -620,9 +759,7 @@ fn recall(args: RecallArgs) -> anyhow::Result<()> {
     // a benchmark owns its results, runs table, and analysis output
     let bench = crate::util::dir().join(&args.name);
     let results_dir = args.results.unwrap_or_else(|| bench.join("results"));
-    let runs_path = args
-        .runs
-        .unwrap_or_else(|| bench.join(run::table::FILE_NAME));
+    let runs_path = args.runs.unwrap_or_else(|| bench.join(RUNS_TBL));
     let out_path = args.out_path.unwrap_or_else(|| bench.join("analysis"));
 
     util::set_threads(args.num_threads)?;
@@ -1150,7 +1287,7 @@ fn recall(args: RecallArgs) -> anyhow::Result<()> {
     // names exist and which shards each covered, so nothing has to be inferred
     // from filenames. It sits beside benchmark/ rather than inside results/,
     // so the two paths are given separately.
-    let runs = run::Runs::load(&runs_path, &results_dir)?;
+    let runs = Runs::load(&runs_path, &results_dir)?;
 
     let pick = |explicit: Option<String>, tool: &str| -> anyhow::Result<String> {
         match explicit {

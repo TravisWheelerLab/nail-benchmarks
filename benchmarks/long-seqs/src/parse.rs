@@ -26,8 +26,8 @@ pub struct CellsArgs {
     #[arg(short, long)]
     out: Option<PathBuf>,
 
-    /// Name of the run to read, matching bench.toml.
-    #[arg(long, default_value = "nail.seq")]
+    /// Name of the run to read.
+    #[arg(long, default_value = crate::RUN_NAME)]
     run: String,
 
 }
@@ -49,12 +49,8 @@ fn cells(args: CellsArgs) -> anyhow::Result<()> {
             .with_context(|| format!("failed to create {}", out_path.display()))?,
     );
 
-    // resolve output paths through the runs table rather than rebuilding the
-    // naming convention here
-    let runs = run::Runs::from_dir(&results)?;
-
     for i in 1..=PAIRS {
-        let tbl = runs.table_path(&args.run, &i.to_string());
+        let tbl = results.join(format!("{}.{i}.tbl", args.run));
         let cell_frac = last_cell_frac(&tbl)
             .with_context(|| format!("failed to read a hit from {}", tbl.display()))?;
 

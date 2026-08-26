@@ -11,7 +11,7 @@ use rand::SeedableRng;
 use bioio::aggregate::AggregateFasta;
 use bioio::{fasta, hmm, stockholm};
 use feisty::Permutation;
-use pipeline::{Cmd, PipelineBuilder, Progress, Step};
+use pipeline::{Closure, Cmd, PipelineBuilder, Progress, Step};
 use tools::{mgnify, mmseqs, pfam_hmm, pfam_sto};
 
 pub const DEFAULT_NAME: &str = "benchmark";
@@ -45,51 +45,98 @@ pub fn main(args: Args) -> anyhow::Result<()> {
     let src_hmm = pfam_hmm()?;
     let src_sto = pfam_sto()?;
 
+    // checked up here: dealing the shards takes long enough that finding out
+    // about a missing mmseqs afterwards would be miserable
     let mmseqs = mmseqs()?;
 
-    let bench = crate::util::dir().join(&args.name);
+    let bench = crate::dir().join(&args.name);
 
     if bench.exists() {
         bail!("benchmark: {} already exists", args.name)
     }
 
-    std::fs::create_dir_all(&bench)?;
-
-    // ---- queries ----
-
     let queries = bench.join("queries");
-    std::fs::create_dir_all(&queries)?;
-
+    let targets = bench.join("targets");
     let query_hmm = queries.join("query.hmm");
     let query_sto = queries.join("query.sto");
-
-    match args.n_fams {
-        None => {
-            println!("copying all of Pfam...");
-            std::fs::copy(&src_hmm, &query_hmm)?;
-            std::fs::copy(&src_sto, &query_sto)?;
-        }
-        Some(n) => {
-            println!("taking {n} Pfam families...");
-            let names = hmm::subset(&src_hmm, n, &query_hmm)?;
-
-            let kept = stockholm::subset_by_id(&src_sto, &names, &query_sto)?;
-            if kept != names.len() {
-                bail!(
-                    "kept {kept} stockholm records but the hmm subset named {}; \
-                     pfam.sto and pfam.hmm may be out of sync",
-                    names.len()
-                );
-            }
-        }
-    }
-
-    println!("building the mmseqs profile db...");
 
     let msa_db = queries.join("msaDB");
     let query_db = queries.join("queryDB");
 
     PipelineBuilder::new()
+        .step(
+            Cmd::new("mkdir")
+                .name("dirs")
+                .flag("-p")
+                .path(&queries)
+                .path(&targets),
+        )
+        .step(
+            Step::from_closures([
+                Closure::new("query", {
+                    let (src_hmm, src_sto) = (src_hmm.clone(), src_sto.clone());
+                    let (query_hmm, query_sto) = (query_hmm.clone(), query_sto.clone());
+                    let n_fams = args.n_fams;
+
+                    move || {
+                        match n_fams {
+                            // all of Pfam, so there is nothing to pick out, and
+                            // a copy beats reading 1.6GB a line at a time
+                            None => {
+                                std::fs::copy(&src_hmm, &query_hmm).with_context(|| {
+                                    format!("failed to copy {}", src_hmm.display())
+                                })?;
+                                std::fs::copy(&src_sto, &query_sto).with_context(|| {
+                                    format!("failed to copy {}", src_sto.display())
+                                })?;
+                            }
+                            Some(n) => {
+                                let names = hmm::subset(&src_hmm, n, &query_hmm)?;
+
+                                let kept = stockholm::subset_by_id(&src_sto, &names, &query_sto)?;
+                                if kept != names.len() {
+                                    bail!(
+                                        "kept {kept} stockholm records but the hmm subset named \
+                                         {}; pfam.sto and pfam.hmm may be out of sync",
+                                        names.len()
+                                    );
+                                }
+                            }
+                        }
+
+                        Ok(())
+                    }
+                }),
+                Closure::new("target", {
+                    let src_dir = src_dir.clone();
+                    let (n_seqs, shards, seed, targets) =
+                        (args.n_seqs, args.shards, args.seed, targets.clone());
+
+                    move || {
+                        let seqs = AggregateFasta::builder()
+                            .dir(&src_dir)
+                            .index(src_dir.join(INDEX_NAME))
+                            .allow_overwrite()
+                            .build()?;
+
+                        let total = seqs.len();
+                        let n_seqs = match n_seqs {
+                            None => total,
+                            Some(n) if n as u64 > total => {
+                                eprintln!(
+                                    "warning: asked for {n} sequences but the collection holds {total}"
+                                );
+                                total
+                            }
+                            Some(n) => n as u64,
+                        };
+
+                        deal(&seqs, n_seqs, shards, seed, &targets)
+                    }
+                }),
+            ])
+            .name("draw"),
+        )
         .step(
             Step::serial([
                 Cmd::new("mkdir")
@@ -118,37 +165,15 @@ pub fn main(args: Args) -> anyhow::Result<()> {
         .build()?
         .run()?;
 
-    // ---- targets ----
-
-    let targets = bench.join("targets");
-
-    let seqs = AggregateFasta::builder()
-        .dir(&src_dir)
-        .index(src_dir.join(INDEX_NAME))
-        .allow_overwrite()
-        .build()?;
-
-    let total = seqs.len();
-    let n_seqs = match args.n_seqs {
-        None => total,
-        Some(n) if n as u64 > total => {
-            eprintln!("warning: asked for {n} sequences but the collection holds {total}");
-            total
-        }
-        Some(n) => n as u64,
-    };
-
-    println!(
-        "dealing {n_seqs} of {total} sequences across {} files into {} shards...",
-        seqs.files().len(),
-        args.shards
-    );
-    deal(&seqs, n_seqs, args.shards, args.seed, &targets)?;
-
     println!("\nbuilt {}", bench.display());
     Ok(())
 }
 
+/// Deals `n_seqs` sequences into `shards` files, `<i>.fa` for `i` in `1..=shards`.
+///
+/// Dealing everything reshuffles the shard order every round rather than
+/// drawing a permutation, since a permutation over the whole collection is a
+/// cost this doesn't need to pay when nothing is actually being left out.
 fn deal(
     seqs: &AggregateFasta,
     n_seqs: u64,

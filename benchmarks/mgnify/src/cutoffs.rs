@@ -21,11 +21,22 @@
 //!
 //! `decoys` sits between them: it reads stage 1's hit tables, un-reverses the
 //! sequences that hit, and splits the query set per family.
+//!
+//! `recruit` is one big search per shard, so it runs through `pipeline` the
+//! same way `mgnify build`/`run` do. `search` is the opposite shape — many
+//! tiny per-family searches, run several at once rather than one at a time —
+//! which `pipeline`'s `Cmd`/`Step` DAG has no batched form for (a family needs
+//! several commands in a fixed order: build its query profile, then search
+//! and convert per direction). It runs as a plain rayon pool instead, the same
+//! way `reverse`, `decoys` and `learn` already do their own parallel work in
+//! this file.
 
 use std::collections::{HashMap, HashSet};
 use std::fs::File;
 use std::io::{BufWriter, Write};
 use std::path::{Path, PathBuf};
+use std::process::Command;
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Mutex;
 
 use anyhow::{bail, Context};
@@ -33,16 +44,34 @@ use clap::{Parser, Subcommand};
 use rayon::iter::{IntoParallelRefIterator, ParallelIterator};
 
 use bioio::tbl::{BlastTable, HitTable, HmmerTable, NailTable};
-use run::{Numa, Options, Paths, Search};
+use pipeline::{Cmd as PCmd, PipelineBuilder, Progress, Step};
+use tools::{hmmsearch, mmseqs, nail};
 
 use crate::build;
 
 /// Name of the calibration directory when none is given.
 pub const DEFAULT_OUT: &str = "cutoffs";
 
-/// Config blocks for the two search stages, both in `cutoffs.toml`.
-const RECRUIT_BLOCK: &str = "recruit";
-const DECOY_BLOCK: &str = "decoy";
+// every stage reports down to here, so scores are comparable
+const EVALUE: &str = "10";
+
+// recruitment only has to nominate candidates, so it runs a cheap sweep
+// rather than the decoy stage's wide-open one
+const RECRUIT_S: &str = "11.0";
+const RECRUIT_MAX_SEQS: &str = "5000";
+
+// wide open, so a decoy's score is its real score rather than one truncated
+// by a prefilter. one thread each: the parallelism is in running many
+// families at once, not in any one search
+const DECOY_S: &str = "12.0";
+const DECOY_MAX_SEQS: &str = "1000000000";
+
+const NAIL_RECRUIT: &str = "nail-recruit";
+const MMSEQS_RECRUIT: &str = "mmseqs-recruit";
+
+const NAIL_DECOY: &str = "nail";
+const MMSEQS_DECOY: &str = "mmseqs";
+const HMMER_DECOY: &str = "hmmer";
 
 // ------------------------------------------------------------------ layout
 
@@ -77,24 +106,34 @@ impl Layout {
     }
 
     /// Forward shards, built by `mgnify build`.
-    fn mgy(&self) -> PathBuf {
-        self.bench.join("mgy")
+    fn targets(&self) -> PathBuf {
+        self.bench.join("targets")
     }
 
     fn query_hmm(&self) -> PathBuf {
-        self.bench.join("query.hmm")
+        self.bench.join("queries/query.hmm")
     }
 
     fn query_sto(&self) -> PathBuf {
-        self.bench.join("query.sto")
+        self.bench.join("queries/query.sto")
     }
 
-    fn mgy_rev(&self) -> PathBuf {
-        self.root.join("mgy-rev")
+    /// The mmseqs profile db `mgnify build` made from the query set. Reused
+    /// here rather than rebuilt, since recruit searches the whole query set.
+    fn query_db(&self) -> PathBuf {
+        self.bench.join("queries/queryDB/queryDB")
+    }
+
+    fn targets_rev(&self) -> PathBuf {
+        self.root.join("targets-rev")
     }
 
     fn recruit(&self) -> PathBuf {
         self.root.join("recruit")
+    }
+
+    fn recruit_results(&self) -> PathBuf {
+        self.recruit().join("results")
     }
 
     fn decoys(&self) -> PathBuf {
@@ -129,11 +168,11 @@ pub enum Cmd {
     /// Reverse the benchmark's shards into the calibration directory.
     Reverse(ReverseArgs),
     /// Sweep every family against the reversed shards to find candidates.
-    Recruit(StageArgs),
+    Recruit(RecruitArgs),
     /// Un-reverse what hit, group it per family, and split the query set.
     Decoys(DecoysArgs),
     /// Search each family against its own decoys, forward and reversed.
-    Search(StageArgs),
+    Search(SearchArgs),
     /// Turn the decoy scores into per-family cutoffs.
     Learn(LearnArgs),
     /// Run every stage in order.
@@ -167,29 +206,15 @@ pub struct ReverseArgs {
     pub threads: usize,
 }
 
-/// Arguments shared by the two stages that actually run search tools.
 #[derive(Parser, Debug)]
-pub struct StageArgs {
+pub struct RecruitArgs {
     #[command(flatten)]
     pub place: Where,
 
-    /// Only run entries whose name matches this glob.
-    #[arg(short, long)]
-    pub filter: Option<String>,
+    #[arg(short, long, default_value_t = 8)]
+    pub threads: usize,
 
-    /// Override the thread count from cutoffs.toml.
-    #[arg(short, long)]
-    pub threads: Option<usize>,
-
-    /// How many searches to keep in flight at once.
-    #[arg(short = 'j', long)]
-    pub jobs: Option<usize>,
-
-    /// Pin to a NUMA node. Absent means no pinning and no numactl call.
-    #[arg(long)]
-    pub numa_node: Option<usize>,
-
-    /// List the expanded runs and exit without executing anything.
+    /// List the commands and exit without executing anything.
     #[arg(long)]
     pub dry_run: bool,
 }
@@ -199,31 +224,25 @@ pub struct DecoysArgs {
     #[command(flatten)]
     pub place: Where,
 
-    /// Run name to read for each tool. Only needed when the recruit config
-    /// swept a tool over several settings.
-    #[arg(long, value_name = "RUN")]
-    pub nail: Option<String>,
-
-    #[arg(long, value_name = "RUN")]
-    pub mmseqs: Option<String>,
-
     #[arg(short, long, default_value_t = 4)]
     pub threads: usize,
+}
+
+#[derive(Parser, Debug)]
+pub struct SearchArgs {
+    #[command(flatten)]
+    pub place: Where,
+
+    /// How many families to search at once. Each search is single-threaded,
+    /// so this is the whole of the parallelism.
+    #[arg(short = 'j', long)]
+    pub jobs: Option<usize>,
 }
 
 #[derive(Parser, Debug)]
 pub struct LearnArgs {
     #[command(flatten)]
     pub place: Where,
-
-    #[arg(long, value_name = "RUN")]
-    pub nail: Option<String>,
-
-    #[arg(long, value_name = "RUN")]
-    pub mmseqs: Option<String>,
-
-    #[arg(long, value_name = "RUN")]
-    pub hmmer: Option<String>,
 
     /// Forward hits at or below this E-value are treated as real, and their
     /// reversed counterparts are excluded from the decoy scores.
@@ -247,9 +266,6 @@ pub struct AllArgs {
 
     #[arg(short = 'j', long)]
     pub jobs: Option<usize>,
-
-    #[arg(long)]
-    pub numa_node: Option<usize>,
 }
 
 pub fn main(cmd: Cmd) -> anyhow::Result<()> {
@@ -295,8 +311,8 @@ fn shards(dir: &Path) -> anyhow::Result<Vec<(usize, PathBuf)>> {
 
 fn reverse(args: ReverseArgs) -> anyhow::Result<()> {
     let layout = Layout::new(&args.place.name, &args.place.out)?;
-    let src = layout.mgy();
-    let dst = layout.mgy_rev();
+    let src = layout.targets();
+    let dst = layout.targets_rev();
 
     let mut found = shards(&src)?;
     if let Some(n) = args.shards {
@@ -339,9 +355,9 @@ fn reverse(args: ReverseArgs) -> anyhow::Result<()> {
 
 // ----------------------------------------------------------------- recruit
 
-fn recruit(args: StageArgs) -> anyhow::Result<()> {
+fn recruit(args: RecruitArgs) -> anyhow::Result<()> {
     let layout = Layout::new(&args.place.name, &args.place.out)?;
-    let rev = layout.mgy_rev();
+    let rev = layout.targets_rev();
 
     if !rev.is_dir() {
         bail!(
@@ -350,64 +366,127 @@ fn recruit(args: StageArgs) -> anyhow::Result<()> {
         );
     }
 
-    let searches: Vec<Search> = shards(&rev)?
-        .into_iter()
-        .map(|(i, path)| {
-            Search::new(i.to_string(), path)
-                .with_hmm(layout.query_hmm())
-                .with_sto(layout.query_sto())
-        })
-        .collect();
+    let nail_bin = nail()?;
+    let mmseqs_bin = mmseqs()?;
 
-    let into = layout.recruit();
-    stage(RECRUIT_BLOCK, searches, &args, into, How::Whole)
+    let query_hmm = layout.query_hmm();
+    let query_db = layout.query_db();
+
+    let recruit_dir = layout.recruit();
+    let results = layout.recruit_results();
+    let tmp = recruit_dir.join("tmp");
+
+    let mut pl = PipelineBuilder::new().step(PCmd::new("mkdir").flag("-p").path(&results));
+
+    for (idx, shard) in shards(&rev)? {
+        let scratch = tmp.join(format!("shard-{idx}"));
+        let target_db = scratch.join("targetDB/targetDB");
+        let aln_db = scratch.join("alnDB/alnDB");
+
+        pl = pl
+            .step(
+                Step::serial([
+                    PCmd::new("mkdir")
+                        .name("dirs")
+                        .flag("-p")
+                        .path(scratch.join("targetDB"))
+                        .path(scratch.join("alnDB")),
+                    PCmd::new(&mmseqs_bin)
+                        .name("createdb")
+                        .sub("createdb")
+                        .path(&shard)
+                        .path(&target_db),
+                ])
+                .name(format!("prep.{idx}")),
+            )
+            .step(
+                Step::serial([PCmd::new(&nail_bin)
+                    .sub("search")
+                    .arg("--mmseqs-path", &mmseqs_bin)
+                    .arg("-t", args.threads)
+                    .arg("--tmp-dir", scratch.join("nail"))
+                    .arg("--mmseqs-s", RECRUIT_S)
+                    .arg("--mmseqs-max-seqs", RECRUIT_MAX_SEQS)
+                    .arg("-E", EVALUE)
+                    .arg(
+                        "--tbl-out",
+                        results.join(format!("{NAIL_RECRUIT}.{idx}.tbl")),
+                    )
+                    .flag("--allow-overwrite")
+                    .path(&query_hmm)
+                    .path(&shard)])
+                .name(format!("nail.{idx}")),
+            )
+            .step(
+                Step::serial([
+                    PCmd::new(&mmseqs_bin)
+                        .name("search")
+                        .sub("search")
+                        .arg("--threads", args.threads)
+                        .arg("-s", RECRUIT_S)
+                        .arg("--max-seqs", RECRUIT_MAX_SEQS)
+                        .arg("-e", EVALUE)
+                        .path(&query_db)
+                        .path(&target_db)
+                        .path(&aln_db)
+                        .path(scratch.join("work")),
+                    PCmd::new(&mmseqs_bin)
+                        .name("convertalis")
+                        .sub("convertalis")
+                        .arg("--format-mode", 0)
+                        .path(&query_db)
+                        .path(&target_db)
+                        .path(&aln_db)
+                        .path(results.join(format!("{MMSEQS_RECRUIT}.{idx}.tbl"))),
+                ])
+                .name(format!("mmseqs.{idx}")),
+            )
+            .step(PCmd::new("rm").name("clean").flag("-rf").path(&scratch));
+    }
+
+    let pipeline = pl
+        .stderr_dir(tmp.join("stderr"))
+        .sink(Progress::new())
+        .build()?;
+
+    if args.dry_run {
+        pipeline.dry_run();
+        return Ok(());
+    }
+
+    pipeline.run()
 }
 
 // ------------------------------------------------------------------ decoys
 
 fn decoys(args: DecoysArgs) -> anyhow::Result<()> {
     let layout = Layout::new(&args.place.name, &args.place.out)?;
-    let recruit_dir = layout.recruit();
+    let recruit_results = layout.recruit_results();
 
-    let runs = run::Runs::load(
-        recruit_dir.join(run::table::FILE_NAME),
-        recruit_dir.join("results"),
-    )
-    .context("could not read the recruit stage's runs table")?;
+    let shard_list: Vec<String> = shards(&layout.targets_rev())?
+        .into_iter()
+        .map(|(i, _)| i.to_string())
+        .collect();
 
-    let nail = match &args.nail {
-        Some(n) => n.as_str(),
-        None => runs.only_for_tool("nail")?,
-    };
-    let mmseqs = match &args.mmseqs {
-        Some(n) => n.as_str(),
-        None => runs.only_for_tool("mmseqs")?,
-    };
-
-    let shards = runs.shared_searches(&[nail, mmseqs]);
-    if shards.is_empty() {
-        bail!("nail and mmseqs have no successfully recruited shards in common");
-    }
-
-    println!("reading {} recruited shards...", shards.len());
+    println!("reading {} recruited shards...", shard_list.len());
 
     let pool = pool(args.threads)?;
 
     // per shard, which families each recruited sequence hit. Only names travel
     // here; the sequences themselves are read in the second pass.
     let wanted: Vec<(String, HashMap<String, Vec<String>>)> = pool.install(|| {
-        shards
+        shard_list
             .par_iter()
             .map(
                 |shard| -> anyhow::Result<(String, HashMap<String, Vec<String>>)> {
                     let mut map: HashMap<String, Vec<String>> = HashMap::new();
 
-                    let path = runs.table_path(nail, shard);
+                    let path = recruit_results.join(format!("{NAIL_RECRUIT}.{shard}.tbl"));
                     let tbl = HitTable::from_path::<_, NailTable>(&path)
                         .with_context(|| format!("failed to read {}", path.display()))?;
                     collect(tbl, &mut map);
 
-                    let path = runs.table_path(mmseqs, shard);
+                    let path = recruit_results.join(format!("{MMSEQS_RECRUIT}.{shard}.tbl"));
                     let tbl = HitTable::from_path::<_, BlastTable>(&path)
                         .with_context(|| format!("failed to read {}", path.display()))?;
                     collect(tbl, &mut map);
@@ -448,7 +527,7 @@ fn decoys(args: DecoysArgs) -> anyhow::Result<()> {
         .map(|f| (f.as_str(), Mutex::new(decoy_dir.join(format!("{f}.fa")))))
         .collect();
 
-    let mgy = layout.mgy();
+    let targets = layout.targets();
     pool.install(|| {
         wanted
             .par_iter()
@@ -465,7 +544,7 @@ fn decoys(args: DecoysArgs) -> anyhow::Result<()> {
                     }
                 }
 
-                let path = mgy.join(format!("{shard}.fa"));
+                let path = targets.join(format!("{shard}.fa"));
                 let mut reader = bioio::fasta::Reader::from_path(&path)
                     .with_context(|| format!("failed to open {}", path.display()))?;
 
@@ -543,7 +622,30 @@ fn collect(tbl: HitTable, map: &mut HashMap<String, Vec<String>>) {
 
 // ------------------------------------------------------------------ search
 
-fn search(args: StageArgs) -> anyhow::Result<()> {
+/// Run one command to completion, its combined stdout and stderr appended to
+/// `log`. mmseqs reports failures on stdout rather than stderr, so both share
+/// one file rather than splitting a failure across two.
+fn run(cmd: &mut Command, log: &Path) -> anyhow::Result<()> {
+    let out = std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(log)
+        .with_context(|| format!("failed to open {}", log.display()))?;
+
+    let status = cmd
+        .stdout(out.try_clone()?)
+        .stderr(out)
+        .status()
+        .with_context(|| format!("failed to spawn {cmd:?}"))?;
+
+    if !status.success() {
+        bail!("{cmd:?} exited with {status}; see {}", log.display());
+    }
+
+    Ok(())
+}
+
+fn search(args: SearchArgs) -> anyhow::Result<()> {
     let layout = Layout::new(&args.place.name, &args.place.out)?;
     let decoy_dir = layout.decoys();
 
@@ -570,105 +672,171 @@ fn search(args: StageArgs) -> anyhow::Result<()> {
     let hmm_dir = layout.queries_hmm();
     let sto_dir = layout.queries_sto();
 
-    // two searches per family. The `.rev` suffix is deliberate: outputs are
-    // keyed by the target's stem, so these land as `<run>.<family>.tbl` and
-    // `<run>.<family>.rev.tbl`, which is the pairing `learn` reads back.
-    let mut searches = Vec::with_capacity(families.len() * 2);
-    for family in &families {
-        let hmm = hmm_dir.join(format!("{family}.hmm"));
-        let sto = sto_dir.join(format!("{family}.sto"));
-
-        searches.push(
-            Search::new(family.clone(), decoy_dir.join(format!("{family}.fa")))
-                .with_hmm(&hmm)
-                .with_sto(&sto),
-        );
-        searches.push(
-            Search::new(
-                format!("{family}.rev"),
-                rev_dir.join(format!("{family}.rev.fa")),
-            )
-            .with_hmm(&hmm)
-            .with_sto(&sto),
-        );
-    }
-
-    // each family is small, so the parallelism belongs on the outside
-    let jobs = args
-        .jobs
-        .unwrap_or_else(|| std::thread::available_parallelism().map_or(4, |n| n.get()));
-
-    stage(
-        DECOY_BLOCK,
-        searches,
-        &args,
-        layout.root.clone(),
-        How::Split(jobs),
-    )
-}
-
-// ------------------------------------------------------- shared stage setup
-
-/// How a stage spends the machine.
-enum How {
-    /// One search at a time, each large enough to use every core.
-    Whole,
-    /// Several small searches at once.
-    Split(usize),
-}
-
-/// Plan and execute one of the two search stages.
-fn stage(
-    block: &str,
-    searches: Vec<Search>,
-    args: &StageArgs,
-    into: PathBuf,
-    how: How,
-) -> anyhow::Result<()> {
-    let config = run::Config::from_path_as(crate::util::dir().join("cutoffs.toml"), block)?;
-
-    let opts = Options {
-        filter: args.filter.clone(),
-        threads: args.threads,
-        numa_node: args.numa_node,
-        dry_run: args.dry_run,
-    };
-    let runs = run::plan(&config, &opts)?;
-
-    if opts.dry_run {
-        run::describe(&runs, &searches);
-        return Ok(());
-    }
-
-    let results = into.join("results");
+    let results = layout.results();
     if results.exists() {
         std::fs::remove_dir_all(&results)?;
     }
     std::fs::create_dir_all(&results)?;
 
-    let jobs = match how {
-        How::Whole => 1,
-        How::Split(n) => n,
-    };
-    let threads = runs.iter().map(|r| r.threads).max().unwrap_or(1);
-    let numa = match args.numa_node.or(config.defaults.numa_node) {
-        Some(node) => Some(Numa::new(node, threads * jobs)?),
-        None => None,
-    };
+    let tmp = layout.root.join("tmp");
+    std::fs::create_dir_all(&tmp)?;
 
-    let paths = Paths {
-        bin: tools::repo().join("tools/bin"),
-        tmp: into.join("tmp"),
-        results,
-        // above results/, so it survives the wipe at the start of a stage
-        runs_table: into.join(run::table::FILE_NAME),
-        numa,
-    };
+    let nail_bin = nail()?;
+    let mmseqs_bin = mmseqs()?;
+    let hmmsearch_bin = hmmsearch()?;
 
-    match how {
-        How::Whole => run::measure(&config, &runs, &searches, &paths),
-        How::Split(jobs) => run::batch(&config, &runs, &searches, &paths, jobs),
-    }
+    let jobs = args
+        .jobs
+        .unwrap_or_else(|| std::thread::available_parallelism().map_or(4, |n| n.get()));
+
+    println!("searching {} families, {jobs} at once...", families.len());
+
+    let done = AtomicUsize::new(0);
+    let total = families.len();
+
+    let pool = pool(jobs)?;
+    pool.install(|| {
+        families
+            .par_iter()
+            .try_for_each(|family| -> anyhow::Result<()> {
+                let scratch = tmp.join(family);
+                std::fs::create_dir_all(&scratch)?;
+                let log = scratch.join("log");
+
+                let hmm = hmm_dir.join(format!("{family}.hmm"));
+                let sto = sto_dir.join(format!("{family}.sto"));
+
+                // the query profile is the same for both directions, so it is
+                // built once per family rather than once per search
+                let msa_db = scratch.join("msaDB");
+                let query_db = scratch.join("queryDB");
+                run(
+                    Command::new(&mmseqs_bin)
+                        .arg("convertmsa")
+                        .arg(&sto)
+                        .arg(&msa_db)
+                        .arg("--identifier-field")
+                        .arg("0"),
+                    &log,
+                )?;
+                run(
+                    Command::new(&mmseqs_bin)
+                        .arg("msa2profile")
+                        .arg(&msa_db)
+                        .arg(&query_db)
+                        .arg("--match-mode")
+                        .arg("1"),
+                    &log,
+                )?;
+
+                let directions = [
+                    (family.clone(), decoy_dir.join(format!("{family}.fa"))),
+                    (
+                        format!("{family}.rev"),
+                        rev_dir.join(format!("{family}.rev.fa")),
+                    ),
+                ];
+
+                for (label, target) in directions {
+                    let dir_scratch = scratch.join(&label);
+                    std::fs::create_dir_all(&dir_scratch)?;
+
+                    run(
+                        Command::new(&nail_bin)
+                            .arg("search")
+                            .arg("--mmseqs-path")
+                            .arg(&mmseqs_bin)
+                            .arg("-t")
+                            .arg("1")
+                            .arg("--tmp-dir")
+                            .arg(dir_scratch.join("nail"))
+                            .arg("--mmseqs-s")
+                            .arg(DECOY_S)
+                            .arg("--mmseqs-max-seqs")
+                            .arg(DECOY_MAX_SEQS)
+                            .arg("-E")
+                            .arg(EVALUE)
+                            .arg("--allow-overwrite")
+                            .arg("--tbl-out")
+                            .arg(results.join(format!("{NAIL_DECOY}.{label}.tbl")))
+                            .arg(&hmm)
+                            .arg(&target),
+                        &log,
+                    )?;
+
+                    let target_db = dir_scratch.join("targetDB/targetDB");
+                    let aln_db = dir_scratch.join("alnDB/alnDB");
+                    std::fs::create_dir_all(target_db.parent().unwrap())?;
+                    std::fs::create_dir_all(aln_db.parent().unwrap())?;
+
+                    run(
+                        Command::new(&mmseqs_bin)
+                            .arg("createdb")
+                            .arg(&target)
+                            .arg(&target_db),
+                        &log,
+                    )?;
+                    run(
+                        Command::new(&mmseqs_bin)
+                            .arg("search")
+                            .arg(&query_db)
+                            .arg(&target_db)
+                            .arg(&aln_db)
+                            .arg(dir_scratch.join("work"))
+                            .arg("--threads")
+                            .arg("1")
+                            .arg("-s")
+                            .arg(DECOY_S)
+                            .arg("--max-seqs")
+                            .arg(DECOY_MAX_SEQS)
+                            .arg("-e")
+                            .arg(EVALUE),
+                        &log,
+                    )?;
+                    run(
+                        Command::new(&mmseqs_bin)
+                            .arg("convertalis")
+                            .arg(&query_db)
+                            .arg(&target_db)
+                            .arg(&aln_db)
+                            .arg(results.join(format!("{MMSEQS_DECOY}.{label}.tbl")))
+                            .arg("--format-mode")
+                            .arg("0"),
+                        &log,
+                    )?;
+
+                    run(
+                        Command::new(&hmmsearch_bin)
+                            .arg("--cpu")
+                            .arg("1")
+                            .arg("-E")
+                            .arg(EVALUE)
+                            .arg("-o")
+                            .arg("/dev/null")
+                            .arg("--tblout")
+                            .arg(results.join(format!("{HMMER_DECOY}.{label}.tbl")))
+                            .arg("--domtblout")
+                            .arg(results.join(format!("{HMMER_DECOY}.{label}.domtbl")))
+                            .arg(&hmm)
+                            .arg(&target),
+                        &log,
+                    )?;
+                }
+
+                std::fs::remove_dir_all(&scratch).ok();
+
+                let n = done.fetch_add(1, Ordering::Relaxed) + 1;
+                if n.is_multiple_of(50) || n == total {
+                    eprint!("\r  {n}/{total} families searched");
+                }
+
+                Ok(())
+            })
+    })?;
+    eprintln!();
+
+    println!("wrote {}", results.display());
+    Ok(())
 }
 
 // ------------------------------------------------------------------- learn
@@ -680,24 +848,6 @@ fn learn(args: LearnArgs) -> anyhow::Result<()> {
     let layout = Layout::new(&args.place.name, &args.place.out)?;
     let results = layout.results();
 
-    let runs = run::Runs::load(layout.root.join(run::table::FILE_NAME), &results)
-        .context("could not read the search stage's runs table")?;
-
-    let nail = match &args.nail {
-        Some(n) => n.clone(),
-        None => runs.only_for_tool("nail")?.to_string(),
-    };
-    let mmseqs = match &args.mmseqs {
-        Some(n) => n.clone(),
-        None => runs.only_for_tool("mmseqs")?.to_string(),
-    };
-    // hmmer is optional: it is here to be compared against nail's numbers, not
-    // because anything downstream needs it
-    let hmmer = match &args.hmmer {
-        Some(n) => Some(n.clone()),
-        None => runs.only_for_tool("hmmer").ok().map(str::to_string),
-    };
-
     let mut families: Vec<String> = std::fs::read_dir(layout.decoys())?
         .filter_map(|e| e.ok())
         .map(|e| e.path())
@@ -708,27 +858,35 @@ fn learn(args: LearnArgs) -> anyhow::Result<()> {
 
     let out_path = layout.cutoffs_txt();
     let out = Mutex::new(BufWriter::new(File::create(&out_path)?));
-    let skipped = std::sync::atomic::AtomicUsize::new(0);
+    let skipped = AtomicUsize::new(0);
 
     let pool = pool(args.threads)?;
     pool.install(|| {
         families
             .par_iter()
             .try_for_each(|family| -> anyhow::Result<()> {
-                let nail_scores =
-                    decoy_scores::<NailTable>(&results, &nail, family, args.reverse_e_cutoff)?;
-                let mmseqs_scores =
-                    decoy_scores::<BlastTable>(&results, &mmseqs, family, args.reverse_e_cutoff)?;
-                let hmmer_scores = match &hmmer {
-                    Some(run) => {
-                        decoy_scores::<HmmerTable>(&results, run, family, args.reverse_e_cutoff)?
-                    }
-                    None => None,
-                };
+                let nail_scores = decoy_scores::<NailTable>(
+                    &results,
+                    NAIL_DECOY,
+                    family,
+                    args.reverse_e_cutoff,
+                )?;
+                let mmseqs_scores = decoy_scores::<BlastTable>(
+                    &results,
+                    MMSEQS_DECOY,
+                    family,
+                    args.reverse_e_cutoff,
+                )?;
+                let hmmer_scores = decoy_scores::<HmmerTable>(
+                    &results,
+                    HMMER_DECOY,
+                    family,
+                    args.reverse_e_cutoff,
+                )?;
 
                 let (Some(n), Some(m)) = (nail_scores, mmseqs_scores) else {
                     // a family without both tables tells us nothing comparative
-                    skipped.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                    skipped.fetch_add(1, Ordering::Relaxed);
                     return Ok(());
                 };
 
@@ -745,7 +903,7 @@ fn learn(args: LearnArgs) -> anyhow::Result<()> {
 
     out.into_inner().expect("output mutex poisoned").flush()?;
 
-    let skipped = skipped.load(std::sync::atomic::Ordering::Relaxed);
+    let skipped = skipped.load(Ordering::Relaxed);
     if skipped > 0 {
         eprintln!("skipped {skipped} families missing a nail or mmseqs table");
     }
@@ -820,37 +978,30 @@ fn group(tool: &str, (scores, count): &(Vec<f32>, usize)) -> String {
 // --------------------------------------------------------------------- all
 
 fn all(args: AllArgs) -> anyhow::Result<()> {
-    let stage_args = |jobs: Option<usize>| StageArgs {
-        place: args.place.clone(),
-        filter: None,
-        threads: None,
-        jobs,
-        numa_node: args.numa_node,
-        dry_run: false,
-    };
-
     reverse(ReverseArgs {
         place: args.place.clone(),
         shards: args.shards,
         threads: args.threads,
     })?;
 
-    recruit(stage_args(Some(1)))?;
+    recruit(RecruitArgs {
+        place: args.place.clone(),
+        threads: args.threads,
+        dry_run: false,
+    })?;
 
     decoys(DecoysArgs {
         place: args.place.clone(),
-        nail: None,
-        mmseqs: None,
         threads: args.threads,
     })?;
 
-    search(stage_args(args.jobs))?;
+    search(SearchArgs {
+        place: args.place.clone(),
+        jobs: args.jobs,
+    })?;
 
     learn(LearnArgs {
         place: args.place.clone(),
-        nail: None,
-        mmseqs: None,
-        hmmer: None,
         reverse_e_cutoff: 1e-3,
         threads: args.threads,
     })

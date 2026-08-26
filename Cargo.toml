@@ -5,7 +5,6 @@ members = [
     "crates/bioio",
     "crates/feisty",
     "crates/pipeline",
-    "crates/run",
     "benchmarks/pct-id",
     "benchmarks/mgnify",
     "benchmarks/long-seqs", "crates/tools",
@@ -19,7 +18,6 @@ bioio = { path = "crates/bioio" }
 feisty = { path = "crates/feisty" }
 pipeline = { path = "crates/pipeline" }
 tools = { path = "crates/tools" }
-run = { path = "crates/run" }
 
 anyhow = "1.0.99"
 clap = { version = "4.5.53", features = ["derive"] }

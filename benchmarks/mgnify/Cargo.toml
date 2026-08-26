@@ -12,7 +12,6 @@ bioio = { workspace = true }
 feisty = { workspace = true }
 pipeline = { workspace = true }
 tools = { workspace = true }
-run = { workspace = true }
 
 anyhow = { workspace = true }
 clap = { workspace = true }

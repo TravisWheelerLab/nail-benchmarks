@@ -15,6 +15,7 @@ use glob::glob;
 
 const PRECISION: usize = 4;
 const FIXED_FPR: f32 = 0.01;
+const RUNS_TBL: &str = "runs.tbl";
 
 trait Float: PartialOrd {}
 impl Float for f32 {}
@@ -691,6 +692,59 @@ impl HitTable2 {
     }
 }
 
+/// Total wall-clock seconds per run name, off the `#` header/rows format
+/// every `pipeline::Table` runs.tbl uses. A run name can appear more than
+/// once (blast.prf's per-family psiblast calls all share the name "blast.prf",
+/// since together they are the one run, run one family at a time), hence a
+/// sum rather than a single lookup.
+fn wall_seconds(path: &Path) -> anyhow::Result<HashMap<String, f32>> {
+    let file =
+        File::open(path).with_context(|| format!("failed to read {}", path.display()))?;
+
+    let mut columns: Vec<String> = Vec::new();
+    let mut sums: HashMap<String, f32> = HashMap::new();
+
+    for line in BufReader::new(file).lines() {
+        let line = line?;
+
+        if let Some(rest) = line.strip_prefix('#') {
+            let rest = rest.trim_start();
+            if columns.is_empty() && !rest.starts_with('-') {
+                columns = rest.split_whitespace().map(str::to_string).collect();
+            }
+            continue;
+        }
+
+        if line.trim().is_empty() {
+            continue;
+        }
+
+        let idx = |key: &str| columns.iter().position(|c| c == key);
+        let (Some(name_i), Some(wall_i), Some(exit_i)) =
+            (idx("name"), idx("wall(s)"), idx("exit"))
+        else {
+            continue;
+        };
+
+        let f: Vec<&str> = line.split_whitespace().collect();
+        let (Some(name), Some(wall), Some(exit)) = (f.get(name_i), f.get(wall_i), f.get(exit_i))
+        else {
+            continue;
+        };
+
+        if *name == "-" || *exit != "0" {
+            continue;
+        }
+        let Ok(wall): Result<f32, _> = wall.parse() else {
+            continue;
+        };
+
+        *sums.entry(name.to_string()).or_insert(0.0) += wall;
+    }
+
+    Ok(sums)
+}
+
 struct RecallData {
     tables: Vec<HitTable2>,
     times: Vec<f32>,
@@ -712,7 +766,7 @@ impl RecallData {
             pid_bin_tot_cnts[pid] += 1;
         });
 
-        let runs = run::Runs::from_dir(&results_dir)?;
+        let wall_s = wall_seconds(&results_dir.join(RUNS_TBL))?;
 
         for path in glob(
             results_dir
@@ -724,7 +778,7 @@ impl RecallData {
         {
             // the runs table lives alongside the per-run hit tables and shares
             // their extension, but is not one of them
-            if path.file_name().is_some_and(|n| n == run::table::FILE_NAME) {
+            if path.file_name().is_some_and(|n| n == RUNS_TBL) {
                 continue;
             }
 
@@ -759,8 +813,9 @@ impl RecallData {
             tables.push(tbl);
 
             // a hit table's stem is exactly the run name in the runs table
-            let time = runs
-                .mean_wall_s(&stem)
+            let time = wall_s
+                .get(&stem)
+                .copied()
                 .with_context(|| format!("no row for run {stem:?} in the runs table"))?;
 
             times.push(time);

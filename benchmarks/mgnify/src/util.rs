@@ -2,9 +2,7 @@ use std::path::{Path, PathBuf};
 
 use anyhow::{bail, Context};
 
-pub fn dir() -> PathBuf {
-    PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-}
+pub use crate::dir;
 
 pub fn shards(dir: &Path) -> anyhow::Result<Vec<(usize, PathBuf)>> {
     let entries =

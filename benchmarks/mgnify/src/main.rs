@@ -4,7 +4,8 @@ mod parse;
 mod run;
 mod util;
 
-use anyhow::{bail, Context};
+use std::path::PathBuf;
+
 use clap::{Parser, Subcommand};
 
 #[derive(Parser)]
@@ -18,7 +19,7 @@ struct Cli {
 enum Command {
     /// Shard the MGnify proteins into a benchmark directory.
     Build(build::Args),
-    /// Execute the runs declared in bench.toml against a range of shards.
+    /// Search nail, mmseqs and hmmer against every shard.
     Run(run::Args),
     /// Learn per-family false-positive score cutoffs from reversed decoys.
     #[command(subcommand)]
@@ -35,4 +36,8 @@ fn main() -> anyhow::Result<()> {
         Command::Cutoffs(cmd) => cutoffs::main(cmd),
         Command::Parse(cmd) => parse::main(cmd),
     }
+}
+
+pub fn dir() -> PathBuf {
+    PathBuf::from(env!("CARGO_MANIFEST_DIR"))
 }

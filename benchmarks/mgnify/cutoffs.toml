@@ -20,7 +20,7 @@ evalue = "10"
 
 # ------------------------------------------------------------- recruit
 #
-# Deliberately not the same settings as bench.toml: this pass only has to
+# Deliberately not the same settings as mgnify run's sweep: this pass only has to
 # nominate candidates, and anything it misses at s=11.0 would not have
 # survived the E-value filter downstream either.
 

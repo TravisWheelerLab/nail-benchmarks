@@ -10,8 +10,8 @@ use std::path::PathBuf;
 
 use anyhow::bail;
 use clap::{Parser, Subcommand};
-
-use run::{Numa, Options, Paths, Search};
+use pipeline::{Cmd, PipelineBuilder, Progress, Step, Table};
+use tools::nail;
 
 /// This benchmark's directory, fixed at compile time.
 pub fn dir() -> PathBuf {
@@ -20,6 +20,9 @@ pub fn dir() -> PathBuf {
 
 /// How many query/target pairs are checked in.
 pub const PAIRS: usize = 6;
+
+/// The name every pair's hit table and runs.tbl row is filed under.
+pub const RUN_NAME: &str = "nail";
 
 #[derive(Parser)]
 #[command(name = "long-seqs", about = "long sequence benchmark")]
@@ -39,22 +42,17 @@ enum Command {
 
 #[derive(Parser, Debug)]
 pub struct RunArgs {
-    /// Only run entries whose name matches this glob.
-    #[arg(short, long)]
-    pub filter: Option<String>,
+    #[arg(short, long, default_value_t = 24)]
+    pub threads: usize,
 
-    /// Override the thread count from bench.toml.
-    #[arg(short, long)]
-    pub threads: Option<usize>,
-
-    /// Pin to a NUMA node. Absent means no pinning and no numactl call.
     #[arg(long)]
-    pub numa_node: Option<usize>,
+    pub results: Option<PathBuf>,
 
-    /// List the expanded runs and exit without executing anything.
+    #[arg(long)]
+    pub tmp: Option<PathBuf>,
+
     #[arg(long)]
     pub dry_run: bool,
-
 }
 
 fn main() -> anyhow::Result<()> {
@@ -65,59 +63,50 @@ fn main() -> anyhow::Result<()> {
 }
 
 fn run_main(args: RunArgs) -> anyhow::Result<()> {
-    let repo = run::repo(env!("CARGO_MANIFEST_DIR"));
     let dir = dir();
 
-    let config = run::Config::from_path(dir.join("bench.toml"))?;
-    let opts = Options {
-        filter: args.filter,
-        threads: args.threads,
-        numa_node: args.numa_node,
-        dry_run: args.dry_run,
-    };
-    let runs = run::plan(&config, &opts)?;
+    let results = args.results.unwrap_or_else(|| dir.join("results"));
+    let tmp = args.tmp.unwrap_or_else(|| dir.join("tmp"));
 
-    // zipped, not crossed: pair i is query i against target i
-    let searches: Vec<Search> = (1..=PAIRS)
-        .map(|i| {
-            Search::new(
-                i.to_string(),
-                dir.join(format!("target/{i}.target.fa")),
-            )
-            .with_fasta(dir.join(format!("query/{i}.query.fa")))
-        })
-        .collect();
+    let nail_bin = nail()?;
 
-    if opts.dry_run {
-        run::describe(&runs, &searches);
+    let mut pl = PipelineBuilder::new().step(Cmd::new("mkdir").flag("-p").path(&results));
+
+    for i in 1..=PAIRS {
+        let query = dir.join(format!("query/{i}.query.fa"));
+        let target = dir.join(format!("target/{i}.target.fa"));
+
+        if !target.exists() {
+            bail!("missing input {}", target.display());
+        }
+
+        pl = pl.step(
+            Step::serial([Cmd::new(&nail_bin)
+                .sub("search")
+                .arg("-t", args.threads)
+                .arg("--tmp-dir", tmp.join(i.to_string()))
+                .flag("--allow-overwrite")
+                // widens the sparse band enough that these pairs align at all
+                .arg("--f32-p", 5)
+                .arg("--tbl-out", results.join(format!("{RUN_NAME}.{i}.tbl")))
+                .path(&query)
+                .path(&target)
+                .field("name", RUN_NAME)
+                .field("search", i)])
+            .name(i.to_string()),
+        );
+    }
+
+    let pipeline = pl
+        .stderr_dir(tmp.join("stderr"))
+        .sink(Progress::new())
+        .sink(Table::new(results.join("runs.tbl")))
+        .build()?;
+
+    if args.dry_run {
+        pipeline.dry_run();
         return Ok(());
     }
 
-    for search in &searches {
-        if !search.target.exists() {
-            bail!("missing input {}", search.target.display());
-        }
-    }
-
-    let results = dir.join("results");
-    if results.exists() {
-        std::fs::remove_dir_all(&results)?;
-    }
-    std::fs::create_dir_all(&results)?;
-
-    let threads = runs.iter().map(|r| r.threads).max().unwrap_or(1);
-    let numa = match args.numa_node.or(config.defaults.numa_node) {
-        Some(node) => Some(Numa::new(node, threads)?),
-        None => None,
-    };
-
-    let paths = Paths {
-        bin: repo.join("tools/bin"),
-        tmp: dir.join("tmp"),
-        runs_table: results.join(run::table::FILE_NAME),
-        results,
-        numa,
-    };
-
-    run::measure(&config, &runs, &searches, &paths)
+    pipeline.run()
 }

@@ -13,9 +13,6 @@
 //!
 //! -A, -B and every other pruning knob are left at nail's defaults, since
 //! those are exactly the stages this benchmark is measuring the cost of.
-//!
-//! Seeding matches mgnify's bench.toml settings, which is what keeps its
-//! cutoffs.txt applicable to these results.
 
 use std::path::PathBuf;
 
@@ -34,8 +31,7 @@ const HMMER_CPU: usize = 2;
 // which this benchmark deliberately sets far above it
 const HMMER_EVALUE: &str = "10";
 
-// the seeding settings mgnify's bench.toml uses. matching them is what keeps
-// mgnify's cutoffs.txt applicable to these results
+// the seeding settings this benchmark searches with
 const MMSEQS_S: &str = "12.0";
 const SEED_MODE: &str = "prog";
 

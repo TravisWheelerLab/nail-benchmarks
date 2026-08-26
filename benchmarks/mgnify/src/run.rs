@@ -3,7 +3,7 @@ use std::path::PathBuf;
 use anyhow::ensure;
 use bioio::split::{self, Kind};
 use clap::Parser;
-use pipeline::{Cmd, PipelineBuilder, Progress, Step};
+use pipeline::{Cmd, PipelineBuilder, Progress, Step, Table};
 use tools::{hmmsearch, mmseqs, nail};
 
 use crate::util;
@@ -15,6 +15,24 @@ pub struct Args {
     #[arg(short, long, default_value_t = 8)]
     threads: usize,
 
+    /// nail's --mmseqs-s values to sweep.
+    #[arg(
+        long,
+        value_delimiter = ',',
+        default_value = "9.0,10.0,12.0",
+        value_name = "X,X,..."
+    )]
+    nail_s: Vec<f32>,
+
+    /// mmseqs' -s values to sweep.
+    #[arg(
+        long,
+        value_delimiter = ',',
+        default_value = "7.5,12.0",
+        value_name = "X,X,..."
+    )]
+    mmseqs_s: Vec<f32>,
+
     #[arg(long)]
     results: Option<PathBuf>,
 
@@ -25,9 +43,6 @@ pub struct Args {
     dry_run: bool,
 }
 
-const NAIL_S: [f32; 3] = [9.0, 10.0, 12.0];
-
-const MMSEQS_S: [f32; 2] = [7.5, 12.0];
 const MMSEQS_MAX_SEQS: usize = 2000;
 
 const HMMER_CPU: usize = 2;
@@ -38,6 +53,11 @@ pub fn main(args: Args) -> anyhow::Result<()> {
     ensure!(
         args.threads.is_multiple_of(HMMER_CPU),
         "--threads needs to be a multiple of {HMMER_CPU} (for hmmer)"
+    );
+    ensure!(!args.nail_s.is_empty(), "--nail-s needs at least one value");
+    ensure!(
+        !args.mmseqs_s.is_empty(),
+        "--mmseqs-s needs at least one value"
     );
 
     let nail = nail()?;
@@ -77,7 +97,7 @@ pub fn main(args: Args) -> anyhow::Result<()> {
 
         pl = pl
             .step(Step::serial([
-                MMSEQS_S.iter().fold(
+                args.mmseqs_s.iter().fold(
                     Cmd::new("mkdir").flag("-p").path(scratch.join("targetDB")),
                     |cmd, s| cmd.path(scratch.join(format!("alnDB-s{s:.1}"))),
                 ),
@@ -86,27 +106,30 @@ pub fn main(args: Args) -> anyhow::Result<()> {
                     .path(&shard)
                     .path(&mmseqs_tdb),
             ]))
-            .step(Step::serial(NAIL_S.iter().map(|&s| {
+            .step(Step::serial(args.nail_s.iter().map(|&s| {
+                let name = format!("nail-s{s:.1}");
+
                 Cmd::new(&nail)
                     .sub("search")
                     .arg("--mmseqs-path", &mmseqs)
                     .arg("-t", args.threads)
-                    .arg("--tmp-dir", scratch.join(format!("nail-s{s:.1}")))
+                    .arg("--tmp-dir", scratch.join(&name))
                     .arg("--mmseqs-s", format!("{s:.1}"))
                     .arg("--seed-mode", "prog")
                     .arg("-E", EVALUE)
-                    .arg(
-                        "--tbl-out",
-                        results_dir.join(format!("nail-s{s:.1}.{idx}.tbl")),
-                    )
+                    .arg("--tbl-out", results_dir.join(format!("{name}.{idx}.tbl")))
                     .flag("--allow-overwrite")
                     .path(&query_hmm)
                     .path(&shard)
+                    .field("name", name)
+                    .field("tool", "nail")
+                    .field("search", idx)
             })))
             .step(Step::serial(
-                MMSEQS_S
+                args.mmseqs_s
                     .iter()
                     .flat_map(|&s| {
+                        let name = format!("mmseqs-s{s:.1}-ms{MMSEQS_MAX_SEQS}");
                         let adb = scratch.join(format!("alnDB-s{s:.1}/alnDB"));
                         [
                             Cmd::new(&mmseqs)
@@ -125,11 +148,10 @@ pub fn main(args: Args) -> anyhow::Result<()> {
                                 .path(&query_db)
                                 .path(&mmseqs_tdb)
                                 .path(&adb)
-                                .path(
-                                    results_dir.join(format!(
-                                        "mmseqs-s{s:.1}-ms{MMSEQS_MAX_SEQS}.{idx}.tbl"
-                                    )),
-                                ),
+                                .path(results_dir.join(format!("{name}.{idx}.tbl")))
+                                .field("name", name)
+                                .field("tool", "mmseqs")
+                                .field("search", idx),
                         ]
                     })
                     .collect::<Vec<_>>(),
@@ -150,7 +172,10 @@ pub fn main(args: Args) -> anyhow::Result<()> {
                 cat(
                     (0..parts.len()).map(|i| hmmer_tmp.join(format!("{i}.tbl"))),
                     results_dir.join(format!("hmmer.{idx}.tbl")),
-                ),
+                )
+                .field("name", "hmmer")
+                .field("tool", "hmmer")
+                .field("search", idx),
                 cat(
                     (0..parts.len()).map(|i| hmmer_tmp.join(format!("{i}.domtbl"))),
                     results_dir.join(format!("hmmer.{idx}.domtbl")),
@@ -164,6 +189,7 @@ pub fn main(args: Args) -> anyhow::Result<()> {
     let pipeline = pl
         .stderr_dir(tmp_dir.join("stderr"))
         .sink(Progress::new())
+        .sink(Table::new(args.bench_dir.join("runs.tbl")))
         .build()?;
 
     if args.dry_run {

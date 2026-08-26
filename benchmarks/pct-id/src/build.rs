@@ -13,7 +13,7 @@ use rand::rngs::StdRng;
 use rand::seq::IndexedRandom;
 use rand::SeedableRng;
 
-use run::exec::{self, Cmd};
+use std::process::Command;
 
 /// Decoys per true pair in the target database.
 const DECOY_RATIO: usize = 100;
@@ -77,21 +77,10 @@ pub struct Args {
 }
 
 pub fn main(args: Args) -> anyhow::Result<()> {
-    let repo = run::repo(env!("CARGO_MANIFEST_DIR"));
     let dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
 
-    let bin = repo.join("tools/bin");
-
-    let src_sto = repo.join("data/pfam.sto");
-    let src_fa = repo.join("data/swissprot.fa");
-    for path in [&src_sto, &src_fa] {
-        if !path.exists() {
-            bail!(
-                "missing source data {}; run `make setup` from the repo root",
-                path.display()
-            );
-        }
-    }
+    let src_sto = tools::pfam_sto()?;
+    let src_fa = tools::swissprot()?;
 
     // ---- profmark split (shared across sizes) ----
 
@@ -100,7 +89,7 @@ pub fn main(args: Args) -> anyhow::Result<()> {
     let target_sto = pm_dir.join("target.sto");
 
     if args.refresh_profmark || !query_sto.exists() || !target_sto.exists() {
-        run_profmark(&bin, &pm_dir, &src_sto, &args)?;
+        run_profmark(&pm_dir, &src_sto, &args)?;
     } else {
         println!("reusing profmark split in {}", pm_dir.display());
     }
@@ -132,47 +121,81 @@ pub fn main(args: Args) -> anyhow::Result<()> {
     // ---- profile construction ----
 
     println!("building query.hmm...");
-    let cmd = Cmd::new(run::tool(&bin, "hmmbuild")?)
-        .arg("--cpu")
-        .arg(args.threads.to_string())
-        .path(bench_dir.join("query.hmm"))
-        .path(bench_dir.join("query.sto"));
-    exec::check(&cmd, None, "hmmbuild")?;
+    run(
+        Command::new(tools::hmmbuild()?)
+            .arg("--cpu")
+            .arg(args.threads.to_string())
+            .arg(bench_dir.join("query.hmm"))
+            .arg(bench_dir.join("query.sto")),
+        None,
+    )
+    .context("hmmbuild")?;
 
     println!("building query.cons.fa...");
-    let cmd = Cmd::new(run::tool(&bin, "hmmemit")?)
-        .arg("-c")
-        .path(bench_dir.join("query.hmm"))
-        .stdout_to(bench_dir.join("query.cons.fa"));
-    exec::check(&cmd, None, "hmmemit")?;
+    let cons = File::create(bench_dir.join("query.cons.fa"))
+        .context("failed to create query.cons.fa")?;
+    run(
+        Command::new(tools::hmmemit()?)
+            .arg("-c")
+            .arg(bench_dir.join("query.hmm")),
+        Some(cons),
+    )
+    .context("hmmemit")?;
 
     println!("\nbuilt {}", bench_dir.display());
     Ok(())
 }
 
-fn run_profmark(bin: &Path, pm_dir: &Path, src_sto: &Path, args: &Args) -> anyhow::Result<()> {
+fn run_profmark(pm_dir: &Path, src_sto: &Path, args: &Args) -> anyhow::Result<()> {
     println!("running create-profmark (this takes a while)...");
     fs::create_dir_all(pm_dir)?;
 
     let name = pm_dir.join("benchmark");
-    let cmd = Cmd::new(run::tool(bin, "create-profmark")?)
-        .arg("-S")
-        .arg(args.seed.to_string())
-        .arg("-1")
-        .arg(format!("{:.2}", args.train_test_id))
-        .arg("--cluster")
-        .arg("--onlysplit")
-        .arg("--mintest")
-        .arg(args.min_test.to_string())
-        .arg("--maxtest")
-        .arg(args.max_test.to_string())
-        .path(&name)
-        .path(src_sto);
-    exec::check(&cmd, None, "create-profmark")?;
+    run(
+        Command::new(tools::create_profmark()?)
+            .arg("-S")
+            .arg(args.seed.to_string())
+            .arg("-1")
+            .arg(format!("{:.2}", args.train_test_id))
+            .arg("--cluster")
+            .arg("--onlysplit")
+            .arg("--mintest")
+            .arg(args.min_test.to_string())
+            .arg("--maxtest")
+            .arg(args.max_test.to_string())
+            .arg(&name)
+            .arg(src_sto),
+        None,
+    )
+    .context("create-profmark")?;
 
     fs::rename(name.with_extension("train.msa"), pm_dir.join("query.sto"))?;
     fs::rename(name.with_extension("test.msa"), pm_dir.join("target.sto"))?;
     fs::remove_file(name.with_extension("tbl")).ok();
+
+    Ok(())
+}
+
+/// Run one setup command to completion, bailing with its stderr on failure.
+/// `stdout` redirects the child's stdout when a tool writes its result there
+/// rather than to a named output file.
+fn run(cmd: &mut Command, stdout: Option<File>) -> anyhow::Result<()> {
+    if let Some(out) = stdout {
+        cmd.stdout(out);
+    }
+
+    let output = cmd
+        .stderr(std::process::Stdio::piped())
+        .output()
+        .with_context(|| format!("failed to spawn {cmd:?}"))?;
+
+    if !output.status.success() {
+        bail!(
+            "{cmd:?} exited with {}: {}",
+            output.status,
+            String::from_utf8_lossy(&output.stderr)
+        );
+    }
 
     Ok(())
 }
