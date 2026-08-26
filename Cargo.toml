@@ -5,13 +5,9 @@ members = [
     "crates/bench",
     "crates/bioio",
     "crates/tools",
-    "benchmarks/cloud-search",
-    "benchmarks/hit-loss",
     "benchmarks/long-seqs",
-    "benchmarks/mgnify",
     "benchmarks/mgy",
     "benchmarks/pct-id",
-    "benchmarks/search-size",
 ]
 
 [workspace.dependencies]
