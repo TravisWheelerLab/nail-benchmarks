@@ -40,9 +40,10 @@ pub struct Args {
 }
 
 pub fn main(args: Args) -> anyhow::Result<()> {
-    let cutoffs_path = args
-        .cutoffs
-        .unwrap_or_else(|| crate::dir().join("../mgnify/cutoffs.txt"));
+    let cutoffs_path = match args.cutoffs {
+        Some(path) => path,
+        None => tools::mgy_cutoffs()?,
+    };
     let out = args
         .out
         .unwrap_or_else(|| args.bench_dir.join("funnel.tbl"));

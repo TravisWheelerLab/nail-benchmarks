@@ -1,15 +1,26 @@
 *.DS_Store
 /target/
 # downloaded data is not tracked, but long-seqs' inputs are small and checked
-# in — nothing fetches them, so ignoring them would empty a fresh clone
+# in — nothing fetches them, so ignoring them would empty a fresh clone. the
+# same goes for the cutoffs mgy holds every score against: learning them is a
+# calibration run, not a download
 /data/*
 !/data/long-seqs/
+!/data/mgy-cutoffs.txt
 /tools/
 # generated benchmark instances are benchmark-<size>/ or, for the crates with
 # no size axis, the bare name benchmark/. The trailing dash on the first form
 # matters, or this also swallows the benchmarks/ source tree.
 **/benchmark-*/
 **/benchmark/
+# mgy keeps its inputs and each pipeline's output at the crate root rather than
+# under a benchmark directory, so the generated ones are named one by one
+/benchmarks/mgy/queries/
+/benchmarks/mgy/targets/
+/benchmarks/mgy/recall/
+/benchmarks/mgy/cloud-search/
+/benchmarks/mgy/hit-loss/
+/benchmarks/mgy/cutoffs/
 **/figures*/
 **/profmark/
 **/results/

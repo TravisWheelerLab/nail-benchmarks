@@ -50,9 +50,10 @@ pub struct ScoresArgs {
 }
 
 fn scores(args: ScoresArgs) -> anyhow::Result<()> {
-    let cutoffs = args
-        .cutoffs
-        .unwrap_or_else(|| crate::dir().join("../mgnify/cutoffs.txt"));
+    let cutoffs = match args.cutoffs {
+        Some(path) => path,
+        None => tools::mgy_cutoffs()?,
+    };
     let out = args
         .out
         .unwrap_or_else(|| args.bench_dir.join("scores.tbl"));

@@ -121,3 +121,21 @@ pub fn swissprot() -> anyhow::Result<PathBuf> {
 pub fn mgnify() -> anyhow::Result<PathBuf> {
     data("mgnify")
 }
+
+/// The per-family score cutoffs mgy holds every hit against.
+///
+/// Not routed through [`data`]: this one is checked in rather than downloaded,
+/// so `make setup` has nothing to say about it being missing. A calibration run
+/// writes a replacement, which is then promoted here by hand.
+pub fn mgy_cutoffs() -> anyhow::Result<PathBuf> {
+    let path = repo().join("data/mgy-cutoffs.txt");
+
+    if !path.is_file() {
+        anyhow::bail!(
+            "missing {}; it is checked in, so a fresh clone should have it",
+            path.display()
+        );
+    }
+
+    Ok(path)
+}
