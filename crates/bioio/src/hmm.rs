@@ -101,6 +101,43 @@ pub fn parse_stats(path: impl AsRef<Path>) -> anyhow::Result<HashMap<String, Gum
         .collect())
 }
 
+/// Each model's name and the number of match states in it.
+///
+/// `LENG` is the profile's length: the query axis of a dynamic programming
+/// matrix, and so the honest measure of how much work a search against it is.
+/// Streams like everything else here -- callers want the two header fields,
+/// not the models.
+pub fn lengths(path: impl AsRef<Path>) -> anyhow::Result<HashMap<String, usize>> {
+    let path = path.as_ref();
+    let reader = BufReader::new(
+        std::fs::File::open(path).with_context(|| format!("failed to open {}", path.display()))?,
+    );
+
+    let mut out = HashMap::new();
+    let mut name: Option<String> = None;
+
+    for line in reader.lines() {
+        let line = line?;
+
+        if let Some(rest) = line.strip_prefix("NAME") {
+            name = Some(rest.trim().to_string());
+        } else if let Some(rest) = line.strip_prefix("LENG") {
+            // NAME comes before LENG in every model, so one is waiting by now
+            let name = name.take().with_context(|| {
+                format!("a LENG line with no NAME before it in {}", path.display())
+            })?;
+
+            let leng = rest.trim().parse().with_context(|| {
+                format!("bad LENG {:?} for {name} in {}", rest.trim(), path.display())
+            })?;
+
+            out.insert(name, leng);
+        }
+    }
+
+    Ok(out)
+}
+
 /// Copy the first `n` complete models of `src` into `dst`, returning their
 /// names.
 ///

@@ -14,7 +14,6 @@ mod cloud_search;
 mod cutoffs;
 mod hit_loss;
 mod inputs;
-mod manifest;
 mod parse;
 mod plot;
 mod recall;

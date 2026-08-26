@@ -1,4 +1,4 @@
-//! Runs every tool against the one target/query pair `pct-id build` made.
+//! Runs every tool against the one query/target set `pct-id build` made.
 //!
 //! nail and mmseqs sweep their prefilter sensitivity (`-s`); every other knob
 //! is fixed. Every tool but last and diamond runs in both profile mode
@@ -10,25 +10,19 @@
 
 use std::path::PathBuf;
 
-use anyhow::{bail, ensure, Context};
+use anyhow::{Context, bail, ensure};
 use clap::Parser;
 
-use pail::{Cmd, PipelineBuilder, Progress, Step, Table};
-use tools::{
-    blastp, diamond, hmmsearch, lastal, lastdb, makeblastdb, mmseqs, nail, phmmer, psiblast,
-};
+use bench::manifest;
+use bioio::split::Kind;
+use pail::{Cmd, OnError, Output, PipelineBuilder, Progress, Step, Table};
 
-// hmmsearch/phmmer scale poorly past a couple of threads, so the query set is
-// split threads/HMMER_CPU ways and the parts run at the same time
-const HMMER_CPU: usize = 2;
-
-// every tool but blast reports down to here, so they are comparable
-const EVALUE: &str = "1e9";
-const MAX_SEQS: &str = "2000";
+use crate::inputs::Inputs;
+use crate::search::{self, Bins, Dirs, MODE, PRF, SEQ, Split};
 
 #[derive(Parser, Debug)]
 pub struct Args {
-    /// Which benchmark to run, naming benchmark-<size>/.
+    /// Which input set to search, naming inputs/<size>/.
     #[arg(short, long, default_value = "toy")]
     pub size: String,
 
@@ -54,9 +48,6 @@ pub struct Args {
     pub threads: usize,
 
     #[arg(long)]
-    pub results: Option<PathBuf>,
-
-    #[arg(long)]
     pub tmp: Option<PathBuf>,
 
     #[arg(long)]
@@ -65,8 +56,9 @@ pub struct Args {
 
 pub fn main(args: Args) -> anyhow::Result<()> {
     ensure!(
-        args.threads.is_multiple_of(HMMER_CPU),
-        "--threads needs to be a multiple of {HMMER_CPU} (for hmmer)"
+        args.threads.is_multiple_of(search::HMMER_CPU),
+        "--threads needs to be a multiple of {} (for hmmer)",
+        search::HMMER_CPU
     );
     ensure!(!args.nail_s.is_empty(), "--nail-s needs at least one value");
     ensure!(
@@ -74,119 +66,82 @@ pub fn main(args: Args) -> anyhow::Result<()> {
         "--mmseqs-s needs at least one value"
     );
 
-    let dir = crate::dir();
-    let bench_dir = dir.join(format!("benchmark-{}", args.size));
-    if !bench_dir.is_dir() {
+    let bins = Bins::find()?;
+
+    let set = Inputs::new(&args.size);
+    if !set.exists() {
         bail!(
-            "benchmark directory {} does not exist; run `pct-id build --size {}` first",
-            bench_dir.display(),
+            "{} does not exist; run `pct-id build --size {}` first",
+            set.dir().display(),
             args.size
         );
     }
-    // absolute, so the argv column of runs.tbl can be pasted into a shell
-    let bench_dir = bench_dir.canonicalize()?;
 
-    let results = args
-        .results
-        .unwrap_or_else(|| bench_dir.join("results"));
-    let tmp = args.tmp.unwrap_or_else(|| bench_dir.join("tmp"));
-
-    // a rerun's stale results and scratch would otherwise sit alongside the
-    // new ones, and mmseqs refuses to overwrite an existing alignment db
-    if !args.dry_run {
-        std::fs::remove_dir_all(&results).ok();
-        std::fs::remove_dir_all(&tmp).ok();
+    let mut dirs = Dirs::new(&set);
+    if let Some(tmp) = args.tmp {
+        dirs.tmp = tmp;
     }
 
-    let query_hmm = bench_dir.join("query.hmm");
-    let query_sto = bench_dir.join("query.sto");
-    let query_fa = bench_dir.join("query.fa");
-    let target_fa = bench_dir.join("target.fa");
-    let afa_dir = bench_dir.join("afa");
+    let (query_hmm, query_fa) = (set.query_hmm(), set.query_fa());
+    let target_fa = set.target_fa();
 
-    let nail_bin = nail()?;
-    let mmseqs_bin = mmseqs()?;
-    let hmmsearch_bin = hmmsearch()?;
-    let phmmer_bin = phmmer()?;
-    let blastp_bin = blastp()?;
-    let psiblast_bin = psiblast()?;
-    let makeblastdb_bin = makeblastdb()?;
-    let lastal_bin = lastal()?;
-    let lastdb_bin = lastdb()?;
-    let diamond_bin = diamond()?;
-
-    let mmseqs_dir = tmp.join("mmseqs");
+    let mmseqs_dir = dirs.tmp.join("mmseqs");
     let target_db = mmseqs_dir.join("targetDB/targetDB");
     let query_prf_db = mmseqs_dir.join("queryDB-prf/queryDB");
     let query_seq_db = mmseqs_dir.join("queryDB-seq/queryDB");
     let msa_db = mmseqs_dir.join("msaDB/msaDB");
-    let blast_db = tmp.join("blast/db");
-    let last_db = tmp.join("last/db");
-    let diamond_db = tmp.join("diamond/db");
-
-    // how many ways the query splits is settled by the thread count, and
-    // write_splits names the parts after their index, so the batch below can
-    // be written without waiting to see what the split produced
-    let hmmer_jobs = args.threads / HMMER_CPU;
-
-    let mut afa: Vec<PathBuf> = std::fs::read_dir(&afa_dir)
-        .with_context(|| format!("failed to read {}", afa_dir.display()))?
-        .filter_map(|e| e.ok().map(|e| e.path()))
-        .filter(|p| p.extension().is_some_and(|e| e == "afa"))
-        .collect();
-    afa.sort();
-    if afa.is_empty() {
-        bail!("no .afa files in {}", afa_dir.display());
-    }
+    let blast_db = dirs.tmp.join("blast/db");
+    let last_db = dirs.tmp.join("last/db");
+    let diamond_db = dirs.tmp.join("diamond/db");
 
     let mut pl = PipelineBuilder::new()
+        .step(dirs.clean())
         .step(
             Cmd::new("mkdir")
                 .name("dirs")
                 .flag("-p")
-                .path(&results)
-                .path(target_db.parent().unwrap())
-                .path(query_prf_db.parent().unwrap())
-                .path(query_seq_db.parent().unwrap())
-                .path(msa_db.parent().unwrap())
-                .path(blast_db.parent().unwrap())
-                .path(last_db.parent().unwrap())
-                .path(diamond_db.parent().unwrap()),
+                .path(target_db.parent().expect("targetDB has a parent"))
+                .path(query_prf_db.parent().expect("queryDB has a parent"))
+                .path(query_seq_db.parent().expect("queryDB has a parent"))
+                .path(msa_db.parent().expect("msaDB has a parent"))
+                .path(blast_db.parent().expect("blast db has a parent"))
+                .path(last_db.parent().expect("last db has a parent"))
+                .path(diamond_db.parent().expect("diamond db has a parent")),
         )
         .step(
             Step::serial([
-                Cmd::new(&mmseqs_bin)
+                Cmd::new(&bins.mmseqs)
                     .name("createdb-target")
                     .sub("createdb")
                     .path(&target_fa)
                     .path(&target_db),
-                Cmd::new(&mmseqs_bin)
+                Cmd::new(&bins.mmseqs)
                     .name("createdb-query-seq")
                     .sub("createdb")
                     .path(&query_fa)
                     .path(&query_seq_db),
-                Cmd::new(&mmseqs_bin)
+                Cmd::new(&bins.mmseqs)
                     .name("convertmsa")
                     .sub("convertmsa")
-                    .path(&query_sto)
+                    .path(set.query_sto())
                     .path(&msa_db)
                     .arg("--identifier-field", 0),
-                Cmd::new(&mmseqs_bin)
+                Cmd::new(&bins.mmseqs)
                     .name("msa2profile")
                     .sub("msa2profile")
                     .path(&msa_db)
                     .path(&query_prf_db)
                     .arg("--match-mode", 1),
-                Cmd::new(&makeblastdb_bin)
+                Cmd::new(&bins.makeblastdb)
                     .name("makeblastdb")
                     .arg("-in", &target_fa)
                     .arg("-dbtype", "prot")
                     .arg("-out", &blast_db),
-                Cmd::new(&lastdb_bin)
+                Cmd::new(&bins.lastdb)
                     .name("lastdb")
                     .arg("-p", &last_db)
                     .path(&target_fa),
-                Cmd::new(&diamond_bin)
+                Cmd::new(&bins.diamond)
                     .name("diamond-makedb")
                     .sub("makedb")
                     .arg("--in", &target_fa)
@@ -198,118 +153,92 @@ pub fn main(args: Args) -> anyhow::Result<()> {
     // ---------------------------------------------------------------- nail
 
     for &s in &args.nail_s {
-        for (mode, query) in [("prf", &query_hmm), ("seq", &query_fa)] {
-            let name = format!("nail-s{s:.1}-ms{MAX_SEQS}.{mode}");
+        for (mode, query) in [(PRF, &query_hmm), (SEQ, &query_fa)] {
+            let name = format!("nail-s{s:.1}-ms{}.{mode}", search::MAX_SEQS);
 
             pl = pl.step(
-                Step::serial([Cmd::new(&nail_bin)
+                Step::serial([Cmd::new(&bins.nail)
                     .sub("search")
-                    .arg("--mmseqs-path", &mmseqs_bin)
+                    .arg("--mmseqs-path", &bins.mmseqs)
                     .arg("-t", args.threads)
-                    .arg("--tmp-dir", tmp.join(&name))
+                    .arg("--tmp-dir", dirs.tmp.join(&name))
                     .flag("--allow-overwrite")
                     .arg("--mmseqs-s", format!("{s:.1}"))
-                    .arg("--mmseqs-max-seqs", MAX_SEQS)
-                    .arg("-E", EVALUE)
-                    .arg("--tbl-out", results.join(format!("{name}.tbl")))
+                    .arg("--mmseqs-max-seqs", search::MAX_SEQS)
+                    .arg("-E", search::EVALUE)
+                    .arg("--tbl-out", dirs.table(&name))
                     .path(query)
                     .path(&target_fa)
-                    .field("name", &name)])
+                    .field(manifest::NAME, &name)
+                    .field(manifest::TOOL, "nail")
+                    .field(MODE, mode)
+                    .field("s", format!("{s:.1}"))])
                 .name(name),
             );
         }
     }
 
     // -------------------------------------------------------------- hmmer
+    //
+    // hmmsearch reads profiles and phmmer reads sequences, so the two modes are
+    // two programs rather than one program with a flag.
 
-    for (mode, program, query) in [
-        ("prf", &hmmsearch_bin, &query_hmm),
-        ("seq", &phmmer_bin, &query_fa),
+    for (mode, tool, program, query, kind) in [
+        (PRF, "hmmer", &bins.hmmsearch, &query_hmm, Kind::Hmm),
+        (SEQ, "phmmer", &bins.phmmer, &query_fa, Kind::Fasta),
     ] {
         let name = format!("hmmer.{mode}");
-        let kind = if mode == "prf" {
-            bioio::split::Kind::Hmm
-        } else {
-            bioio::split::Kind::Fasta
-        };
+        let split = Split::new(
+            query,
+            kind,
+            dirs.tmp.join(format!("{name}-parts")),
+            search::jobs(args.threads),
+        );
 
-        let parts_dir = tmp.join(format!("{name}-parts"));
-        let parts = bioio::split::write_splits(query, kind, hmmer_jobs, &parts_dir)?;
+        let hmmer = search::hmmer(
+            program,
+            &split,
+            &dirs,
+            search::Run {
+                name: &name,
+                tool,
+                mode,
+            },
+            &target_fa,
+            args.threads,
+        );
 
         pl = pl
-            .step(
-                Step::batched(
-                    parts.len(),
-                    parts.iter().enumerate().map(|(i, part)| {
-                        Cmd::new(program)
-                            .name(i.to_string())
-                            .arg("--cpu", HMMER_CPU)
-                            .arg("-E", EVALUE)
-                            .arg("-o", "/dev/null")
-                            .arg("--tblout", parts_dir.join(format!("{i}.tbl")))
-                            .arg("--domtblout", parts_dir.join(format!("{i}.domtbl")))
-                            .path(part)
-                            .path(&target_fa)
-                    }),
-                )
-                .name(&name),
-            )
-            .step(
-                Step::serial([cat(
-                    (0..parts.len()).map(|i| parts_dir.join(format!("{i}.tbl"))),
-                    results.join(format!("{name}.tbl")),
-                )
-                .field("name", &name)])
-                .name(format!("{name}.cat")),
-            );
+            .step(split.step(&name))
+            .step(hmmer.search)
+            .step(hmmer.cat);
     }
 
     // ------------------------------------------------------------- mmseqs
 
     for &s in &args.mmseqs_s {
-        for (mode, query_db) in [("prf", &query_prf_db), ("seq", &query_seq_db)] {
-            let name = format!("mmseqs-s{s:.1}-ms{MAX_SEQS}.{mode}");
-            let aln_db = tmp.join(format!("{name}/alnDB"));
-            let work = tmp.join(format!("{name}/work"));
+        for (mode, query_db) in [(PRF, &query_prf_db), (SEQ, &query_seq_db)] {
+            let name = format!("mmseqs-s{s:.1}-ms{}.{mode}", search::MAX_SEQS);
 
-            pl = pl.step(
-                Step::serial([
-                    // mmseqs aborts rather than overwrite an existing
-                    // alignment db, so a leftover from an earlier run has to
-                    // go before this one can start
-                    Cmd::new("rm")
-                        .name("clean")
-                        .flag("-rf")
-                        .path(aln_db.parent().unwrap())
-                        .path(&work),
-                    Cmd::new("mkdir")
-                        .name("dirs")
-                        .flag("-p")
-                        .path(aln_db.parent().unwrap())
-                        .path(&work),
-                    Cmd::new(&mmseqs_bin)
-                        .name("search")
-                        .sub("search")
-                        .path(query_db)
-                        .path(&target_db)
-                        .path(&aln_db)
-                        .path(&work)
-                        .arg("--threads", args.threads)
-                        .arg("-s", format!("{s:.1}"))
-                        .arg("--max-seqs", MAX_SEQS)
-                        .arg("-e", EVALUE),
-                    Cmd::new(&mmseqs_bin)
-                        .name("convertalis")
-                        .sub("convertalis")
-                        .path(query_db)
-                        .path(&target_db)
-                        .path(&aln_db)
-                        .path(results.join(format!("{name}.tbl")))
-                        .arg("--format-mode", 0)
-                        .field("name", &name),
-                ])
-                .name(name),
-            );
+            let cmds = search::Mmseqs {
+                bin: &bins.mmseqs,
+                query_db,
+                target_db: &target_db,
+                scratch: dirs.tmp.join(&name),
+                out: dirs.table(&name),
+                threads: args.threads,
+                s: format!("{s:.1}"),
+            }
+            .cmds();
+
+            let searched = cmds.search.map(|cmd| {
+                cmd.field(manifest::NAME, &name)
+                    .field(manifest::TOOL, "mmseqs")
+                    .field(MODE, mode)
+                    .field("s", format!("{s:.1}"))
+            });
+
+            pl = pl.step(Step::serial(cmds.prep.into_iter().chain(searched)).name(name));
         }
     }
 
@@ -318,22 +247,24 @@ pub fn main(args: Args) -> anyhow::Result<()> {
     // sequence mode: one blastp call. deliberately no -evalue: matching the
     // other tools' 1e9 makes blast dramatically slower for no extra recall
     pl = pl.step(
-        Step::serial([Cmd::new(&blastp_bin)
+        Step::serial([Cmd::new(&bins.blastp)
             .arg("-query", &query_fa)
             .arg("-db", &blast_db)
-            .arg("-out", results.join("blast.seq.tbl"))
+            .arg("-out", dirs.table("blast.seq"))
             .arg("-outfmt", 6)
             .arg("-num_threads", args.threads)
-            .field("name", "blast.seq")])
+            .field(manifest::NAME, "blast.seq")
+            .field(manifest::TOOL, "blast")
+            .field(MODE, SEQ)])
         .name("blast.seq"),
     );
 
     // profile mode: psiblast takes one alignment at a time, so a run is one
     // invocation per family, output collected into a single table
-    let blast_prf_tbl = results.join("blast.prf.tbl");
+    let blast_prf_tbl = dirs.table("blast.prf");
     pl = pl.step(
-        Step::serial(afa.iter().enumerate().map(|(i, msa)| {
-            let cmd = Cmd::new(&psiblast_bin)
+        Step::serial(set.afa_files()?.iter().enumerate().map(|(i, msa)| {
+            let cmd = Cmd::new(&bins.psiblast)
                 .name(
                     msa.file_stem()
                         .and_then(|s| s.to_str())
@@ -346,34 +277,37 @@ pub fn main(args: Args) -> anyhow::Result<()> {
                 .arg("-num_threads", args.threads)
                 .arg("-comp_based_stats", 1)
                 .arg("-num_iterations", 1)
-                // one family's search is a fraction of the run, not a
-                // separate run of its own, so its wall time is summed into
-                // blast.prf's rather than reported as its own name
-                .field("name", "blast.prf");
+                // one family's search is a fraction of the run, not a separate
+                // run of its own, so its wall time is summed into blast.prf's
+                // rather than reported as its own name
+                .field(manifest::NAME, "blast.prf")
+                .field(manifest::TOOL, "blast")
+                .field(MODE, PRF);
 
             // the first invocation truncates whatever an earlier run left
             // behind; the rest append to it
-            if i == 0 {
-                cmd.stdout_to(&blast_prf_tbl)
-            } else {
-                cmd.stdout(pail::Output::Append(blast_prf_tbl.clone()))
+            match i {
+                0 => cmd.stdout_to(&blast_prf_tbl),
+                _ => cmd.stdout(Output::Append(blast_prf_tbl.clone())),
             }
         }))
         .name("blast.prf")
-        .on_error(pail::OnError::Continue),
+        .on_error(OnError::Continue),
     );
 
     // ---------------------------------------------------------------- last
 
     pl = pl.step(
-        Step::serial([Cmd::new(&lastal_bin)
+        Step::serial([Cmd::new(&bins.lastal)
             .path(&last_db)
             .path(&query_fa)
             .arg("-f", "BlastTab")
             .arg("-P", args.threads)
-            .arg("-E", EVALUE)
-            .stdout_to(results.join("last.seq.tbl"))
-            .field("name", "last.seq")])
+            .arg("-E", search::EVALUE)
+            .stdout_to(dirs.table("last.seq"))
+            .field(manifest::NAME, "last.seq")
+            .field(manifest::TOOL, "last")
+            .field(MODE, SEQ)])
         .name("last.seq"),
     );
 
@@ -381,15 +315,18 @@ pub fn main(args: Args) -> anyhow::Result<()> {
 
     for preset in ["default", "ultra-sensitive"] {
         let name = format!("diamond-{preset}.seq");
-        let mut cmd = Cmd::new(&diamond_bin)
+        let mut cmd = Cmd::new(&bins.diamond)
             .sub("blastp")
             .arg("--query", &query_fa)
             .arg("--db", &diamond_db)
-            .arg("--out", results.join(format!("{name}.tbl")))
+            .arg("--out", dirs.table(&name))
             .arg("--outfmt", 6)
             .arg("--threads", args.threads)
-            .arg("--evalue", EVALUE)
-            .field("name", &name);
+            .arg("--evalue", search::EVALUE)
+            .field(manifest::NAME, &name)
+            .field(manifest::TOOL, "diamond")
+            .field(MODE, SEQ)
+            .field("preset", preset);
 
         if preset == "ultra-sensitive" {
             cmd = cmd.flag("--ultra-sensitive");
@@ -399,9 +336,9 @@ pub fn main(args: Args) -> anyhow::Result<()> {
     }
 
     let pipeline = pl
-        .stderr_dir(tmp.join("stderr"))
+        .stderr_dir(dirs.tmp.join("stderr"))
         .sink(Progress::new())
-        .sink(Table::new(results.join("runs.tbl")))
+        .sink(Table::new(dirs.root.join("manifest.tbl")))
         .build()
         .context("failed to build the run")?;
 
@@ -411,12 +348,4 @@ pub fn main(args: Args) -> anyhow::Result<()> {
     }
 
     pipeline.run()
-}
-
-/// There's no shell to expand a glob, so the parts get named one by one.
-fn cat(parts: impl IntoIterator<Item = PathBuf>, into: PathBuf) -> Cmd {
-    parts
-        .into_iter()
-        .fold(Cmd::new("cat"), |cmd, part| cmd.path(part))
-        .stdout_to(into)
 }

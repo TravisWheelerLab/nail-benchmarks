@@ -2,16 +2,13 @@
 //! in a Swissprot decoy background.
 
 mod build;
+mod inputs;
 mod parse;
+mod plot;
 mod run;
-
-use std::path::PathBuf;
+mod search;
 
 use clap::{Parser, Subcommand};
-
-pub fn dir() -> PathBuf {
-    PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-}
 
 #[derive(Parser)]
 #[command(name = "pct-id", about = "percent-identity benchmark")]
@@ -22,13 +19,15 @@ struct Cli {
 
 #[derive(Subcommand)]
 enum Command {
-    /// Assemble a benchmark directory from the profmark split.
+    /// Assemble an input set from the profmark split.
     Build(build::Args),
     /// Search every tool against the benchmark.
     Run(run::Args),
     /// Turn results into the tables the plot scripts consume.
     #[command(subcommand)]
     Parse(parse::Cmd),
+    /// Draw the figures from what parse wrote.
+    Plot(plot::Args),
 }
 
 fn main() -> anyhow::Result<()> {
@@ -36,5 +35,6 @@ fn main() -> anyhow::Result<()> {
         Command::Build(args) => build::main(args),
         Command::Run(args) => run::main(args),
         Command::Parse(cmd) => parse::main(cmd),
+        Command::Plot(args) => plot::main(args),
     }
 }

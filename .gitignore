@@ -19,6 +19,9 @@
 /benchmarks/mgy/targets/
 /benchmarks/mgy/runs/
 /benchmarks/mgy/cutoffs/
+# pct-id keeps the same shape: one input set per size, one run directory each
+/benchmarks/pct-id/inputs/
+/benchmarks/pct-id/runs/
 **/figures*/
 **/profmark/
 **/results/

@@ -8,6 +8,7 @@ name = "pct-id"
 path = "src/main.rs"
 
 [dependencies]
+bench = { workspace = true }
 bioio = { workspace = true }
 pail = { workspace = true }
 tools = { workspace = true }

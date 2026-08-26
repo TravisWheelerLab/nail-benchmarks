@@ -1,19 +1,32 @@
+//! Assembles one benchmark: Pfam families split by identity, hidden in a
+//! Swissprot decoy background.
+//!
+//! Everything external goes through the pipeline -- create-profmark, hmmbuild,
+//! hmmemit -- so the build gets `--dry-run`, keeps the stderr of whatever
+//! failed, and prints what it is doing while it does it. The assembly itself is
+//! Rust, so it is a closure step in the same pipeline rather than something
+//! that happens beside it.
+//!
+//! The profmark split is drawn once and shared: it depends only on Pfam and the
+//! split parameters, and it is the expensive half.
+
 use std::collections::{HashMap, HashSet};
 use std::fs::{self, File};
 use std::io::{BufWriter, Write};
-use std::path::{Path, PathBuf};
+use std::path::Path;
 
-use anyhow::{bail, Context};
+use anyhow::{Context, bail};
 use clap::Parser;
 
 use bioio::fasta::{Fasta, FastaRecord};
 use bioio::stockholm::Stockholm;
+use pail::{Closure, Cmd, PipelineBuilder, Progress, Step};
 
+use rand::SeedableRng;
 use rand::rngs::StdRng;
 use rand::seq::IndexedRandom;
-use rand::SeedableRng;
 
-use std::process::Command;
+use crate::inputs::{self, Inputs};
 
 /// Decoys per true pair in the target database.
 const DECOY_RATIO: usize = 100;
@@ -41,7 +54,7 @@ static AMINO: [bool; 256] = {
 
 #[derive(Parser, Debug)]
 pub struct Args {
-    /// Names the output directory benchmark-<size>/.
+    /// Names the input set, under inputs/<size>/.
     #[arg(short, long, default_value = "toy")]
     pub size: String,
 
@@ -74,129 +87,114 @@ pub struct Args {
     #[arg(short, long, default_value_t = 8)]
     pub threads: usize,
 
+    #[arg(long)]
+    pub dry_run: bool,
 }
 
 pub fn main(args: Args) -> anyhow::Result<()> {
-    let dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
-
     let src_sto = tools::pfam_sto()?;
     let src_fa = tools::swissprot()?;
 
-    // ---- profmark split (shared across sizes) ----
+    // resolved up front: the assembly takes long enough that finding out about
+    // a missing hmmbuild afterwards would be miserable
+    let hmmbuild = tools::hmmbuild()?;
+    let hmmemit = tools::hmmemit()?;
 
-    let pm_dir = dir.join("profmark");
-    let query_sto = pm_dir.join("query.sto");
-    let target_sto = pm_dir.join("target.sto");
+    let set = Inputs::new(&args.size);
 
-    if args.refresh_profmark || !query_sto.exists() || !target_sto.exists() {
-        run_profmark(&pm_dir, &src_sto, &args)?;
-    } else {
-        println!("reusing profmark split in {}", pm_dir.display());
+    let pm = inputs::profmark();
+    let split = args.refresh_profmark
+        || !inputs::profmark_query().exists()
+        || !inputs::profmark_target().exists();
+
+    if !split {
+        println!("reusing the profmark split in {}", pm.display());
     }
 
-    // ---- benchmark assembly ----
+    let mut pl = PipelineBuilder::new().step(
+        Cmd::new("mkdir")
+            .name("dirs")
+            .flag("-p")
+            .path(&pm)
+            .path(set.afa()),
+    );
 
-    let bench_dir = dir.join(format!("benchmark-{}", args.size));
-    if bench_dir.exists() {
-        fs::remove_dir_all(&bench_dir)?;
-    }
-    fs::create_dir_all(&bench_dir)?;
+    if split {
+        // --onlysplit names its output after the run, so the two halves are
+        // renamed into the names everything downstream reads
+        let stem = pm.join("benchmark");
 
-    let max_pairs = if args.pairs == 0 {
-        None
-    } else {
-        Some(args.pairs)
-    };
-
-    assemble(
-        &bench_dir,
-        &query_sto,
-        &target_sto,
-        &src_sto,
-        &src_fa,
-        max_pairs,
-        args.seed,
-    )?;
-
-    // ---- profile construction ----
-
-    println!("building query.hmm...");
-    run(
-        Command::new(tools::hmmbuild()?)
-            .arg("--cpu")
-            .arg(args.threads.to_string())
-            .arg(bench_dir.join("query.hmm"))
-            .arg(bench_dir.join("query.sto")),
-        None,
-    )
-    .context("hmmbuild")?;
-
-    println!("building query.cons.fa...");
-    let cons = File::create(bench_dir.join("query.cons.fa"))
-        .context("failed to create query.cons.fa")?;
-    run(
-        Command::new(tools::hmmemit()?)
-            .arg("-c")
-            .arg(bench_dir.join("query.hmm")),
-        Some(cons),
-    )
-    .context("hmmemit")?;
-
-    println!("\nbuilt {}", bench_dir.display());
-    Ok(())
-}
-
-fn run_profmark(pm_dir: &Path, src_sto: &Path, args: &Args) -> anyhow::Result<()> {
-    println!("running create-profmark (this takes a while)...");
-    fs::create_dir_all(pm_dir)?;
-
-    let name = pm_dir.join("benchmark");
-    run(
-        Command::new(tools::create_profmark()?)
-            .arg("-S")
-            .arg(args.seed.to_string())
-            .arg("-1")
-            .arg(format!("{:.2}", args.train_test_id))
-            .arg("--cluster")
-            .arg("--onlysplit")
-            .arg("--mintest")
-            .arg(args.min_test.to_string())
-            .arg("--maxtest")
-            .arg(args.max_test.to_string())
-            .arg(&name)
-            .arg(src_sto),
-        None,
-    )
-    .context("create-profmark")?;
-
-    fs::rename(name.with_extension("train.msa"), pm_dir.join("query.sto"))?;
-    fs::rename(name.with_extension("test.msa"), pm_dir.join("target.sto"))?;
-    fs::remove_file(name.with_extension("tbl")).ok();
-
-    Ok(())
-}
-
-/// Run one setup command to completion, bailing with its stderr on failure.
-/// `stdout` redirects the child's stdout when a tool writes its result there
-/// rather than to a named output file.
-fn run(cmd: &mut Command, stdout: Option<File>) -> anyhow::Result<()> {
-    if let Some(out) = stdout {
-        cmd.stdout(out);
+        pl = pl
+            .step(
+                Step::serial([Cmd::new(tools::create_profmark()?)
+                    .name("create-profmark")
+                    .arg("-S", args.seed)
+                    .arg("-1", format!("{:.2}", args.train_test_id))
+                    .flag("--cluster")
+                    .flag("--onlysplit")
+                    .arg("--mintest", args.min_test)
+                    .arg("--maxtest", args.max_test)
+                    .path(&stem)
+                    .path(&src_sto)])
+                .name("profmark"),
+            )
+            .step(
+                Step::from_closures([Closure::new("rename", move || {
+                    fs::rename(stem.with_extension("train.msa"), inputs::profmark_query())?;
+                    fs::rename(stem.with_extension("test.msa"), inputs::profmark_target())?;
+                    fs::remove_file(stem.with_extension("tbl")).ok();
+                    Ok(())
+                })])
+                .name("rename"),
+            );
     }
 
-    let output = cmd
-        .stderr(std::process::Stdio::piped())
-        .output()
-        .with_context(|| format!("failed to spawn {cmd:?}"))?;
+    let pipeline = pl
+        .step(
+            Step::from_closures([Closure::new("assemble", {
+                let set = Inputs::new(&args.size);
+                let (pairs, seed) = (args.pairs, args.seed);
 
-    if !output.status.success() {
-        bail!(
-            "{cmd:?} exited with {}: {}",
-            output.status,
-            String::from_utf8_lossy(&output.stderr)
-        );
+                move || assemble(&set, &src_sto, &src_fa, (pairs > 0).then_some(pairs), seed)
+            })])
+            .name("assemble"),
+        )
+        .step(
+            Step::serial([Cmd::new(&hmmbuild)
+                .name("hmmbuild")
+                .arg("--cpu", args.threads)
+                .path(set.query_hmm())
+                .path(set.query_sto())])
+            .name("profiles"),
+        )
+        .step(
+            Step::serial([Cmd::new(&hmmemit)
+                .name("hmmemit")
+                .flag("-c")
+                .path(set.query_hmm())
+                .stdout_to(set.query_cons())])
+            .name("consensus"),
+        )
+        .stderr_dir(set.run_dir().join("tmp/stderr"))
+        .sink(Progress::new())
+        .build()
+        .context("failed to build the assembly")?;
+
+    if args.dry_run {
+        pipeline.dry_run();
+        return Ok(());
     }
 
+    // a rebuild in place would leave the last assembly's families alongside
+    // this one's in afa/, and psiblast searches the directory
+    if set.exists() {
+        fs::remove_dir_all(set.dir())
+            .with_context(|| format!("failed to clear {}", set.dir().display()))?;
+    }
+
+    pipeline.run()?;
+
+    println!("\nbuilt {}", set.dir().display());
     Ok(())
 }
 
@@ -208,29 +206,26 @@ struct Pair {
     target: String,
 }
 
-/// Assemble a benchmark from a profmark train/test split.
+/// Assemble a benchmark from the profmark train/test split.
 ///
-/// The RNG is seeded from the config rather than from entropy, so a given size
-/// and seed reproduce the same benchmark.
-#[allow(clippy::too_many_arguments)]
+/// The RNG is seeded from the arguments rather than from entropy, so a given
+/// size and seed reproduce the same benchmark.
 fn assemble(
-    bench_dir: &Path,
-    query_sto_path: &Path,
-    target_sto_path: &Path,
+    set: &Inputs,
     src_sto_path: &Path,
     src_fa_path: &Path,
     max_pairs: Option<usize>,
     seed: u64,
 ) -> anyhow::Result<()> {
     println!("loading alignments...");
-    let mut query_sto =
-        Stockholm::from_path(query_sto_path).context("failed to parse query sto")?;
-    let mut target_sto =
-        Stockholm::from_path(target_sto_path).context("failed to parse target sto")?;
+    let mut query_sto = Stockholm::from_path(inputs::profmark_query())
+        .context("failed to parse the profmark query split")?;
+    let mut target_sto = Stockholm::from_path(inputs::profmark_target())
+        .context("failed to parse the profmark target split")?;
     let src_sto = Stockholm::from_path(src_sto_path).context("failed to parse source sto")?;
     let src_fa = Fasta::from_path(src_fa_path).context("failed to parse source fasta")?;
 
-    let afa_dir = bench_dir.join("afa");
+    let afa_dir = set.afa();
 
     if target_sto.records.len() != query_sto.records.len() {
         bail!(
@@ -386,9 +381,8 @@ fn assemble(
 
     println!("{} benchmark pairs", pairs.len());
 
-    let mut tbl_writer = BufWriter::new(
-        File::create(bench_dir.join("benchmark.tbl")).context("failed to open benchmark.tbl")?,
-    );
+    let mut tbl_writer =
+        BufWriter::new(File::create(set.benchmark_tbl()).context("failed to open benchmark.tbl")?);
     writeln!(tbl_writer, "#identity family target query")?;
 
     let mut targets: Vec<FastaRecord> = Vec::new();
@@ -426,13 +420,13 @@ fn assemble(
     }
 
     let mut target_writer =
-        BufWriter::new(File::create(bench_dir.join("target.fa")).context("failed to open target.fa")?);
+        BufWriter::new(File::create(set.target_fa()).context("failed to open target.fa")?);
     targets
         .iter()
         .try_for_each(|t| writeln!(target_writer, "{t}"))?;
 
     let mut query_fa_writer =
-        BufWriter::new(File::create(bench_dir.join("query.fa")).context("failed to open query.fa")?);
+        BufWriter::new(File::create(set.query_fa()).context("failed to open query.fa")?);
 
     let mut queries = queries.into_iter().collect::<Vec<_>>();
     queries.sort_by(|a, b| a.name.cmp(&b.name));
@@ -440,9 +434,8 @@ fn assemble(
         .iter()
         .try_for_each(|q| writeln!(query_fa_writer, "{q}"))?;
 
-    let mut query_sto_writer = BufWriter::new(
-        File::create(bench_dir.join("query.sto")).context("failed to open query.sto")?,
-    );
+    let mut query_sto_writer =
+        BufWriter::new(File::create(set.query_sto()).context("failed to open query.sto")?);
     fs::create_dir_all(&afa_dir)?;
 
     let query_names = queries

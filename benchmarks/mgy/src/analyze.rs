@@ -12,7 +12,9 @@
 use std::collections::BTreeSet;
 use std::path::Path;
 
-use anyhow::{Context, ensure};
+use anyhow::ensure;
+
+use bench::tbl;
 
 use crate::scores::{Scores, Tool};
 
@@ -105,7 +107,15 @@ pub fn summary(scores: &Scores, out: &Path) -> anyhow::Result<()> {
         })
         .collect();
 
-    write(out, &meta(scores, hmmer, truth), &headers, &cells)
+    tbl::write(
+        out,
+        tbl::Table {
+            meta: &meta(scores, hmmer, truth),
+            headers: &headers,
+            rows: &cells,
+            ragged_last: false,
+        },
+    )
 }
 
 /// Where the hits hmmer found are lost, for every run that isn't hmmer's.
@@ -181,7 +191,15 @@ pub fn funnel(scores: &Scores, out: &Path) -> anyhow::Result<()> {
         "nothing but hmmer ran, so there is no pipeline to trace"
     );
 
-    write(out, &meta(scores, hmmer, truth), &headers, &cells)
+    tbl::write(
+        out,
+        tbl::Table {
+            meta: &meta(scores, hmmer, truth),
+            headers: &headers,
+            rows: &cells,
+            ragged_last: false,
+        },
+    )
 }
 
 fn frac(n: usize, of: usize) -> f64 {
@@ -231,53 +249,4 @@ fn meta(scores: &Scores, hmmer: usize, truth: usize) -> String {
         "",
         seed_wall_s,
     )
-}
-
-/// A padded table under a `#` header, the way every other table here is
-/// written: the rule under the header is dashes, and a row's cells sit under
-/// the names rather than beside them.
-fn write(path: &Path, meta: &str, headers: &[String], cells: &[Vec<String>]) -> anyhow::Result<()> {
-    let widths: Vec<usize> = headers
-        .iter()
-        .enumerate()
-        .map(|(i, h)| {
-            cells
-                .iter()
-                .map(|c| c[i].len())
-                .chain(std::iter::once(h.len()))
-                .max()
-                .unwrap_or(0)
-        })
-        .collect();
-
-    let mut out = meta.to_string();
-
-    out.push('#');
-    for (h, &w) in headers.iter().zip(&widths) {
-        out.push_str(&format!(" {h:<w$}"));
-    }
-
-    out.push_str("\n#");
-    for &w in &widths {
-        out.push_str(&format!(" {}", "-".repeat(w)));
-    }
-    out.push('\n');
-
-    for row in cells {
-        // the two the `# ` takes on a header line
-        out.push_str("  ");
-        for (i, (c, &w)) in row.iter().zip(&widths).enumerate() {
-            if i > 0 {
-                out.push(' ');
-            }
-            out.push_str(&format!("{c:<w$}"));
-        }
-        out.push('\n');
-    }
-
-    if let Some(parent) = path.parent() {
-        std::fs::create_dir_all(parent).context("failed to make the output directory")?;
-    }
-
-    std::fs::write(path, out).with_context(|| format!("failed to write {}", path.display()))
 }

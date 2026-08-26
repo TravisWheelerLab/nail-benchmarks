@@ -25,6 +25,7 @@ use rand::SeedableRng;
 use rand::rngs::StdRng;
 use rand::seq::SliceRandom;
 
+use bench::tbl;
 use bioio::aggregate::AggregateFasta;
 use bioio::split::{self, Kind as SplitKind};
 use bioio::{fasta, hmm, stockholm};
@@ -404,12 +405,12 @@ struct Size {
 /// measured at parse time from the files that are present, and a second copy
 /// here would be a second thing to keep true.
 fn write_sizes(path: &Path, rows: &[Size]) -> anyhow::Result<()> {
-    let headers = ["rung", "residues", "bytes"];
+    let headers = ["rung", "residues", "bytes"].map(str::to_string).to_vec();
 
-    let cells: Vec<[String; 3]> = rows
+    let cells: Vec<Vec<String>> = rows
         .iter()
         .map(|r| {
-            [
+            vec![
                 r.rung.to_string(),
                 r.residues.to_string(),
                 r.bytes.to_string(),
@@ -417,45 +418,15 @@ fn write_sizes(path: &Path, rows: &[Size]) -> anyhow::Result<()> {
         })
         .collect();
 
-    let widths: Vec<usize> = headers
-        .iter()
-        .enumerate()
-        .map(|(i, h)| {
-            cells
-                .iter()
-                .map(|c| c[i].len())
-                .chain(std::iter::once(h.len()))
-                .max()
-                .unwrap_or(0)
-        })
-        .collect();
-
-    let mut out = String::new();
-
-    out.push('#');
-    for (h, &w) in headers.iter().zip(&widths) {
-        out.push_str(&format!(" {h:<w$}"));
-    }
-    out.push_str("\n#");
-    for &w in &widths {
-        out.push_str(&format!(" {}", "-".repeat(w)));
-    }
-    out.push('\n');
-
-    for row in &cells {
-        // the two the `# ` takes on a header line, so the columns sit under
-        // their names rather than beside them
-        out.push_str("  ");
-        for (i, (c, &w)) in row.iter().zip(&widths).enumerate() {
-            if i > 0 {
-                out.push(' ');
-            }
-            out.push_str(&format!("{c:<w$}"));
-        }
-        out.push('\n');
-    }
-
-    std::fs::write(path, out).with_context(|| format!("failed to write {}", path.display()))
+    tbl::write(
+        path,
+        tbl::Table {
+            meta: "",
+            headers: &headers,
+            rows: &cells,
+            ragged_last: false,
+        },
+    )
 }
 
 // ------------------------------------------------------------------- shared

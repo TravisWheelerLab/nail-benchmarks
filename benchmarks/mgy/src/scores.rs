@@ -16,7 +16,7 @@
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::fmt;
 use std::fs::File;
-use std::io::{BufRead, BufReader, BufWriter, Read, Write};
+use std::io::{BufRead, BufReader, Read};
 use std::path::Path;
 
 use anyhow::{Context, bail, ensure};
@@ -24,7 +24,8 @@ use anyhow::{Context, bail, ensure};
 use bioio::split::{self, Kind};
 use bioio::tbl::{BlastTable, HitTable, HmmerTable, NailTable, hmmer::HmmerDomainTable};
 
-use crate::manifest::{self, Manifest};
+use bench::manifest::{self, Manifest, Wall};
+use bench::tbl;
 
 type Pair = (String, String);
 
@@ -276,35 +277,25 @@ impl Scores {
     }
 
     pub fn write(&self, path: &Path) -> anyhow::Result<()> {
-        if let Some(parent) = path.parent() {
-            std::fs::create_dir_all(parent)?;
-        }
-
-        let file =
-            File::create(path).with_context(|| format!("failed to create {}", path.display()))?;
-        let mut out = BufWriter::new(file);
-
         // `#=` is metadata for whoever reads this back, `#` is the header a
         // person reads. stockholm draws the same line in the same place.
-        writeln!(
-            out,
-            "#= query {} {} {}",
+        let mut meta = format!(
+            "#= query {} {} {}\n",
             self.query.count, self.query.residues, self.query.bytes
-        )?;
+        );
 
         for (shard, size) in &self.targets {
-            writeln!(
-                out,
-                "#= target {} {} {} {}",
+            meta.push_str(&format!(
+                "#= target {} {} {} {}\n",
                 label(shard),
                 size.count,
                 size.residues,
                 size.bytes
-            )?;
+            ));
         }
 
         for (shard, wall) in &self.seed_wall_s {
-            writeln!(out, "#= seed {} {wall:.4}", label(shard))?;
+            meta.push_str(&format!("#= seed {} {wall:.4}\n", label(shard)));
         }
 
         for run in &self.runs {
@@ -313,11 +304,10 @@ impl Scores {
                 .iter()
                 .map(|(k, v)| format!(" {k}={v}"))
                 .collect();
-            writeln!(
-                out,
-                "#= run {} {} {:.4}{params}",
+            meta.push_str(&format!(
+                "#= run {} {} {:.4}{params}\n",
                 run.name, run.tool, run.wall_s
-            )?;
+            ));
         }
 
         let mut headers = vec![
@@ -362,58 +352,17 @@ impl Scores {
             })
             .collect();
 
-        let widths: Vec<usize> = headers
-            .iter()
-            .enumerate()
-            .map(|(i, h)| {
-                cells
-                    .iter()
-                    .map(|c| c[i].len())
-                    .chain(std::iter::once(h.len()))
-                    .max()
-                    .unwrap_or(0)
-            })
-            .collect();
-
         // the domain list is as wide as the pair has domains, so like argv in
         // manifest.tbl the last column is written as it comes and never padded
-        let last = headers.len() - 1;
-
-        write!(out, "#")?;
-        for (i, (h, &w)) in headers.iter().zip(&widths).enumerate() {
-            match i == last {
-                true => write!(out, " {h}")?,
-                false => write!(out, " {h:<w$}")?,
-            }
-        }
-        write!(out, "\n#")?;
-        for (i, &w) in widths.iter().enumerate() {
-            let w = match i == last {
-                true => headers[last].len(),
-                false => w,
-            };
-            write!(out, " {}", "-".repeat(w))?;
-        }
-        writeln!(out)?;
-
-        for row in &cells {
-            // the two leading spaces the `# ` takes on a header line, so the
-            // columns sit under their names rather than beside them
-            write!(out, "  ")?;
-            for (i, (c, &w)) in row.iter().zip(&widths).enumerate() {
-                if i > 0 {
-                    write!(out, " ")?;
-                }
-                match i == last {
-                    true => write!(out, "{c}")?,
-                    false => write!(out, "{c:<w$}")?,
-                }
-            }
-            writeln!(out)?;
-        }
-
-        out.flush()?;
-        Ok(())
+        tbl::write(
+            path,
+            tbl::Table {
+                meta: &meta,
+                headers: &headers,
+                rows: &cells,
+                ragged_last: true,
+            },
+        )
     }
 
     /// Reads back what [`Scores::write`] wrote.
@@ -730,42 +679,6 @@ fn runs(manifest: &Manifest) -> anyhow::Result<Vec<Column>> {
     Ok(out)
 }
 
-/// What a set of commands cost, kept per shard so overlapping work isn't
-/// counted twice.
-///
-/// Within a shard, whatever ran in a batched step overlapped and contributes
-/// the longest of itself; everything else ran one after another and adds up.
-/// Shards run in sequence, so their totals add.
-#[derive(Default)]
-struct Wall {
-    /// Per shard: what ran consecutively, and the longest of what overlapped.
-    by_shard: BTreeMap<String, (f64, f64)>,
-}
-
-impl Wall {
-    fn add(&mut self, shard: &str, row: &manifest::Row) {
-        let wall = row.wall_s().unwrap_or(0.0);
-        let at = self.by_shard.entry(shard.to_string()).or_default();
-
-        match row.batched() {
-            true => at.1 = at.1.max(wall),
-            false => at.0 += wall,
-        }
-    }
-
-    fn total(&self) -> f64 {
-        self.by_shard.values().map(|(s, b)| s + b).sum()
-    }
-
-    /// The same totals, shard by shard, in shard order.
-    fn per_shard(&self) -> Vec<(String, f64)> {
-        self.by_shard
-            .iter()
-            .map(|(shard, (s, b))| (shard.clone(), s + b))
-            .collect()
-    }
-}
-
 /// Every shard any run covered, in the order the runs named them.
 fn shards(columns: &[Column]) -> Vec<String> {
     let mut out: Vec<String> = Vec::new();
@@ -788,7 +701,7 @@ fn walls(manifest: &Manifest, stage: &str) -> Vec<(String, f64)> {
         wall.add(shard, row);
     }
 
-    wall.per_shard()
+    wall.per_bucket()
 }
 
 fn shard_path(targets: &Path, shard: &str) -> std::path::PathBuf {

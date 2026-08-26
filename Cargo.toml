@@ -2,6 +2,7 @@
 resolver = "2"
 
 members = [
+    "crates/bench",
     "crates/bioio",
     "crates/tools",
     "benchmarks/cloud-search",
@@ -14,6 +15,7 @@ members = [
 ]
 
 [workspace.dependencies]
+bench = { path = "crates/bench" }
 bioio = { path = "crates/bioio" }
 tools = { path = "crates/tools" }
 

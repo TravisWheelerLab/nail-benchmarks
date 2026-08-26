@@ -17,7 +17,7 @@ use anyhow::Context;
 use bioio::split::{self, Kind};
 use pail::{Closure, Cmd, Step};
 
-use crate::manifest;
+use bench::manifest;
 
 /// hmmsearch doesn't scale past a couple of threads, so its query gets split
 /// threads/HMMER_CPU ways and the parts run at the same time.

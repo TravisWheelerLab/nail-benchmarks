@@ -1,29 +1,33 @@
+//! Turning a finished run into the tables the plot scripts consume.
+//!
+//! What ran comes out of `manifest.tbl` -- the run's name, which tool produced
+//! its table, which query it searched, and what it cost -- rather than out of
+//! the results directory's filenames. That is what lets a run be renamed, or a
+//! tool added, without this file learning about it.
+//!
+//! Truth here is in the benchmark itself: `benchmark.tbl` says which pair is
+//! which and at what identity, and a target named `decoy…` is one. There is no
+//! calibration and no reference tool.
+
 use std::{
     collections::HashMap,
     fmt::Display,
     fs::File,
     io::{BufRead, BufReader, BufWriter, Write},
     path::{Path, PathBuf},
-    process::Command,
 };
 
 use bioio::tbl::{BlastTable, Hit, HitTable, HmmerTable, NailTable};
 
-use anyhow::Context;
+use anyhow::{Context, bail};
+use bench::manifest::{self, Manifest, Wall};
 use clap::{Parser, Subcommand};
-use glob::glob;
+
+use crate::inputs::Inputs;
+use crate::search::MODE;
 
 const PRECISION: usize = 4;
 const FIXED_FPR: f32 = 0.01;
-const RUNS_TBL: &str = "runs.tbl";
-
-trait Float: PartialOrd {}
-impl Float for f32 {}
-impl Float for f64 {}
-
-fn float_cmp<F: Float>(a: &F, b: &F) -> std::cmp::Ordering {
-    a.partial_cmp(b).expect("NaN encountered in float cmp")
-}
 
 fn e_value_cmp(a: &Hit2, b: &Hit2) -> std::cmp::Ordering {
     a.e_value
@@ -31,65 +35,69 @@ fn e_value_cmp(a: &Hit2, b: &Hit2) -> std::cmp::Ordering {
         .expect("NaN encountered in E-value cmp")
 }
 
+/// Which input set was searched, and so where everything is. Every analysis
+/// takes it, the way `build` and `run` do.
+#[derive(Parser)]
+pub struct Which {
+    #[arg(short, long, default_value = "toy")]
+    size: String,
+
+    /// Where the tables go. Defaults to figures/ beside the run.
+    #[arg(short, long, value_name = "dir")]
+    out: Option<PathBuf>,
+}
+
+impl Which {
+    fn set(&self) -> Inputs {
+        Inputs::new(&self.size)
+    }
+
+    fn out_dir(&self) -> PathBuf {
+        self.out
+            .clone()
+            .unwrap_or_else(|| self.set().run_dir().join("figures"))
+    }
+}
+
 #[derive(Parser)]
 pub struct RecallArgs {
-    #[arg(value_name = "benchmark.tbl")]
-    benchmark_tbl: PathBuf,
-
-    #[arg(value_name = "results/")]
-    results_dir: PathBuf,
-
-    #[arg(value_name = "dir", default_value = "./figures")]
-    out_dir: PathBuf,
+    #[command(flatten)]
+    which: Which,
 }
 
 #[derive(Parser)]
 pub struct CellsArgs {
-    #[arg(value_name = "nail.tbl")]
-    nail_tbl: PathBuf,
+    #[command(flatten)]
+    which: Which,
 
-    #[arg(value_name = "query.hmm")]
-    query: PathBuf,
-
-    #[arg(value_name = "target.fa")]
-    target: PathBuf,
-
-    #[arg(value_name = "dir", default_value = "./figures")]
-    out_dir: PathBuf,
+    /// Which run's table to read cell fractions from. Only nail reports them.
+    #[arg(long, value_name = "NAME", default_value = "nail-s12.0-ms2000.prf")]
+    run: String,
 }
 
 #[derive(Parser)]
 pub struct ScoreArgs {
-    #[arg(value_name = "nail.full.tbl")]
-    full_tbl: PathBuf,
+    /// Two nail tables to correlate, by run name. There is no --full-dp run in
+    /// the sweep today, so these are given rather than assumed.
+    #[arg(long, value_name = "NAME")]
+    full: String,
 
-    #[arg(value_name = "nail.sparse.tbl")]
-    sparse_tbl: PathBuf,
+    #[arg(long, value_name = "NAME")]
+    sparse: String,
 
-    #[arg(value_name = "dir", default_value = "./figures")]
-    out_dir: PathBuf,
+    #[command(flatten)]
+    which: Which,
 }
 
 #[derive(Parser)]
 pub struct TableArgs {
-    #[arg(short, long, value_name = "benchmark.tbl")]
-    benchmark_tbl: PathBuf,
+    #[command(flatten)]
+    which: Which,
 
-    #[arg(short, long, value_name = "results/")]
-    results_dir: PathBuf,
-
-    #[arg(short, long, value_name = "out.tbl", default_value = "results.tbl")]
-    out_path: PathBuf,
-
-    #[arg(short, long, default_value_t = false)]
+    #[arg(short = 'e', long, default_value_t = false)]
     e_value: bool,
 
-    #[arg(
-        short,
-        long,
-        default_value_t = 6,
-        default_value_if("e_value", "true", "9")
-    )]
+    #[arg(long, default_value_t = 6, default_value_if("e_value", "true", "9"))]
     min_width: usize,
 }
 
@@ -123,89 +131,83 @@ pub fn main(cmd: Cmd) -> anyhow::Result<()> {
 }
 
 fn table(args: TableArgs) -> anyhow::Result<()> {
-    let bm = Benchmark::new(args.benchmark_tbl).context("failed to open benchmark.tbl")?;
+    let set = args.which.set();
+    let bm = Benchmark::new(set.benchmark_tbl())?;
 
-    let mut out = BufWriter::new(File::create(args.out_path)?);
+    let out_dir = args.which.out_dir();
+    std::fs::create_dir_all(&out_dir)?;
+    let mut out = BufWriter::new(File::create(out_dir.join("results.tbl"))?);
 
     let mut tuples = vec![];
 
-    for path in glob(
-        args.results_dir
-            .join("*.tbl")
-            .to_str()
-            .context("invalid *.tbl glob")?,
-    )?
-    .filter_map(Result::ok)
-    {
-        let stem = path
-            .file_stem()
-            .and_then(|s| s.to_str())
-            .context("failed to produce file stem")?;
-
-        let (prefix, search_type) = stem.rsplit_once(".").context("failed to split prefix")?;
-        let prefix_tokens = prefix.split("-").map(|s| s.to_string()).collect::<Vec<_>>();
-
-        let file = BufReader::new(File::open(&path)?);
-
-        let tbl = match prefix_tokens.first().context("no prefix tokens")?.as_str() {
-            "nail" => HitTable::parse::<_, NailTable>(file, prefix)?,
-            "hmmer" => HitTable::parse::<_, HmmerTable>(file, prefix)?,
-            "mmseqs" => HitTable::parse::<_, BlastTable>(file, prefix)?,
-            "last" => HitTable::parse::<_, BlastTable>(file, prefix)?,
-            "blast" => HitTable::parse::<_, BlastTable>(file, prefix)?,
-            "diamond" => HitTable::parse::<_, BlastTable>(file, prefix)?,
-            _ => continue,
-        };
-
+    for run in runs(&set.run_dir())? {
         fn true_hit_filter(hit: &Hit) -> bool {
             if hit.target.starts_with("decoy") {
                 return false;
             }
 
-            let q = hit.query.split('|').next().unwrap();
-            let t = hit.target.split('|').next().unwrap();
+            let q = hit.query.split('|').next().unwrap_or_default();
+            let t = hit.target.split('|').next().unwrap_or_default();
 
             q == t
         }
 
-        let hits = tbl
+        let hits: Vec<Hit> = run
+            .hits()?
             .hits
             .into_iter()
             .filter(true_hit_filter)
-            .collect::<Vec<_>>();
+            .collect();
 
-        let map: HashMap<String, f64> = if search_type == "prf" {
-            hits.into_iter()
-                .map(|hit| {
-                    let t = hit.target.split('|').nth(1).unwrap().to_string();
-
-                    if args.e_value {
-                        (t, hit.e_value)
-                    } else {
-                        (t, hit.score as f64)
-                    }
-                })
-                .collect()
-        } else {
-            // if we have seq queries, retain the single highest score
-            let mut best: HashMap<String, f64> = HashMap::new();
-            for hit in hits {
-                let t = hit.target.split('|').nth(1).unwrap().to_string();
-
-                if args.e_value {
-                    best.entry(t)
-                        .and_modify(|score| *score = score.min(hit.e_value))
-                        .or_insert(hit.e_value);
-                } else {
-                    best.entry(t)
-                        .and_modify(|score| *score = score.max(hit.score as f64))
-                        .or_insert(hit.score as f64);
-                }
-            }
-            best
+        // a target's name carries which pair it is; everything past that is
+        // the family it came from and the identity it was drawn at
+        let target_of = |hit: &Hit| -> anyhow::Result<String> {
+            hit.target
+                .split('|')
+                .nth(1)
+                .map(str::to_string)
+                .with_context(|| format!("target {:?} names no sequence", hit.target))
         };
 
-        tuples.push((prefix_tokens, search_type.to_string(), map));
+        let value = |hit: &Hit| match args.e_value {
+            true => hit.e_value,
+            false => hit.score as f64,
+        };
+
+        let mut map: HashMap<String, f64> = HashMap::new();
+        for hit in &hits {
+            let target = target_of(hit)?;
+            let v = value(hit);
+
+            match run.mode {
+                // one profile per family, so a pair is reported once
+                SearchType::Profile | SearchType::Consensus => {
+                    map.insert(target, v);
+                }
+                // several query sequences can reach the same target, so the
+                // best of them is the one a threshold would see
+                SearchType::Sequence => {
+                    map.entry(target)
+                        .and_modify(|best| {
+                            *best = match args.e_value {
+                                true => best.min(v),
+                                false => best.max(v),
+                            }
+                        })
+                        .or_insert(v);
+                }
+            }
+        }
+
+        // the run name is <prefix>.<mode>, and the prefix's `-` pieces are what
+        // the header stacks up
+        let prefix = run
+            .name
+            .rsplit_once('.')
+            .map_or(run.name.as_str(), |(p, _)| p);
+        let prefix_tokens: Vec<String> = prefix.split('-').map(str::to_string).collect();
+
+        tuples.push((prefix_tokens, run.mode.to_string(), map));
     }
 
     fn cmp_component(a: &str, b: &str) -> std::cmp::Ordering {
@@ -310,26 +312,26 @@ fn table(args: TableArgs) -> anyhow::Result<()> {
 }
 
 fn score(args: ScoreArgs) -> anyhow::Result<()> {
-    let full_tbl = bioio::tbl::nail::NailTable::parse(
-        File::open(&args.full_tbl)
-            .with_context(|| format!("failed to open: {:?}", args.full_tbl))?,
-        "",
-    )?
-    .to_map();
+    let results = args.which.set().run_dir().join("results");
 
-    let sparse_tbl = bioio::tbl::nail::NailTable::parse(
-        File::open(&args.sparse_tbl)
-            .with_context(|| format!("failed to open: {:?}", args.sparse_tbl))?,
-        "",
-    )?
-    .to_map();
+    let read = |name: &str| -> anyhow::Result<_> {
+        let path = manifest::table_path(&results, name, "");
+        Ok(bioio::tbl::nail::NailTable::parse(
+            File::open(&path).with_context(|| format!("failed to open {}", path.display()))?,
+            "",
+        )?
+        .to_map())
+    };
+
+    let full_tbl = read(&args.full)?;
+    let sparse_tbl = read(&args.sparse)?;
 
     let intersection = full_tbl
         .keys()
         .filter(|k| sparse_tbl.contains_key(*k))
         .collect::<Vec<_>>();
 
-    let figures = args.out_dir;
+    let figures = args.which.out_dir();
     std::fs::create_dir_all(&figures)?;
 
     let mut out = BufWriter::new(File::create(figures.join("score.txt"))?);
@@ -345,42 +347,26 @@ fn score(args: ScoreArgs) -> anyhow::Result<()> {
 }
 
 fn cells(args: CellsArgs) -> anyhow::Result<()> {
-    let tbl = bioio::tbl::nail::NailTable::parse(File::open(args.nail_tbl)?, "")?;
+    let set = args.which.set();
+    let table = manifest::table_path(&set.run_dir().join("results"), &args.run, "");
 
-    let query_lens: HashMap<String, usize> = Command::new("hmmstat")
-        .arg(args.query)
-        .output()?
-        .stdout
-        .lines()
-        .filter_map(|line| {
-            let line = line.ok()?;
-            if line.starts_with('#') {
-                None
-            } else {
-                let tokens: Vec<&str> = line.split_whitespace().collect();
-                Some((tokens[1].to_string(), tokens[5].parse::<usize>().ok()?))
-            }
-        })
-        .collect();
+    let tbl = bioio::tbl::nail::NailTable::parse(
+        File::open(&table).with_context(|| format!("failed to open {}", table.display()))?,
+        "",
+    )?;
 
-    let target_lens: HashMap<String, usize> = Command::new("esl-seqstat")
-        .arg("-a")
-        .arg(args.target)
-        .output()?
-        .stdout
-        .lines()
-        .filter_map(|line| {
-            let line = line.ok()?;
-            if line.starts_with('=') {
-                let tokens: Vec<&str> = line.split_whitespace().collect();
-                Some((tokens[1].to_string(), tokens[2].parse::<usize>().ok()?))
-            } else {
-                None
-            }
-        })
-        .collect();
+    // read out of the files rather than shelled out to hmmstat and
+    // esl-seqstat: neither is a dependency this benchmark declares, and both
+    // were being found on PATH rather than through `tools`
+    let query_lens = bioio::hmm::lengths(set.query_hmm())?;
 
-    let figures = args.out_dir;
+    let mut target_lens: HashMap<String, usize> = HashMap::new();
+    let mut reader = bioio::fasta::Reader::from_path(set.target_fa())?;
+    while let Some(rec) = reader.next_record()? {
+        target_lens.insert(rec.name.clone(), rec.seq.len());
+    }
+
+    let figures = args.which.out_dir();
     std::fs::create_dir_all(&figures)?;
 
     let mut true_out = BufWriter::new(File::create(figures.join("cells.true.txt"))?);
@@ -417,11 +403,11 @@ fn cells(args: CellsArgs) -> anyhow::Result<()> {
 fn recall(args: RecallArgs) -> anyhow::Result<()> {
     let start = std::time::Instant::now();
 
-    let benchmark = Benchmark::new(args.benchmark_tbl).context("failed to open benchmark.tbl")?;
+    let set = args.which.set();
+    let benchmark = Benchmark::new(set.benchmark_tbl())?;
+    let data = RecallData::new(&set.run_dir(), &benchmark)?;
 
-    let data = RecallData::new(args.results_dir, &benchmark).context("failed to get data")?;
-
-    let figures = args.out_dir;
+    let figures = args.which.out_dir();
     std::fs::create_dir_all(&figures)?;
 
     let mut roc_path = File::create(figures.join("roc.txt"))?;
@@ -444,7 +430,6 @@ struct BenchmarkEntry {
 }
 
 struct Benchmark {
-    target_cnt: usize,
     entries: Vec<BenchmarkEntry>,
     idx_by_pid: HashMap<usize, Vec<usize>>,
     idx_by_target: HashMap<String, usize>,
@@ -456,7 +441,6 @@ impl Benchmark {
     fn new<P: AsRef<Path>>(tbl_path: P) -> anyhow::Result<Self> {
         let tbl_reader = BufReader::new(File::open(tbl_path)?);
 
-        let mut target_cnt = 0;
         let mut entries = vec![];
         let mut idx_by_pid: HashMap<usize, Vec<usize>> = HashMap::new();
         let mut idx_by_target: HashMap<String, usize> = HashMap::new();
@@ -486,17 +470,16 @@ impl Benchmark {
                 family: family.clone(),
             };
 
-            idx_by_pid.entry(pid).or_default().push(target_cnt);
-            idx_by_target.insert(target, target_cnt);
-            idx_by_query.entry(query).or_default().push(target_cnt);
-            idx_by_family.entry(family).or_default().push(target_cnt);
+            let at = entries.len();
+            idx_by_pid.entry(pid).or_default().push(at);
+            idx_by_target.insert(target, at);
+            idx_by_query.entry(query).or_default().push(at);
+            idx_by_family.entry(family).or_default().push(at);
 
             entries.push(entry);
-            target_cnt += 1;
         }
 
         Ok(Self {
-            target_cnt,
             entries,
             idx_by_pid,
             idx_by_target,
@@ -540,11 +523,125 @@ impl Benchmark {
     }
 }
 
-#[derive(PartialEq)]
+#[derive(Clone, Copy, PartialEq)]
 enum SearchType {
     Profile,
     Consensus,
     Sequence,
+}
+
+impl SearchType {
+    /// Off the `mode` field, which the run records rather than the filename
+    /// spelling it.
+    fn parse(mode: &str) -> anyhow::Result<SearchType> {
+        match mode {
+            "prf" => Ok(SearchType::Profile),
+            "cons" => Ok(SearchType::Consensus),
+            "seq" => Ok(SearchType::Sequence),
+            other => bail!("unknown search mode {other:?} in manifest.tbl"),
+        }
+    }
+}
+
+/// One finished run: what it was called, how to read its table, which query it
+/// searched, and what it cost.
+struct Run {
+    name: String,
+    tool: String,
+    mode: SearchType,
+    wall_s: f32,
+    table: PathBuf,
+}
+
+impl Run {
+    /// The hits it reported. Which reader to use comes off the `tool` field --
+    /// mmseqs, last, blast and diamond all write blast's tabular format,
+    /// whatever wrote it.
+    fn hits(&self) -> anyhow::Result<HitTable> {
+        let file = BufReader::new(
+            File::open(&self.table)
+                .with_context(|| format!("failed to open {}", self.table.display()))?,
+        );
+
+        match self.tool.as_str() {
+            "nail" => HitTable::parse::<_, NailTable>(file, &self.name),
+            "hmmer" | "phmmer" => HitTable::parse::<_, HmmerTable>(file, &self.name),
+            _ => HitTable::parse::<_, BlastTable>(file, &self.name),
+        }
+        .with_context(|| format!("failed to read {}", self.table.display()))
+    }
+}
+
+/// The runs a pipeline finished, in the order it declared them.
+///
+/// Read out of `manifest.tbl` rather than by globbing the results directory,
+/// which is what keeps the runs table itself from looking like a hit table and
+/// what makes a run's tool and mode facts rather than guesses.
+///
+/// Several rows can share a name: mmseqs' search and its conversion are one
+/// run, and psiblast's per-family calls are one run run a family at a time.
+/// [`Wall`] adds those up, and takes the longest rather than the sum of the
+/// hmmer parts, which overlap.
+fn runs(run_dir: &Path) -> anyhow::Result<Vec<Run>> {
+    let manifest = Manifest::read(&run_dir.join("manifest.tbl"))?;
+    let results = run_dir.join("results");
+
+    let failed: Vec<&str> = manifest
+        .failed()
+        .filter_map(|row| row.get(manifest::NAME))
+        .collect();
+    if !failed.is_empty() {
+        eprintln!(
+            "warning: leaving out {} command(s) that did not finish: {}",
+            failed.len(),
+            failed.join(", ")
+        );
+    }
+
+    let mut out: Vec<Run> = Vec::new();
+    let mut walls: Vec<Wall> = Vec::new();
+    let mut at: HashMap<String, usize> = HashMap::new();
+
+    for row in manifest.runs() {
+        let name = row.get(manifest::NAME).expect("runs() filters on name");
+
+        let i = match at.get(name) {
+            Some(&i) => i,
+            None => {
+                let tool = row
+                    .get(manifest::TOOL)
+                    .with_context(|| format!("run {name:?} has no tool"))?;
+                let mode = row
+                    .get(MODE)
+                    .with_context(|| format!("run {name:?} has no mode"))?;
+
+                at.insert(name.to_string(), out.len());
+                walls.push(Wall::default());
+                out.push(Run {
+                    name: name.to_string(),
+                    tool: tool.to_string(),
+                    mode: SearchType::parse(mode)?,
+                    wall_s: 0.0,
+                    table: manifest::table_path(&results, name, ""),
+                });
+                out.len() - 1
+            }
+        };
+
+        walls[i].add("", row);
+    }
+
+    for (run, wall) in out.iter_mut().zip(&walls) {
+        run.wall_s = wall.total() as f32;
+    }
+
+    anyhow::ensure!(
+        !out.is_empty(),
+        "no finished runs in {}/manifest.tbl",
+        run_dir.display()
+    );
+
+    Ok(out)
 }
 
 impl Display for SearchType {
@@ -613,9 +710,12 @@ impl std::fmt::Display for Hit2 {
 
 struct HitTable2 {
     name: String,
-    search_type: SearchType,
     positives: Vec<Hit2>,
-    decoys: Vec<Hit2>,
+    /// The decoys this run's own queries reported, in the benchmark's order.
+    ///
+    /// What the ROC walks: a false positive only counts against a query that
+    /// was actually asked, so the list is rebuilt per benchmark entry rather
+    /// than taken as everything the run called a decoy.
     adjusted_decoys: Vec<Hit2>,
 }
 
@@ -635,13 +735,10 @@ impl HitTable2 {
             .collect();
 
         let mut positives: Vec<Hit2> = vec![];
-        let mut decoys: Vec<Hit2> = vec![];
         let mut decoys_by_query: HashMap<String, Vec<Hit2>> = HashMap::new();
         filtered_hits.into_iter().for_each(|h| {
             if h.target.starts_with("decoy") {
-                let query_decoys = decoys_by_query.entry(h.query.clone()).or_default();
-                query_decoys.push(h.clone());
-                decoys.push(h.clone());
+                decoys_by_query.entry(h.query.clone()).or_default().push(h);
             } else {
                 match search_type {
                     SearchType::Profile | SearchType::Consensus => match h.target_fam {
@@ -679,70 +776,14 @@ impl HitTable2 {
             .collect();
 
         positives.sort_by(e_value_cmp);
-        decoys.sort_by(e_value_cmp);
         adjusted_decoys.sort_by(e_value_cmp);
 
         Self {
             name: tbl.name.clone(),
-            search_type,
             positives,
-            decoys,
             adjusted_decoys,
         }
     }
-}
-
-/// Total wall-clock seconds per run name, off the `#` header/rows format
-/// every `pail::Table` runs.tbl uses. A run name can appear more than
-/// once (blast.prf's per-family psiblast calls all share the name "blast.prf",
-/// since together they are the one run, run one family at a time), hence a
-/// sum rather than a single lookup.
-fn wall_seconds(path: &Path) -> anyhow::Result<HashMap<String, f32>> {
-    let file =
-        File::open(path).with_context(|| format!("failed to read {}", path.display()))?;
-
-    let mut columns: Vec<String> = Vec::new();
-    let mut sums: HashMap<String, f32> = HashMap::new();
-
-    for line in BufReader::new(file).lines() {
-        let line = line?;
-
-        if let Some(rest) = line.strip_prefix('#') {
-            let rest = rest.trim_start();
-            if columns.is_empty() && !rest.starts_with('-') {
-                columns = rest.split_whitespace().map(str::to_string).collect();
-            }
-            continue;
-        }
-
-        if line.trim().is_empty() {
-            continue;
-        }
-
-        let idx = |key: &str| columns.iter().position(|c| c == key);
-        let (Some(name_i), Some(wall_i), Some(exit_i)) =
-            (idx("name"), idx("wall(s)"), idx("exit"))
-        else {
-            continue;
-        };
-
-        let f: Vec<&str> = line.split_whitespace().collect();
-        let (Some(name), Some(wall), Some(exit)) = (f.get(name_i), f.get(wall_i), f.get(exit_i))
-        else {
-            continue;
-        };
-
-        if *name == "-" || *exit != "0" {
-            continue;
-        }
-        let Ok(wall): Result<f32, _> = wall.parse() else {
-            continue;
-        };
-
-        *sums.entry(name.to_string()).or_insert(0.0) += wall;
-    }
-
-    Ok(sums)
 }
 
 struct RecallData {
@@ -753,11 +794,7 @@ struct RecallData {
 }
 
 impl RecallData {
-    fn new<P: AsRef<Path>>(results_dir: P, bm: &Benchmark) -> anyhow::Result<Self> {
-        let results_dir = PathBuf::from(results_dir.as_ref());
-        let mut times = vec![];
-        let mut tables = vec![];
-
+    fn new(run_dir: &Path, bm: &Benchmark) -> anyhow::Result<Self> {
         let mut pid_bin_tot_cnts = vec![];
         bm.entries.iter().map(|e| e.pid).for_each(|pid| {
             if pid >= pid_bin_tot_cnts.len() {
@@ -766,59 +803,12 @@ impl RecallData {
             pid_bin_tot_cnts[pid] += 1;
         });
 
-        let wall_s = wall_seconds(&results_dir.join(RUNS_TBL))?;
+        let mut tables = vec![];
+        let mut times = vec![];
 
-        for path in glob(
-            results_dir
-                .join("*.tbl")
-                .to_str()
-                .context("invalid *.tbl glob")?,
-        )?
-        .filter_map(Result::ok)
-        {
-            // the runs table lives alongside the per-run hit tables and shares
-            // their extension, but is not one of them
-            if path.file_name().is_some_and(|n| n == RUNS_TBL) {
-                continue;
-            }
-
-            let file = BufReader::new(File::open(&path)?);
-
-            let stem = path
-                .file_stem()
-                .and_then(|s| s.to_str())
-                .context("invalid path")?
-                .to_string();
-
-            let stem_tokens: Vec<&str> = stem.split('.').collect();
-
-            assert!(stem_tokens.len() >= 2);
-
-            let prefix = stem_tokens[..stem_tokens.len() - 1].join(".");
-            let search_type = match *stem_tokens.last().unwrap() {
-                "cons" => SearchType::Consensus,
-                "prf" => SearchType::Profile,
-                "seq" => SearchType::Sequence,
-                _ => panic!("unknown search type"),
-            };
-
-            let name = format!("{prefix}.{search_type}");
-
-            let tbl = match prefix {
-                s if s.starts_with("hmmer") => HitTable::parse::<_, HmmerTable>(file, &name),
-                s if s.starts_with("nail") => HitTable::parse::<_, NailTable>(file, &name),
-                _ => HitTable::parse::<_, BlastTable>(file, &name),
-            }
-            .map(|tbl| HitTable2::new(&tbl, bm, search_type))?;
-            tables.push(tbl);
-
-            // a hit table's stem is exactly the run name in the runs table
-            let time = wall_s
-                .get(&stem)
-                .copied()
-                .with_context(|| format!("no row for run {stem:?} in the runs table"))?;
-
-            times.push(time);
+        for run in runs(run_dir)? {
+            tables.push(HitTable2::new(&run.hits()?, bm, run.mode));
+            times.push(run.wall_s);
         }
 
         Ok(Self {

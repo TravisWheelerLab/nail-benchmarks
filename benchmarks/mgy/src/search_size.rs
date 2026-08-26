@@ -19,8 +19,8 @@ use clap::Parser;
 use pail::{Cmd, PipelineBuilder, Progress, Step, Table};
 
 use crate::inputs;
-use crate::manifest;
 use crate::search::{self, Bins, Dirs, Split};
+use bench::manifest;
 
 #[derive(Parser, Debug)]
 pub struct Args {

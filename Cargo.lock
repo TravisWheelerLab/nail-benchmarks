@@ -68,6 +68,13 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "330a5ed07fa54e4702c9d6c4174f74427fc0ef6e214bbd677ae50a5099946470"
 
 [[package]]
+name = "bench"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+]
+
+[[package]]
 name = "bioio"
 version = "0.1.0"
 dependencies = [
@@ -290,6 +297,7 @@ name = "mgy"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "bench",
  "bioio",
  "clap",
  "feisty",
@@ -320,6 +328,7 @@ name = "pct-id"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "bench",
  "bioio",
  "clap",
  "glob",

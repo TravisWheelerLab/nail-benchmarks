@@ -136,6 +136,45 @@ fn is_metric(key: &str) -> bool {
     )
 }
 
+/// What a set of commands cost.
+///
+/// Kept per bucket, so overlapping work is not counted twice. Within a bucket,
+/// whatever ran in a batched step overlapped and contributes the longest of
+/// itself; everything else ran one after another and adds up. Buckets run in
+/// sequence, so their totals add.
+///
+/// What a bucket is belongs to the caller: a target shard for a pipeline with
+/// several, one bucket for a pipeline with one. The rule is the same either
+/// way -- adding up a batch reports the work rather than the time.
+#[derive(Default)]
+pub struct Wall {
+    by_bucket: BTreeMap<String, (f64, f64)>,
+}
+
+impl Wall {
+    pub fn add(&mut self, bucket: &str, row: &Row) {
+        let wall = row.wall_s().unwrap_or(0.0);
+        let at = self.by_bucket.entry(bucket.to_string()).or_default();
+
+        match row.batched() {
+            true => at.1 = at.1.max(wall),
+            false => at.0 += wall,
+        }
+    }
+
+    pub fn total(&self) -> f64 {
+        self.by_bucket.values().map(|(s, b)| s + b).sum()
+    }
+
+    /// The same totals, bucket by bucket, in bucket order.
+    pub fn per_bucket(&self) -> Vec<(String, f64)> {
+        self.by_bucket
+            .iter()
+            .map(|(bucket, (s, b))| (bucket.clone(), s + b))
+            .collect()
+    }
+}
+
 pub struct Manifest {
     rows: Vec<Row>,
 }
