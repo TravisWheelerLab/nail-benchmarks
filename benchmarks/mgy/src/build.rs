@@ -22,7 +22,7 @@ use rand::seq::SliceRandom;
 use bioio::aggregate::AggregateFasta;
 use bioio::{fasta, hmm, stockholm};
 use feisty::Permutation;
-use pipeline::{Closure, Cmd, PipelineBuilder, Progress, Step};
+use pail::{Closure, Cmd, PipelineBuilder, Progress, Step};
 use tools::{mgnify, mmseqs, pfam_hmm, pfam_sto};
 
 // the index that comes with the collection. building one from scratch is a pass

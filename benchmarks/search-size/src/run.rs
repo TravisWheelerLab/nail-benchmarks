@@ -9,7 +9,7 @@ use anyhow::{bail, ensure, Context};
 use clap::Parser;
 
 use bioio::split::{self, Kind};
-use pipeline::{Cmd, PipelineBuilder, Progress, Step, Table};
+use pail::{Cmd, PipelineBuilder, Progress, Step, Table};
 use tools::{hmmsearch, mmseqs, nail};
 
 // hmmsearch doesn't scale past a couple of threads, so its query gets split

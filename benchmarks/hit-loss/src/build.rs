@@ -11,7 +11,7 @@ use anyhow::{Context, bail};
 use clap::Parser;
 
 use bioio::aggregate::AggregateFasta;
-use pipeline::{Closure, Cmd, PipelineBuilder, Progress, Step};
+use pail::{Closure, Cmd, PipelineBuilder, Progress, Step};
 use tools::{mgnify, pfam_hmm};
 
 pub const DEFAULT_NAME: &str = "benchmark";

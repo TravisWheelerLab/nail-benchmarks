@@ -693,7 +693,7 @@ impl HitTable2 {
 }
 
 /// Total wall-clock seconds per run name, off the `#` header/rows format
-/// every `pipeline::Table` runs.tbl uses. A run name can appear more than
+/// every `pail::Table` runs.tbl uses. A run name can appear more than
 /// once (blast.prf's per-family psiblast calls all share the name "blast.prf",
 /// since together they are the one run, run one family at a time), hence a
 /// sum rather than a single lookup.

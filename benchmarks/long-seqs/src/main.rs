@@ -10,7 +10,7 @@ use std::path::PathBuf;
 
 use anyhow::bail;
 use clap::{Parser, Subcommand};
-use pipeline::{Cmd, PipelineBuilder, Progress, Step, Table};
+use pail::{Cmd, PipelineBuilder, Progress, Step, Table};
 use tools::nail;
 
 /// This benchmark's directory, fixed at compile time.

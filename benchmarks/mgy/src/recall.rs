@@ -15,7 +15,7 @@ use std::path::PathBuf;
 use anyhow::{Context, ensure};
 use clap::Parser;
 
-use pipeline::{Cmd, PipelineBuilder, Progress, Step, Table};
+use pail::{Cmd, PipelineBuilder, Progress, Step, Table};
 
 use crate::manifest;
 use crate::search::{self, Bins, Dirs, Split};

@@ -18,7 +18,7 @@ use anyhow::{Context, ensure};
 use clap::Parser;
 
 use bioio::split::{self, Kind};
-use pipeline::{Closure, Cmd, PipelineBuilder, Progress, Step, Table};
+use pail::{Closure, Cmd, PipelineBuilder, Progress, Step, Table};
 use tools::{hmmsearch, mmseqs, nail};
 
 use crate::cell::{self, Cell};

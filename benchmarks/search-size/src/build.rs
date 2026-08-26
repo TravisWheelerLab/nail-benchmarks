@@ -16,7 +16,7 @@ use clap::Parser;
 use bioio::aggregate::AggregateFasta;
 use bioio::split::{self, Kind};
 use feisty::Permutation;
-use pipeline::{Cmd, PipelineBuilder, Progress, Step};
+use pail::{Cmd, PipelineBuilder, Progress, Step};
 use tools::{mgnify, mmseqs, pfam_hmm, pfam_sto};
 
 pub const DEFAULT_NAME: &str = "benchmark";

@@ -15,7 +15,7 @@ use std::path::{Path, PathBuf};
 use anyhow::Context;
 
 use bioio::split::{self, Kind};
-use pipeline::{Closure, Cmd, Step};
+use pail::{Closure, Cmd, Step};
 
 use crate::manifest;
 

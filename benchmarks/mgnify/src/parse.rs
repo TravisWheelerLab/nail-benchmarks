@@ -17,7 +17,7 @@ use regex::Regex;
 
 const RUNS_TBL: &str = "runs.tbl";
 
-/// A `pipeline::Table` runs.tbl read back as an index: which run names exist
+/// A `pail::Table` runs.tbl read back as an index: which run names exist
 /// and which shards each one covered, so `recall` never has to infer either
 /// from filenames.
 struct Runs {

@@ -44,7 +44,7 @@ use clap::{Parser, Subcommand};
 use rayon::iter::{IntoParallelRefIterator, ParallelIterator};
 
 use bioio::tbl::{BlastTable, HitTable, HmmerTable, NailTable};
-use pipeline::{Cmd as PCmd, PipelineBuilder, Progress, Step};
+use pail::{Cmd as PCmd, PipelineBuilder, Progress, Step};
 use tools::{hmmsearch, mmseqs, nail};
 
 use crate::build;

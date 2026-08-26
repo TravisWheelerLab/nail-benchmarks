@@ -132,7 +132,7 @@ dependencies = [
  "anyhow",
  "bioio",
  "clap",
- "pipeline",
+ "pail",
  "tools",
 ]
 
@@ -220,7 +220,7 @@ dependencies = [
  "anyhow",
  "bioio",
  "clap",
- "pipeline",
+ "pail",
  "tools",
 ]
 
@@ -255,7 +255,7 @@ dependencies = [
  "anyhow",
  "bioio",
  "clap",
- "pipeline",
+ "pail",
  "tools",
 ]
 
@@ -275,7 +275,7 @@ dependencies = [
  "feisty",
  "glob",
  "indexmap",
- "pipeline",
+ "pail",
  "rand",
  "rayon",
  "regex",
@@ -291,7 +291,7 @@ dependencies = [
  "bioio",
  "clap",
  "feisty",
- "pipeline",
+ "pail",
  "rand",
  "rayon",
  "tools",
@@ -304,6 +304,16 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "384b8ab6d37215f3c5301a95a4accb5d64aa607f1fcb26a11b5303878451b4fe"
 
 [[package]]
+name = "pail"
+version = "0.1.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "8ead8b9ba322833686e798d089ff3c3ce6d3650b36648d9f65a62e0551d20a61"
+dependencies = [
+ "anyhow",
+ "libc",
+]
+
+[[package]]
 name = "pct-id"
 version = "0.1.0"
 dependencies = [
@@ -311,18 +321,10 @@ dependencies = [
  "bioio",
  "clap",
  "glob",
- "pipeline",
+ "pail",
  "rand",
  "regex",
  "tools",
-]
-
-[[package]]
-name = "pipeline"
-version = "0.1.0"
-dependencies = [
- "anyhow",
- "libc",
 ]
 
 [[package]]
@@ -444,7 +446,7 @@ dependencies = [
  "bioio",
  "clap",
  "feisty",
- "pipeline",
+ "pail",
  "tools",
 ]
 

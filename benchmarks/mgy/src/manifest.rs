@@ -1,4 +1,4 @@
-//! Reading back the table a [`pipeline::Table`] sink wrote.
+//! Reading back the table a [`pail::Table`] sink wrote.
 //!
 //! A run records what it did in `manifest.tbl`, and `parse` learns the shape
 //! of a pipeline from that rather than from filenames or from knowing which

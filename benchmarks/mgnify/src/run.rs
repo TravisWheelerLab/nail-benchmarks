@@ -3,7 +3,7 @@ use std::path::PathBuf;
 use anyhow::ensure;
 use bioio::split::{self, Kind};
 use clap::Parser;
-use pipeline::{Cmd, PipelineBuilder, Progress, Step, Table};
+use pail::{Cmd, PipelineBuilder, Progress, Step, Table};
 use tools::{hmmsearch, mmseqs, nail};
 
 use crate::util;

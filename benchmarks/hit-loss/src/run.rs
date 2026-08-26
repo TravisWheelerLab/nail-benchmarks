@@ -20,7 +20,7 @@ use anyhow::{Context, ensure};
 use clap::Parser;
 
 use bioio::split::{self, Kind};
-use pipeline::{Closure, Cmd, PipelineBuilder, Progress, Step, Table};
+use pail::{Closure, Cmd, PipelineBuilder, Progress, Step, Table};
 use tools::{hmmsearch, mmseqs, nail};
 
 // hmmsearch doesn't scale past a couple of threads, so its query gets split

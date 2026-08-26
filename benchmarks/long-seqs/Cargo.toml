@@ -9,7 +9,7 @@ path = "src/main.rs"
 
 [dependencies]
 bioio = { workspace = true }
-pipeline = { workspace = true }
+pail = { workspace = true }
 tools = { workspace = true }
 
 anyhow = { workspace = true }

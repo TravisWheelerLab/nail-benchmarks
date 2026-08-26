@@ -11,7 +11,7 @@ use std::process::Command;
 use anyhow::{Context, bail};
 use clap::Parser;
 
-use pipeline::{Cmd, PipelineBuilder, Progress, Step};
+use pail::{Cmd, PipelineBuilder, Progress, Step};
 
 const SCRIPT: &str = "scripts/plot.py";
 

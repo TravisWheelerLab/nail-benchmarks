@@ -11,7 +11,7 @@ use rand::SeedableRng;
 use bioio::aggregate::AggregateFasta;
 use bioio::{fasta, hmm, stockholm};
 use feisty::Permutation;
-use pipeline::{Closure, Cmd, PipelineBuilder, Progress, Step};
+use pail::{Closure, Cmd, PipelineBuilder, Progress, Step};
 use tools::{mgnify, mmseqs, pfam_hmm, pfam_sto};
 
 pub const DEFAULT_NAME: &str = "benchmark";

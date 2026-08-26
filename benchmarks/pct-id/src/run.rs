@@ -13,7 +13,7 @@ use std::path::PathBuf;
 use anyhow::{bail, ensure, Context};
 use clap::Parser;
 
-use pipeline::{Cmd, PipelineBuilder, Progress, Step, Table};
+use pail::{Cmd, PipelineBuilder, Progress, Step, Table};
 use tools::{
     blastp, diamond, hmmsearch, lastal, lastdb, makeblastdb, mmseqs, nail, phmmer, psiblast,
 };
@@ -356,11 +356,11 @@ pub fn main(args: Args) -> anyhow::Result<()> {
             if i == 0 {
                 cmd.stdout_to(&blast_prf_tbl)
             } else {
-                cmd.stdout(pipeline::Output::Append(blast_prf_tbl.clone()))
+                cmd.stdout(pail::Output::Append(blast_prf_tbl.clone()))
             }
         }))
         .name("blast.prf")
-        .on_error(pipeline::OnError::Continue),
+        .on_error(pail::OnError::Continue),
     );
 
     // ---------------------------------------------------------------- last
