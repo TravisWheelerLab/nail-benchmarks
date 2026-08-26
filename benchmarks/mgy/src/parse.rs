@@ -12,6 +12,7 @@ use anyhow::{Context, bail};
 use clap::{Parser, Subcommand};
 
 use crate::analyze;
+use crate::inputs;
 use crate::scores::{Inputs, Scores};
 
 #[derive(Subcommand)]
@@ -70,10 +71,8 @@ fn scores(args: ScoresArgs) -> anyhow::Result<()> {
         None => tools::mgy_cutoffs()?,
     };
 
-    let query_hmm = args
-        .queries
-        .unwrap_or_else(|| crate::queries().join("query.hmm"));
-    let targets = args.targets.unwrap_or_else(crate::targets);
+    let query_hmm = args.queries.unwrap_or_else(inputs::fixed::query_hmm);
+    let targets = args.targets.unwrap_or_else(inputs::fixed::targets);
 
     let out = args.out.unwrap_or_else(|| dir.join("scores.tbl"));
 

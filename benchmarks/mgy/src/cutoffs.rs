@@ -47,7 +47,7 @@ use bioio::tbl::{BlastTable, HitTable, HmmerTable, NailTable};
 use pail::{Cmd as PCmd, PipelineBuilder, Progress, Step};
 use tools::{hmmsearch, mmseqs, nail};
 
-use crate::search::shards;
+use crate::inputs::{self, shards};
 
 /// Name of the calibration directory when none is given.
 pub const DEFAULT_OUT: &str = "cutoffs";
@@ -87,7 +87,7 @@ struct Layout {
 
 impl Layout {
     fn new(out: &str) -> anyhow::Result<Self> {
-        for dir in [crate::queries(), crate::targets()] {
+        for dir in [inputs::fixed::queries(), inputs::fixed::targets()] {
             if !dir.is_dir() {
                 bail!("{} does not exist; run `mgy build` first", dir.display());
             }
@@ -98,23 +98,23 @@ impl Layout {
         })
     }
 
-    /// Forward shards, built by `mgy build`.
+    /// Forward shards, built by `mgy build fixed`.
     fn targets(&self) -> PathBuf {
-        crate::targets()
+        inputs::fixed::targets()
     }
 
     fn query_hmm(&self) -> PathBuf {
-        crate::queries().join("query.hmm")
+        inputs::fixed::query_hmm()
     }
 
     fn query_sto(&self) -> PathBuf {
-        crate::queries().join("query.sto")
+        inputs::fixed::query_sto()
     }
 
-    /// The mmseqs profile db `mgy build` made from the query set. Reused here
+    /// The mmseqs profile db `mgy build fixed` made from the query set. Reused here
     /// rather than rebuilt, since recruit searches the whole query set.
     fn query_db(&self) -> PathBuf {
-        crate::queries().join("queryDB/queryDB")
+        inputs::fixed::query_db()
     }
 
     fn targets_rev(&self) -> PathBuf {

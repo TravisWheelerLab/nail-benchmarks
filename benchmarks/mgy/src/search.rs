@@ -66,39 +66,6 @@ impl Dirs {
     }
 }
 
-/// The target file for one shard.
-pub fn shard(shard: &str) -> PathBuf {
-    crate::targets().join(format!("{shard}.fa"))
-}
-
-/// Shard files named `<n>.fa`, in numeric order.
-///
-/// The index has to come off the stem as a whole: run names embed floating
-/// point parameters, so splitting on dots is not safe elsewhere and is not
-/// worth doing differently here.
-pub fn shards(dir: &Path) -> anyhow::Result<Vec<(usize, PathBuf)>> {
-    let entries =
-        std::fs::read_dir(dir).with_context(|| format!("failed to read {}", dir.display()))?;
-
-    let mut out: Vec<(usize, PathBuf)> = entries
-        .filter_map(|e| e.ok())
-        .map(|e| e.path())
-        .filter(|p| p.extension().is_some_and(|x| x == "fa"))
-        .filter_map(|p| {
-            let i = p.file_stem()?.to_str()?.parse::<usize>().ok()?;
-            Some((i, p))
-        })
-        .collect();
-
-    out.sort_by_key(|(i, _)| *i);
-
-    if out.is_empty() {
-        anyhow::bail!("no shards named <n>.fa in {}", dir.display());
-    }
-
-    Ok(out)
-}
-
 /// There's no shell to expand a glob, so the parts get named one by one.
 pub fn cat(parts: impl IntoIterator<Item = PathBuf>, into: PathBuf) -> Cmd {
     parts
@@ -154,12 +121,26 @@ impl Split {
     }
 }
 
+/// One hmmer run over one shard: the query's parts searched together, then
+/// their output gathered up.
+///
+/// Named rather than a pair, so a caller that relabels the steps can say which
+/// one it is relabelling.
+pub struct Hmmer {
+    pub search: Step,
+    pub cat: Step,
+}
+
 /// One hmmer run over one shard, and the two tables it leaves behind.
 ///
 /// Two steps: the query's parts searched together, then their output
 /// concatenated into `results/<name>.<shard>.tbl` and `.domtbl`. It is an
 /// ordinary run and carries the ordinary fields -- the domain table is the
 /// only thing about it the other tools have no equivalent of.
+///
+/// `extra` is whatever else tells this run apart from the pipeline's others --
+/// a repetition index, a swept setting. Without it a pipeline that runs hmmer
+/// more than once against the same shard writes rows it cannot tell apart.
 pub fn hmmer(
     hmmsearch: &Path,
     split: &Split,
@@ -167,18 +148,22 @@ pub fn hmmer(
     name: &str,
     shard_name: &str,
     target: &Path,
-) -> Vec<Step> {
+    extra: &[(&str, String)],
+) -> Hmmer {
     let parts = &split.parts;
     let scratch = dirs.tmp.join("hmmer");
 
     let fields = |cmd: Cmd| {
-        cmd.field(manifest::NAME, name)
-            .field(manifest::TOOL, "hmmer")
-            .field(manifest::SHARD, shard_name)
+        extra.iter().fold(
+            cmd.field(manifest::NAME, name)
+                .field(manifest::TOOL, "hmmer")
+                .field(manifest::SHARD, shard_name),
+            |cmd, (key, value)| cmd.field(*key, value),
+        )
     };
 
-    vec![
-        Step::batched(
+    Hmmer {
+        search: Step::batched(
             parts.len(),
             parts.iter().enumerate().map(|(i, part)| {
                 fields(
@@ -198,7 +183,7 @@ pub fn hmmer(
         // is --threads again. a machine with a smaller pool than that won't
         // fail, it will just run fewer of the parts at once
         .cores(HMMER_CPU),
-        Step::serial([
+        cat: Step::serial([
             fields(
                 cat(
                     (0..parts.len()).map(|i| scratch.join(format!("{i}.tbl"))),
@@ -213,7 +198,7 @@ pub fn hmmer(
             .name("domtbl"),
         ])
         .name(format!("cat.{name}.{shard_name}")),
-    ]
+    }
 }
 
 /// One seeding pass, kept so later searches can replay it.
@@ -249,6 +234,67 @@ pub fn seed(
         .field(manifest::SHARD, shard_name)])
     .name("seeds")
     .cores(threads)
+}
+
+/// One mmseqs search over one target, and the conversion that writes its table.
+///
+/// Two commands rather than one, and both carry the run's fields: the search
+/// does the work and the conversion writes the table, so what the column cost
+/// is the two together.
+///
+/// mmseqs takes every core it can find unless told otherwise, so the
+/// conversion is held to the same count as the search rather than left to help
+/// itself while something else is being timed.
+pub struct Mmseqs<'a> {
+    pub bin: &'a Path,
+    pub query_db: &'a Path,
+    pub target_db: &'a Path,
+    /// Where the alignments land. Its parent has to exist already.
+    pub aln_db: PathBuf,
+    /// mmseqs' own scratch for the search.
+    pub work: PathBuf,
+    /// The hit table, in blast tabular form.
+    pub out: PathBuf,
+    pub threads: usize,
+    /// `-s`, for a run that sweeps sensitivity. mmseqs' own default otherwise.
+    pub s: Option<String>,
+    /// `--max-seqs`. mmseqs' own default of 300 otherwise, which loses hits
+    /// nail's seeding keeps.
+    pub max_seqs: Option<usize>,
+}
+
+impl Mmseqs<'_> {
+    pub fn cmds(&self) -> [Cmd; 2] {
+        let mut search = Cmd::new(self.bin)
+            .name("search")
+            .sub("search")
+            .arg("--threads", self.threads);
+
+        if let Some(s) = &self.s {
+            search = search.arg("-s", s);
+        }
+        if let Some(max) = self.max_seqs {
+            search = search.arg("--max-seqs", max);
+        }
+
+        [
+            search
+                .arg("-e", EVALUE)
+                .path(self.query_db)
+                .path(self.target_db)
+                .path(&self.aln_db)
+                .path(&self.work),
+            Cmd::new(self.bin)
+                .name("convertalis")
+                .sub("convertalis")
+                .arg("--threads", self.threads)
+                .arg("--format-mode", 0)
+                .path(self.query_db)
+                .path(self.target_db)
+                .path(&self.aln_db)
+                .path(&self.out),
+        ]
+    }
 }
 
 /// How many ways a query splits for hmmer, given a thread budget.

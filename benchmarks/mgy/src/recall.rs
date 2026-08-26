@@ -17,6 +17,7 @@ use clap::Parser;
 
 use pail::{Cmd, PipelineBuilder, Progress, Step, Table};
 
+use crate::inputs;
 use crate::manifest;
 use crate::search::{self, Bins, Dirs, Split};
 
@@ -83,8 +84,8 @@ pub fn main(args: Args) -> anyhow::Result<()> {
         dirs.tmp = tmp;
     }
 
-    let query_hmm = crate::queries().join("query.hmm");
-    let query_db = crate::queries().join("queryDB/queryDB");
+    let query_hmm = inputs::fixed::query_hmm();
+    let query_db = inputs::fixed::query_db();
 
     ensure!(
         query_hmm.is_file(),
@@ -92,7 +93,7 @@ pub fn main(args: Args) -> anyhow::Result<()> {
         query_hmm.display()
     );
 
-    let mut shards = search::shards(&crate::targets())?;
+    let mut shards = inputs::fixed::shards()?;
     if let Some(n) = args.shards {
         ensure!(n > 0, "-n 0 would leave nothing to search");
         if n > shards.len() {
@@ -180,41 +181,26 @@ pub fn main(args: Args) -> anyhow::Result<()> {
                     .iter()
                     .flat_map(|&s| {
                         let name = format!("mmseqs-s{s:.1}-ms{MMSEQS_MAX_SEQS}");
-                        let aln_db = scratch.join(format!("alnDB-s{s:.1}/alnDB"));
 
-                        let fields = |cmd: Cmd| {
+                        let cmds = search::Mmseqs {
+                            bin: &bins.mmseqs,
+                            query_db: &query_db,
+                            target_db: &target_db,
+                            aln_db: scratch.join(format!("alnDB-s{s:.1}/alnDB")),
+                            work: scratch.join(format!("work-s{s:.1}")),
+                            out: dirs.table(&name, &shard),
+                            threads: args.threads,
+                            s: Some(format!("{s:.1}")),
+                            max_seqs: Some(MMSEQS_MAX_SEQS),
+                        }
+                        .cmds();
+
+                        cmds.map(|cmd| {
                             cmd.field(manifest::NAME, &name)
                                 .field(manifest::TOOL, "mmseqs")
                                 .field(manifest::SHARD, &shard)
                                 .field("s", format!("{s:.1}"))
-                        };
-
-                        [
-                            fields(
-                                Cmd::new(&bins.mmseqs)
-                                    .name("search")
-                                    .sub("search")
-                                    .arg("--threads", args.threads)
-                                    .arg("-s", format!("{s:.1}"))
-                                    .arg("--max-seqs", MMSEQS_MAX_SEQS)
-                                    .arg("-e", search::EVALUE)
-                                    .path(&query_db)
-                                    .path(&target_db)
-                                    .path(&aln_db)
-                                    .path(scratch.join(format!("work-s{s:.1}"))),
-                            ),
-                            fields(
-                                Cmd::new(&bins.mmseqs)
-                                    .name("convertalis")
-                                    .sub("convertalis")
-                                    .arg("--threads", args.threads)
-                                    .arg("--format-mode", 0)
-                                    .path(&query_db)
-                                    .path(&target_db)
-                                    .path(&aln_db)
-                                    .path(dirs.table(&name, &shard)),
-                            ),
-                        ]
+                        })
                     })
                     .collect::<Vec<_>>(),
             )
@@ -224,9 +210,8 @@ pub fn main(args: Args) -> anyhow::Result<()> {
 
         // ---- hmmer
 
-        for step in search::hmmer(&bins.hmmsearch, &split, &dirs, HMMER, &shard, target) {
-            pl = pl.step(step);
-        }
+        let hmmer = search::hmmer(&bins.hmmsearch, &split, &dirs, HMMER, &shard, target, &[]);
+        pl = pl.step(hmmer.search).step(hmmer.cat);
 
         // only this shard's scratch: the query splits live on for the shards
         // that follow

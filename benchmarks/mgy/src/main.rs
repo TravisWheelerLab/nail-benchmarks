@@ -1,21 +1,26 @@
-//! Pfam against MGnify, three ways.
+//! Pfam against MGnify, four ways.
 //!
-//! One `build` draws the query set and the target shards; every pipeline
-//! searches those same files. What a pipeline owns is everything downstream of
-//! them -- its own seeds, its own hmmer run, its own results -- so a directory
-//! under `runs/` can be read on its own without asking what else has been run.
+//! `build` cuts the two sources into an input set, and every pipeline that
+//! reads a set of that shape searches those same files. What a pipeline owns
+//! is everything downstream of them -- its own seeds, its own hmmer run, its
+//! own results -- so a directory under `runs/` can be read on its own without
+//! asking what else has been run.
+//!
+//! There are two shapes, and [`inputs`] is where they are written down.
 
 mod analyze;
 mod build;
 mod cloud_search;
 mod cutoffs;
 mod hit_loss;
+mod inputs;
 mod manifest;
 mod parse;
 mod plot;
 mod recall;
 mod scores;
 mod search;
+mod search_size;
 
 use std::path::PathBuf;
 
@@ -33,8 +38,9 @@ struct Cli {
 
 #[derive(Subcommand)]
 enum Command {
-    /// Draw the query set and the target shards every pipeline searches.
-    Build(build::Args),
+    /// Cut Pfam and MGnify into an input set for the pipelines to search.
+    #[command(subcommand)]
+    Build(build::Cmd),
     /// Learn per-family false-positive score cutoffs from reversed decoys.
     #[command(subcommand)]
     Cutoffs(cutoffs::Cmd),
@@ -45,6 +51,8 @@ enum Command {
     CloudSearch(cloud_search::Args),
     /// Seed once, run hmmer, then run nail once at its defaults.
     HitLoss(hit_loss::Args),
+    /// Time every tool over every rung of the query and target ladders.
+    SearchSize(search_size::Args),
     /// Turn any finished pipeline into its scores table, and that into
     /// numbers.
     #[command(subcommand)]
@@ -55,11 +63,12 @@ enum Command {
 
 fn main() -> anyhow::Result<()> {
     match Cli::parse().command {
-        Command::Build(args) => build::main(args),
+        Command::Build(cmd) => build::main(cmd),
         Command::Cutoffs(cmd) => cutoffs::main(cmd),
         Command::Recall(args) => recall::main(args),
         Command::CloudSearch(args) => cloud_search::main(args),
         Command::HitLoss(args) => hit_loss::main(args),
+        Command::SearchSize(args) => search_size::main(args),
         Command::Parse(cmd) => parse::main(cmd),
         Command::Plot(args) => plot::main(args),
     }
@@ -69,14 +78,6 @@ fn main() -> anyhow::Result<()> {
 /// pipeline's output hang off it.
 pub fn dir() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-}
-
-pub fn queries() -> PathBuf {
-    dir().join("queries")
-}
-
-pub fn targets() -> PathBuf {
-    dir().join("targets")
 }
 
 /// Where the pipelines write. One directory each, under the one name, so what

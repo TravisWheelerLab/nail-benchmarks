@@ -22,6 +22,7 @@ use clap::Parser;
 
 use pail::{Cmd, PipelineBuilder, Progress, Step, Table};
 
+use crate::inputs;
 use crate::manifest;
 use crate::search::{self, Bins, Dirs, Split};
 
@@ -71,8 +72,8 @@ pub fn main(args: Args) -> anyhow::Result<()> {
         dirs.tmp = tmp;
     }
 
-    let query_hmm = crate::queries().join("query.hmm");
-    let target = search::shard(&args.shard);
+    let query_hmm = inputs::fixed::query_hmm();
+    let target = inputs::fixed::shard(&args.shard);
 
     ensure!(
         query_hmm.is_file() && target.is_file(),
@@ -102,9 +103,16 @@ pub fn main(args: Args) -> anyhow::Result<()> {
             SEED_MODE,
         ));
 
-    for step in search::hmmer(&bins.hmmsearch, &split, &dirs, HMMER, &args.shard, &target) {
-        pl = pl.step(step);
-    }
+    let hmmer = search::hmmer(
+        &bins.hmmsearch,
+        &split,
+        &dirs,
+        HMMER,
+        &args.shard,
+        &target,
+        &[],
+    );
+    pl = pl.step(hmmer.search).step(hmmer.cat);
 
     let pipeline = pl
         .step(
