@@ -3,7 +3,6 @@ resolver = "2"
 
 members = [
     "crates/bioio",
-    "crates/feisty",
     "crates/tools",
     "benchmarks/cloud-search",
     "benchmarks/hit-loss",
@@ -16,11 +15,11 @@ members = [
 
 [workspace.dependencies]
 bioio = { path = "crates/bioio" }
-feisty = { path = "crates/feisty" }
 tools = { path = "crates/tools" }
 
 anyhow = "1.0.99"
 clap = { version = "4.5.53", features = ["derive"] }
+feisty = "0.1.0"
 glob = "0.3.3"
 indexmap = { version = "2.13.0", features = ["serde"] }
 pail = "0.1.0"

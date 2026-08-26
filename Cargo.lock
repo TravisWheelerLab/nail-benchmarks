@@ -182,6 +182,8 @@ checksum = "877a4ace8713b0bcf2a4e7eec82529c029f1d0619886d18145fea96c3ffe5c0f"
 [[package]]
 name = "feisty"
 version = "0.1.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "5e534f9587440bd4abb6d3b2dba1c1951a1e4a90ff4a2f22fa00d26145d7502e"
 
 [[package]]
 name = "getrandom"
