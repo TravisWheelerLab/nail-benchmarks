@@ -134,7 +134,7 @@ mod tests {
     // removed out from under its neighbours
     fn tmp(name: &str, body: &str) -> PathBuf {
         let dir = std::env::temp_dir().join(format!(
-            "bench-split-{}-{}",
+            "util-split-{}-{}",
             std::process::id(),
             name.replace('.', "_")
         ));

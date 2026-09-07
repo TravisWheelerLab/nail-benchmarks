@@ -13,8 +13,8 @@ use std::path::PathBuf;
 use anyhow::Context;
 use clap::Parser;
 
-use bench::manifest;
-use bench::tools::nail;
+use util::manifest;
+use util::tools::nail;
 use pail::{Cmd, PipelineBuilder, Progress, Step, Table};
 
 use crate::inputs;

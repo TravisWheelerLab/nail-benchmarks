@@ -2,14 +2,14 @@
 resolver = "2"
 
 members = [
-    "crates/bench",
     "benchmarks/long-seqs",
     "benchmarks/mgy",
     "benchmarks/pid",
+    "benchmarks/util",
 ]
 
 [workspace.dependencies]
-bench = { path = "crates/bench" }
+util = { path = "benchmarks/util" }
 
 anyhow = "1.0.99"
 clap = { version = "4.5.53", features = ["derive"] }

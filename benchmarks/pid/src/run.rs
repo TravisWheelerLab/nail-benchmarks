@@ -13,8 +13,8 @@ use std::path::PathBuf;
 use anyhow::{Context, bail, ensure};
 use clap::Parser;
 
-use bench::manifest;
-use bench::split::Kind;
+use util::manifest;
+use util::split::Kind;
 use pail::{Cmd, OnError, Output, PipelineBuilder, Progress, Step, Table};
 
 use crate::inputs::Inputs;

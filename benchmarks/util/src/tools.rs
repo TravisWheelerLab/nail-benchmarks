@@ -17,7 +17,7 @@ use anyhow::Context;
 
 const DIR: &str = env!("CARGO_MANIFEST_DIR");
 
-/// The repo root: two directories up from `crates/bench`, fixed at compile
+/// The repo root: two directories up from `benchmarks/util`, fixed at compile
 /// time. Everything else here is relative to it.
 pub fn repo() -> PathBuf {
     PathBuf::from(DIR)

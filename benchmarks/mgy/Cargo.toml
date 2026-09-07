@@ -8,9 +8,9 @@ name = "mgy"
 path = "src/main.rs"
 
 [dependencies]
-bench = { workspace = true }
 libsail = { workspace = true }
 pail = { workspace = true }
+util = { workspace = true }
 
 anyhow = { workspace = true }
 clap = { workspace = true }

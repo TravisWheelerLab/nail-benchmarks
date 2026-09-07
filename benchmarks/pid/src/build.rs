@@ -94,13 +94,13 @@ pub struct Args {
 }
 
 pub fn main(args: Args) -> anyhow::Result<()> {
-    let src_sto = bench::tools::pfam_sto()?;
-    let src_fa = bench::tools::swissprot()?;
+    let src_sto = util::tools::pfam_sto()?;
+    let src_fa = util::tools::swissprot()?;
 
     // resolved up front: the assembly takes long enough that finding out about
     // a missing hmmbuild afterwards would be miserable
-    let hmmbuild = bench::tools::hmmbuild()?;
-    let hmmemit = bench::tools::hmmemit()?;
+    let hmmbuild = util::tools::hmmbuild()?;
+    let hmmemit = util::tools::hmmemit()?;
 
     let set = Inputs::new(&args.size);
 
@@ -128,7 +128,7 @@ pub fn main(args: Args) -> anyhow::Result<()> {
 
         pl = pl
             .step(
-                Step::serial([Cmd::new(bench::tools::create_profmark()?)
+                Step::serial([Cmd::new(util::tools::create_profmark()?)
                     .name("create-profmark")
                     .arg("-S", args.seed)
                     .arg("-1", format!("{:.2}", args.train_test_id))
@@ -493,7 +493,7 @@ fn families(path: &Path) -> anyhow::Result<IndexMap<String, StockholmRecord>> {
     // a second copy of a 500MB file
     let mut bytes =
         std::fs::read(path).with_context(|| format!("failed to read {}", path.display()))?;
-    bench::repair_utf8(&mut bytes);
+    util::repair_utf8(&mut bytes);
 
     let sto = libsail::seq::stockholm::Stockholm::new(&bytes[..])
         .with_context(|| format!("failed to parse {}", path.display()))?;

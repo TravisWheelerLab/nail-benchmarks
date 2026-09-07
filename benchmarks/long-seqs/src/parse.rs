@@ -14,7 +14,7 @@ use clap::{Parser, Subcommand};
 use libsail::collection::Indexable;
 use libsail::seq::fasta::Fasta;
 
-use bench::manifest::{self, Manifest};
+use util::manifest::{self, Manifest};
 
 use crate::inputs;
 use crate::run::RUN_NAME;
@@ -132,7 +132,7 @@ fn searches(out: &Path, run: &str) -> anyhow::Result<Vec<(String, PathBuf)>> {
 /// Cell fraction of the last hit in a nail table, which is the one these
 /// single-pair searches are about.
 fn last_cell_frac(path: &Path) -> anyhow::Result<f64> {
-    bench::nail::cell_fracs(path)?
+    util::nail::cell_fracs(path)?
         .last()
         .map(|h| h.cell_frac)
         .context("no hits in table")

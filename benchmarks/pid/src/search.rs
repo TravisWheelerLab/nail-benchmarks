@@ -12,8 +12,8 @@ use std::path::{Path, PathBuf};
 
 use anyhow::Context;
 
-use bench::manifest;
-use bench::split::{self, Kind};
+use util::manifest;
+use util::split::{self, Kind};
 use pail::{Closure, Cmd, Step};
 
 use crate::inputs::Inputs;
@@ -302,16 +302,16 @@ pub struct Bins {
 impl Bins {
     pub fn find() -> anyhow::Result<Bins> {
         Ok(Bins {
-            nail: bench::tools::nail().context("nail")?,
-            mmseqs: bench::tools::mmseqs().context("mmseqs")?,
-            hmmsearch: bench::tools::hmmsearch().context("hmmsearch")?,
-            phmmer: bench::tools::phmmer().context("phmmer")?,
-            blastp: bench::tools::blastp().context("blastp")?,
-            psiblast: bench::tools::psiblast().context("psiblast")?,
-            makeblastdb: bench::tools::makeblastdb().context("makeblastdb")?,
-            lastal: bench::tools::lastal().context("lastal")?,
-            lastdb: bench::tools::lastdb().context("lastdb")?,
-            diamond: bench::tools::diamond().context("diamond")?,
+            nail: util::tools::nail().context("nail")?,
+            mmseqs: util::tools::mmseqs().context("mmseqs")?,
+            hmmsearch: util::tools::hmmsearch().context("hmmsearch")?,
+            phmmer: util::tools::phmmer().context("phmmer")?,
+            blastp: util::tools::blastp().context("blastp")?,
+            psiblast: util::tools::psiblast().context("psiblast")?,
+            makeblastdb: util::tools::makeblastdb().context("makeblastdb")?,
+            lastal: util::tools::lastal().context("lastal")?,
+            lastdb: util::tools::lastdb().context("lastdb")?,
+            diamond: util::tools::diamond().context("diamond")?,
         })
     }
 }

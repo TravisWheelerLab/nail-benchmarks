@@ -27,9 +27,9 @@ use libsail::seq::p7hmm::IndexedHmm;
 use rand::SeedableRng;
 use rand::rngs::StdRng;
 
-use bench::tbl;
+use util::tbl;
 use pail::{Closure, Cmd as PCmd, PipelineBuilder, Progress, Step};
-use bench::tools::{mgnify, mmseqs, pfam_hmm, pfam_sto};
+use util::tools::{mgnify, mmseqs, pfam_hmm, pfam_sto};
 
 use crate::cut;
 use crate::inputs;

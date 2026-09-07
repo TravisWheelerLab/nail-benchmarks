@@ -26,7 +26,7 @@ use libsail::tbl::nail::NailTable;
 use libsail::tbl::{Hit, HitColumns, Table};
 
 use anyhow::{Context, bail};
-use bench::manifest::{self, Manifest, Wall};
+use util::manifest::{self, Manifest, Wall};
 use clap::{Parser, Subcommand};
 
 use crate::inputs::Inputs;
@@ -352,7 +352,7 @@ fn cells(args: CellsArgs) -> anyhow::Result<()> {
     let set = args.which.set();
     let table = manifest::table_path(&set.output_dir().join("results"), &args.run, "");
 
-    let hits = bench::nail::cell_fracs(&table)
+    let hits = util::nail::cell_fracs(&table)
         .with_context(|| format!("failed to read {}", table.display()))?;
 
     // read out of the files rather than shelled out to hmmstat and

@@ -19,7 +19,7 @@ use pail::{Cmd, PipelineBuilder, Progress, Step, Table};
 
 use crate::inputs;
 use crate::search::{self, Bins, Dirs, Split};
-use bench::manifest;
+use util::manifest;
 
 /// mmseqs' own default is 300, which loses hits nail's seeding keeps. 2000 is
 /// what the comparison has always been run at.

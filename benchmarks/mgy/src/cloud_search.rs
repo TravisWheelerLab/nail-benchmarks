@@ -21,7 +21,7 @@ use pail::{Cmd, PipelineBuilder, Progress, Step, Table};
 
 use crate::inputs;
 use crate::search::{self, Bins, Dirs, Split};
-use bench::manifest;
+use util::manifest;
 
 /// The seeding settings this benchmark searches with.
 const MMSEQS_S: &str = "12.0";

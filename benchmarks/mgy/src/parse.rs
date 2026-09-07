@@ -68,7 +68,7 @@ fn scores(args: ScoresArgs) -> anyhow::Result<()> {
 
     let cutoffs = match args.cutoffs {
         Some(path) => path,
-        None => bench::tools::mgy_cutoffs()?,
+        None => util::tools::mgy_cutoffs()?,
     };
 
     let query_hmm = args.queries.unwrap_or_else(inputs::fixed::query_hmm);

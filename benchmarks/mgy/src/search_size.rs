@@ -20,7 +20,7 @@ use pail::{Cmd, PipelineBuilder, Progress, Step, Table};
 
 use crate::inputs;
 use crate::search::{self, Bins, Dirs, Split};
-use bench::manifest;
+use util::manifest;
 
 #[derive(Parser, Debug)]
 pub struct Args {

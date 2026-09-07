@@ -16,8 +16,8 @@ use anyhow::Context;
 
 use pail::{Closure, Cmd, Step};
 
-use bench::manifest;
-use bench::split::{self, Kind};
+use util::manifest;
+use util::split::{self, Kind};
 
 /// hmmsearch doesn't scale past a couple of threads, so its query gets split
 /// threads/HMMER_CPU ways and the parts run at the same time.
@@ -314,9 +314,9 @@ pub struct Bins {
 impl Bins {
     pub fn find() -> anyhow::Result<Bins> {
         Ok(Bins {
-            nail: bench::tools::nail().context("nail")?,
-            mmseqs: bench::tools::mmseqs().context("mmseqs")?,
-            hmmsearch: bench::tools::hmmsearch().context("hmmsearch")?,
+            nail: util::tools::nail().context("nail")?,
+            mmseqs: util::tools::mmseqs().context("mmseqs")?,
+            hmmsearch: util::tools::hmmsearch().context("hmmsearch")?,
         })
     }
 }

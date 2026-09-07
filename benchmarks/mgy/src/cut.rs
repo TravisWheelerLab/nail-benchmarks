@@ -158,7 +158,7 @@ where
             Ok(rec) => rec,
             Err(_) => {
                 let mut repaired = bytes.into_owned();
-                bench::repair_utf8(&mut repaired);
+                util::repair_utf8(&mut repaired);
 
                 StockholmParser::parse(&repaired)
                     .with_context(|| format!("record {n} of {} will not parse", src.display()))?
@@ -217,7 +217,7 @@ fn check_file_names(names: &HashSet<String>) -> anyhow::Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use bench::profile;
+    use util::profile;
 
     fn tmp(name: &str, body: &[u8]) -> std::path::PathBuf {
         let dir = std::env::temp_dir().join(format!("mgy-cut-{}-{name}", std::process::id()));

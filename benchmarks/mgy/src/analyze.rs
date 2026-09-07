@@ -14,7 +14,7 @@ use std::path::Path;
 
 use anyhow::ensure;
 
-use bench::tbl;
+use util::tbl;
 
 use crate::scores::{Scores, Tool};
 

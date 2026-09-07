@@ -50,7 +50,7 @@ use libsail::tbl::hmmer::HmmerTable;
 use libsail::tbl::nail::NailTable;
 use libsail::tbl::{Hit, HitColumns, Table};
 use pail::{Cmd as PCmd, PipelineBuilder, Progress, Step};
-use bench::tools::{hmmsearch, mmseqs, nail};
+use util::tools::{hmmsearch, mmseqs, nail};
 
 use crate::cut;
 use crate::inputs::{self, shards};

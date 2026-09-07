@@ -28,8 +28,8 @@ use libsail::tbl::hmmer::HmmerTable;
 use libsail::tbl::nail::NailTable;
 use libsail::tbl::{HitColumns, HmmerDomHits, Table};
 
-use bench::manifest::{self, Manifest, Wall};
-use bench::tbl;
+use util::manifest::{self, Manifest, Wall};
+use util::tbl;
 
 type Pair = (String, String);
 
