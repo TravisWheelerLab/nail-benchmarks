@@ -171,9 +171,6 @@ pub fn main(args: Args) -> anyhow::Result<()> {
         );
 
         // ---- mmseqs
-        //
-        // the search does the work and the conversion writes the table, so both
-        // carry the run's fields: what the column cost is the two together.
 
         pl = pl.step(
             Step::serial(
@@ -195,12 +192,16 @@ pub fn main(args: Args) -> anyhow::Result<()> {
                         }
                         .cmds();
 
-                        cmds.map(|cmd| {
-                            cmd.field(manifest::NAME, &name)
+                        // only the search is named, so the column's wall clock
+                        // is the search alone
+                        [
+                            cmds.search
+                                .field(manifest::NAME, &name)
                                 .field(manifest::TOOL, "mmseqs")
                                 .field(manifest::SHARD, &shard)
-                                .field("s", format!("{s:.1}"))
-                        })
+                                .field("s", format!("{s:.1}")),
+                            cmds.convert.field(manifest::SHARD, &shard),
+                        ]
                     })
                     .collect::<Vec<_>>(),
             )

@@ -155,8 +155,8 @@ pub fn main(args: Args) -> anyhow::Result<()> {
                         .cores(args.threads),
                     )
                     .step(
-                        Step::serial(
-                            search::Mmseqs {
+                        Step::serial({
+                            let cmds = search::Mmseqs {
                                 bin: &bins.mmseqs,
                                 query_db: &query_db,
                                 target_db: &target_db,
@@ -170,9 +170,15 @@ pub fn main(args: Args) -> anyhow::Result<()> {
                                 s: None,
                                 max_seqs: None,
                             }
-                            .cmds()
-                            .map(|cmd| fields(cmd, "mmseqs")),
-                        )
+                            .cmds();
+
+                            // only the search is named, so the column's wall
+                            // clock is the search alone
+                            [
+                                fields(cmds.search, "mmseqs"),
+                                cmds.convert.field(manifest::SHARD, &shard),
+                            ]
+                        })
                         .name(format!("mmseqs.q{q}.t{t}.r{rep}"))
                         .cores(args.threads),
                     );

@@ -7,8 +7,10 @@
 //!
 //! Every search command carries the fields `parse` reads back: `name` for the
 //! column it becomes, `tool` for how to read its table, and `shard` for which
-//! target it ran against. Seeding carries `stage` instead, since it produces
-//! pairs rather than scores and so is not a column.
+//! target it ran against. A command that is not itself a search carries `stage`
+//! instead -- seeding, which produces pairs rather than scores, and mmseqs'
+//! conversion, which reformats a search's output. Only a `name` makes a
+//! command a column, so only search time is charged to one.
 
 use std::path::{Path, PathBuf};
 
@@ -25,6 +27,13 @@ pub const HMMER_CPU: usize = 2;
 
 /// Every tool reports down to here, so they can be compared.
 pub const EVALUE: &str = "10";
+
+/// The stage mmseqs' table conversion belongs to.
+//
+// a stage rather than a run: what a column cost is the search that produced
+// the alignments, not the pass that reformats them. every tool is timed the
+// same way -- one search command, nothing around it
+const CONVERT: &str = "convert";
 
 /// Where one pipeline's output lives.
 ///
@@ -240,10 +249,6 @@ pub fn seed(
 
 /// One mmseqs search over one target, and the conversion that writes its table.
 ///
-/// Two commands rather than one, and both carry the run's fields: the search
-/// does the work and the conversion writes the table, so what the column cost
-/// is the two together.
-///
 /// mmseqs takes every core it can find unless told otherwise, so the
 /// conversion is held to the same count as the search rather than left to help
 /// itself while something else is being timed.
@@ -265,8 +270,17 @@ pub struct Mmseqs<'a> {
     pub max_seqs: Option<usize>,
 }
 
+/// The two commands one mmseqs run takes.
+///
+/// Named rather than a pair, so a caller can field them separately: what the
+/// run cost is the search, and the conversion is not part of it.
+pub struct MmseqsCmds {
+    pub search: Cmd,
+    pub convert: Cmd,
+}
+
 impl Mmseqs<'_> {
-    pub fn cmds(&self) -> [Cmd; 2] {
+    pub fn cmds(&self) -> MmseqsCmds {
         let mut search = Cmd::new(self.bin)
             .name("search")
             .sub("search")
@@ -279,14 +293,14 @@ impl Mmseqs<'_> {
             search = search.arg("--max-seqs", max);
         }
 
-        [
-            search
+        MmseqsCmds {
+            search: search
                 .arg("-e", EVALUE)
                 .path(self.query_db)
                 .path(self.target_db)
                 .path(&self.aln_db)
                 .path(&self.work),
-            Cmd::new(self.bin)
+            convert: Cmd::new(self.bin)
                 .name("convertalis")
                 .sub("convertalis")
                 .arg("--threads", self.threads)
@@ -294,8 +308,9 @@ impl Mmseqs<'_> {
                 .path(self.query_db)
                 .path(self.target_db)
                 .path(&self.aln_db)
-                .path(&self.out),
-        ]
+                .path(&self.out)
+                .field(manifest::STAGE, CONVERT),
+        }
     }
 }
 
