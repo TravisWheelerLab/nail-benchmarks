@@ -35,7 +35,7 @@ pub fn main(cmd: Cmd) -> anyhow::Result<()> {
 
 #[derive(Parser, Debug)]
 pub struct ScoresArgs {
-    /// A pipeline directory, or the name of one under benchmarks/mgy/runs/.
+    /// A pipeline directory, or the name of one under benchmarks/mgy/outputs/.
     #[arg(value_name = "recall|cloud-search|hit-loss")]
     pipeline: String,
 
@@ -68,7 +68,7 @@ fn scores(args: ScoresArgs) -> anyhow::Result<()> {
 
     let cutoffs = match args.cutoffs {
         Some(path) => path,
-        None => tools::mgy_cutoffs()?,
+        None => bench::tools::mgy_cutoffs()?,
     };
 
     let query_hmm = args.queries.unwrap_or_else(inputs::fixed::query_hmm);
@@ -101,7 +101,7 @@ fn scores(args: ScoresArgs) -> anyhow::Result<()> {
 #[derive(Parser, Debug)]
 pub struct TableArgs {
     /// The scores.tbl `parse scores` wrote, the pipeline directory holding
-    /// one, or the name of one under benchmarks/mgy/runs/.
+    /// one, or the name of one under benchmarks/mgy/outputs/.
     #[arg(value_name = "recall|cloud-search|hit-loss")]
     scores: String,
 
@@ -145,7 +145,7 @@ fn derive(
 fn pipeline(name: &str) -> anyhow::Result<PathBuf> {
     let dir = match PathBuf::from(name) {
         path if path.is_dir() => path,
-        _ => crate::runs().join(name),
+        _ => crate::outputs().join(name),
     };
 
     if !dir.is_dir() {

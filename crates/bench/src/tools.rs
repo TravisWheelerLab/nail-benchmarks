@@ -1,3 +1,15 @@
+//! Where the programs and the sequence data are.
+//!
+//! Every benchmark shells out to the same handful of binaries and reads from
+//! the same downloads, and neither is looked for on `PATH`: `make` puts the
+//! tools in `tools/bin/` and the data in `data/`, and a benchmark asks here
+//! rather than guessing. That is what makes a run reproducible -- whichever
+//! `hmmsearch` was built for this repo is the one that ran.
+//!
+//! A tool accessor checks the binary is there and answers `-h` before handing
+//! back its path, so a missing or broken install fails by name at the front of
+//! a pipeline rather than as a mystery exit code an hour in.
+
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
@@ -5,6 +17,8 @@ use anyhow::Context;
 
 const DIR: &str = env!("CARGO_MANIFEST_DIR");
 
+/// The repo root: two directories up from `crates/bench`, fixed at compile
+/// time. Everything else here is relative to it.
 pub fn repo() -> PathBuf {
     PathBuf::from(DIR)
         .parent()

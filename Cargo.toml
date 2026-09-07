@@ -4,16 +4,14 @@ resolver = "2"
 members = [
     "crates/bench",
     "crates/bioio",
-    "crates/tools",
     "benchmarks/long-seqs",
     "benchmarks/mgy",
-    "benchmarks/pct-id",
+    "benchmarks/pid",
 ]
 
 [workspace.dependencies]
 bench = { path = "crates/bench" }
 bioio = { path = "crates/bioio" }
-tools = { path = "crates/tools" }
 
 anyhow = "1.0.99"
 clap = { version = "4.5.53", features = ["derive"] }

@@ -45,7 +45,7 @@ use rayon::iter::{IntoParallelRefIterator, ParallelIterator};
 
 use bioio::tbl::{BlastTable, HitTable, HmmerTable, NailTable};
 use pail::{Cmd as PCmd, PipelineBuilder, Progress, Step};
-use tools::{hmmsearch, mmseqs, nail};
+use bench::tools::{hmmsearch, mmseqs, nail};
 
 use crate::inputs::{self, shards};
 
@@ -78,7 +78,7 @@ const HMMER_DECOY: &str = "hmmer";
 /// Where every artifact of a calibration lives.
 ///
 /// The whole thing hangs off one directory at the crate root rather than under
-/// `runs/`, so several calibrations — different shard counts, different
+/// `outputs/`, so several calibrations — different shard counts, different
 /// parameters — can sit side by side and be deleted as a unit. What it produces
 /// is a data file to be promoted by hand, not a benchmark's results.
 ///

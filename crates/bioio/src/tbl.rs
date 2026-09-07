@@ -345,57 +345,6 @@ impl HitTable {
         })
     }
 
-    pub fn from_path_filtered<P, C, F>(path: P, f: F) -> anyhow::Result<Self>
-    where
-        P: AsRef<Path>,
-        C: HitColumns,
-        F: Fn(&Hit) -> bool,
-    {
-        let path = path.as_ref();
-        let file =
-            File::open(path).with_context(|| format!("failed to open hit table: {path:?}"))?;
-        let name = path
-            .file_stem()
-            .and_then(|s| s.to_str())
-            .context("invalid path")?;
-
-        Self::parse_filtered::<File, C, F>(file, f, name)
-    }
-
-    pub fn parse_filtered<R, C, F>(buf: R, f: F, name: &str) -> anyhow::Result<Self>
-    where
-        R: Read,
-        C: HitColumns,
-        F: Fn(&Hit) -> bool,
-    {
-        let reader = BufReader::new(buf);
-
-        let mut hits = vec![];
-        for line in reader.lines() {
-            let line = line.unwrap_or_default();
-            if line.starts_with('#') || line.is_empty() {
-                continue;
-            }
-
-            let tokens = line.split_whitespace().collect::<Vec<_>>();
-            let hit = Hit {
-                query: tokens[C::QUERY].to_string(),
-                target: tokens[C::TARGET].to_string(),
-                score: tokens[C::SCORE].parse()?,
-                e_value: tokens[C::E_VALUE].parse()?,
-            };
-
-            if f(&hit) {
-                hits.push(hit);
-            }
-        }
-
-        Ok(Self {
-            name: name.to_string(),
-            hits,
-        })
-    }
-
     pub fn to_map(self) -> HashMap<(String, String), Hit> {
         self.hits
             .into_iter()
@@ -408,14 +357,6 @@ impl HitTable {
         self.hits
             .into_iter()
             .for_each(|h| map.entry(h.query.clone()).or_default().push(h));
-        map
-    }
-
-    pub fn to_target_map(self) -> HashMap<String, Vec<Hit>> {
-        let mut map: HashMap<String, Vec<Hit>> = HashMap::new();
-        self.hits
-            .into_iter()
-            .for_each(|h| map.entry(h.target.clone()).or_default().push(h));
         map
     }
 }

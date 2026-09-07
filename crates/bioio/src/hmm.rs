@@ -12,95 +12,6 @@ use std::path::Path;
 
 use anyhow::{bail, Context};
 
-/// Per-model statistics needed to turn a bit score into a P-value.
-pub struct Gumbel {
-    /// Gathering threshold: the curated score above which a hit is a member.
-    pub ga_score: f32,
-    /// The gathering threshold expressed as a P-value.
-    pub ga_p_value: f64,
-    /// Location parameter of the forward score distribution.
-    pub tau: f64,
-    /// Scale parameter of the forward score distribution.
-    pub lambda: f64,
-}
-
-impl Gumbel {
-    /// P-value of a bit score under this model's fitted distribution.
-    pub fn p_value(&self, score: f64) -> f64 {
-        (-self.lambda * (score - self.tau)).exp()
-    }
-}
-
-/// Read each model's name, gathering threshold, and forward-score distribution.
-pub fn parse_stats(path: impl AsRef<Path>) -> anyhow::Result<HashMap<String, Gumbel>> {
-    let path = path.as_ref();
-    let reader = BufReader::new(
-        std::fs::File::open(path).with_context(|| format!("failed to open {}", path.display()))?,
-    );
-
-    let mut names = vec![];
-    let mut gathering_thresholds = vec![];
-    let mut gumbels = vec![];
-
-    for line in reader.lines() {
-        let line = line?;
-
-        if let Some(rest) = line.strip_prefix("NAME") {
-            names.push(rest.split_whitespace().collect::<String>());
-        }
-
-        if let Some(rest) = line.strip_prefix("GA") {
-            let x = rest
-                .split_whitespace()
-                .map(|s| s.parse::<f32>())
-                .collect::<anyhow::Result<Vec<_>, _>>()
-                .with_context(|| format!("unparseable GA line in {}", path.display()))?;
-
-            gathering_thresholds.push((x[0], x[1]));
-        }
-
-        if let Some(rest) = line.strip_prefix("STATS LOCAL FORWARD") {
-            let x = rest
-                .split_whitespace()
-                .map(|s| s.parse::<f64>())
-                .collect::<anyhow::Result<Vec<_>, _>>()
-                .with_context(|| format!("unparseable STATS line in {}", path.display()))?;
-
-            gumbels.push((x[0], x[1]))
-        }
-    }
-
-    if names.len() != gathering_thresholds.len() || names.len() != gumbels.len() {
-        bail!(
-            "{} has {} models but {} GA and {} STATS lines",
-            path.display(),
-            names.len(),
-            gathering_thresholds.len(),
-            gumbels.len()
-        );
-    }
-
-    Ok(names
-        .into_iter()
-        .enumerate()
-        .map(|(i, name)| {
-            let ga_score = gathering_thresholds[i].0;
-            let tau = gumbels[i].0;
-            let lambda = gumbels[i].1;
-            let ga_p_value = (-lambda * (ga_score as f64 - tau)).exp();
-            (
-                name,
-                Gumbel {
-                    ga_score,
-                    ga_p_value,
-                    tau,
-                    lambda,
-                },
-            )
-        })
-        .collect())
-}
-
 /// Each model's name and the number of match states in it.
 ///
 /// `LENG` is the profile's length: the query axis of a dynamic programming
@@ -327,24 +238,6 @@ STATS LOCAL FORWARD -4.2 0.71
         let names: HashSet<String> = ["../alpha".to_string()].into_iter().collect();
         let err = explode(&src, &names, &out).unwrap_err().to_string();
         assert!(err.contains("cannot be used as a file name"), "got: {err}");
-
-        std::fs::remove_dir_all(src.parent().unwrap()).ok();
-    }
-
-    #[test]
-    fn stats_pair_names_with_their_distributions() {
-        let src = tmp("stats", TWO);
-        let stats = parse_stats(&src).unwrap();
-
-        assert_eq!(stats.len(), 2);
-        let alpha = &stats["alpha"];
-        assert_eq!(alpha.ga_score, 24.60);
-        assert_eq!(alpha.lambda, 0.70);
-
-        // a score at the threshold reproduces the threshold's own p-value
-        assert!((alpha.p_value(24.60) - alpha.ga_p_value).abs() < 1e-12);
-        // and a higher score is more significant
-        assert!(alpha.p_value(40.0) < alpha.ga_p_value);
 
         std::fs::remove_dir_all(src.parent().unwrap()).ok();
     }

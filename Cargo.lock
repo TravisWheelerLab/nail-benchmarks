@@ -238,10 +238,10 @@ name = "long-seqs"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "bench",
  "bioio",
  "clap",
  "pail",
- "tools",
 ]
 
 [[package]]
@@ -262,7 +262,6 @@ dependencies = [
  "pail",
  "rand",
  "rayon",
- "tools",
 ]
 
 [[package]]
@@ -282,7 +281,7 @@ dependencies = [
 ]
 
 [[package]]
-name = "pct-id"
+name = "pid"
 version = "0.1.0"
 dependencies = [
  "anyhow",
@@ -293,7 +292,6 @@ dependencies = [
  "pail",
  "rand",
  "regex",
- "tools",
 ]
 
 [[package]]
@@ -433,13 +431,6 @@ dependencies = [
  "proc-macro2",
  "quote",
  "unicode-ident",
-]
-
-[[package]]
-name = "tools"
-version = "0.1.0"
-dependencies = [
- "anyhow",
 ]
 
 [[package]]

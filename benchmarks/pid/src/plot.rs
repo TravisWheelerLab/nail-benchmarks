@@ -60,7 +60,7 @@ const FIGURES: &[Figure] = &[
 
 #[derive(Parser, Debug)]
 pub struct Args {
-    /// Which input set's figures to draw, naming runs/<size>/.
+    /// Which input set's figures to draw, naming outputs/<size>/.
     #[arg(short, long, default_value = "toy")]
     size: String,
 
@@ -92,11 +92,11 @@ pub fn main(args: Args) -> anyhow::Result<()> {
 
     let dir = args
         .out
-        .unwrap_or_else(|| Inputs::new(&args.size).run_dir().join("figures"));
+        .unwrap_or_else(|| Inputs::new(&args.size).output_dir().join("figures"));
 
     if !dir.is_dir() {
         bail!(
-            "no {}; run `pct-id parse recall --size {}` first",
+            "no {}; run `pid parse recall --size {}` first",
             dir.display(),
             args.size
         );
@@ -162,7 +162,7 @@ pub fn main(args: Args) -> anyhow::Result<()> {
 
     if drawn == 0 {
         bail!(
-            "nothing to draw: no analysis output in {}. run `pct-id parse recall` first",
+            "nothing to draw: no analysis output in {}. run `pid parse recall` first",
             dir.display()
         );
     }

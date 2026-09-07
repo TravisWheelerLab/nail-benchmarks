@@ -31,7 +31,7 @@ use bioio::split::{self, Kind as SplitKind};
 use bioio::{fasta, hmm, stockholm};
 use feisty::Permutation;
 use pail::{Closure, Cmd as PCmd, PipelineBuilder, Progress, Step};
-use tools::{mgnify, mmseqs, pfam_hmm, pfam_sto};
+use bench::tools::{mgnify, mmseqs, pfam_hmm, pfam_sto};
 
 use crate::inputs;
 

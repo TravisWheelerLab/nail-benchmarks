@@ -1,35 +1,44 @@
+//! Turning a finished run into the file the cell-fraction figure overlays.
+//!
+//! What ran comes out of `manifest.tbl` -- which pair each search covered and
+//! where it put its table -- rather than out of a count of the pairs that are
+//! checked in. A pair whose search failed is left out with a warning instead of
+//! coming back as a missing file.
+
 use std::fs::File;
 use std::io::{BufWriter, Write};
 use std::path::{Path, PathBuf};
 
-use anyhow::Context;
+use anyhow::{Context, bail, ensure};
 use clap::{Parser, Subcommand};
 
-use crate::{dir, PAIRS};
+use bench::manifest::{self, Manifest};
+
+use crate::inputs;
+use crate::run::RUN_NAME;
 
 /// Analysis subcommands for this benchmark.
 #[derive(Subcommand)]
 pub enum Cmd {
     /// Emit `cells.long.txt`: DP matrix area against the fraction of it
-    /// computed, one row per pair. The pct-id benchmark overlays this on its
+    /// computed, one row per pair. The pid benchmark overlays this on its
     /// own cell-fraction figure via `--long_hits`.
     Cells(CellsArgs),
 }
 
 #[derive(Parser)]
 pub struct CellsArgs {
-    /// Results directory; defaults to this benchmark's results/.
-    #[arg(short, long)]
-    results: Option<PathBuf>,
-
-    /// Where to write cells.long.txt.
-    #[arg(short, long)]
+    /// Where the run wrote. Defaults to this benchmark's outputs/.
+    #[arg(long, value_name = "dir")]
     out: Option<PathBuf>,
 
-    /// Name of the run to read.
-    #[arg(long, default_value = crate::RUN_NAME)]
-    run: String,
+    /// Where cells.long.txt goes. Defaults to figures/ beside the run.
+    #[arg(short, long, value_name = "dir")]
+    figures: Option<PathBuf>,
 
+    /// Which run's tables to read cell fractions from.
+    #[arg(long, value_name = "NAME", default_value = RUN_NAME)]
+    run: String,
 }
 
 pub fn main(cmd: Cmd) -> anyhow::Result<()> {
@@ -39,30 +48,83 @@ pub fn main(cmd: Cmd) -> anyhow::Result<()> {
 }
 
 fn cells(args: CellsArgs) -> anyhow::Result<()> {
-    let dir = dir();
+    let out = args.out.unwrap_or_else(inputs::outputs);
+    let figures = args.figures.unwrap_or_else(|| out.join("figures"));
 
-    let results = args.results.unwrap_or_else(|| dir.join("results"));
-    let out_path = args.out.unwrap_or_else(|| results.join("cells.long.txt"));
+    let searches = searches(&out, &args.run)?;
 
-    let mut out = BufWriter::new(
-        File::create(&out_path)
-            .with_context(|| format!("failed to create {}", out_path.display()))?,
+    std::fs::create_dir_all(&figures)
+        .with_context(|| format!("failed to create {}", figures.display()))?;
+
+    let path = figures.join("cells.long.txt");
+    let mut file = BufWriter::new(
+        File::create(&path).with_context(|| format!("failed to create {}", path.display()))?,
     );
 
-    for i in 1..=PAIRS {
-        let tbl = results.join(format!("{}.{i}.tbl", args.run));
-        let cell_frac = last_cell_frac(&tbl)
-            .with_context(|| format!("failed to read a hit from {}", tbl.display()))?;
+    for (pair, table) in searches {
+        let cell_frac = last_cell_frac(&table)
+            .with_context(|| format!("failed to read a hit from {}", table.display()))?;
 
-        let q_len = bioio::fasta::residue_len(dir.join(format!("query/{i}.query.fa")))?;
-        let t_len = bioio::fasta::residue_len(dir.join(format!("target/{i}.target.fa")))?;
+        let q_len = bioio::fasta::residue_len(inputs::query(&pair))?;
+        let t_len = bioio::fasta::residue_len(inputs::target(&pair))?;
 
-        writeln!(out, "{},{:.5}", q_len * t_len, cell_frac)?;
+        writeln!(file, "{},{:.5}", q_len * t_len, cell_frac)?;
     }
 
-    out.flush()?;
-    println!("wrote {}", out_path.display());
+    file.flush()?;
+    println!("wrote {}", path.display());
     Ok(())
+}
+
+/// The pairs one run covered and the table it wrote for each, in the order the
+/// pipeline declared them.
+///
+/// Only nail reports a cell fraction, so a row filed under another tool is an
+/// error rather than something to skip: it would mean the manifest and this
+/// analysis disagree about what was measured.
+fn searches(out: &Path, run: &str) -> anyhow::Result<Vec<(String, PathBuf)>> {
+    let manifest = Manifest::read(&out.join("manifest.tbl"))?;
+    let results = out.join("results");
+
+    let failed: Vec<&str> = manifest
+        .failed()
+        .filter_map(|row| row.get(manifest::SHARD))
+        .collect();
+    if !failed.is_empty() {
+        eprintln!(
+            "warning: leaving out {} pair(s) that did not finish: {}",
+            failed.len(),
+            failed.join(", ")
+        );
+    }
+
+    let mut searches = Vec::new();
+
+    for row in manifest.runs() {
+        if row.get(manifest::NAME) != Some(run) {
+            continue;
+        }
+
+        let tool = row
+            .get(manifest::TOOL)
+            .with_context(|| format!("run {run:?} has no tool"))?;
+        ensure!(
+            tool == "nail",
+            "run {run:?} was produced by {tool}, which reports no cell fractions"
+        );
+
+        let pair = row
+            .get(manifest::SHARD)
+            .with_context(|| format!("run {run:?} has no shard saying which pair it was"))?;
+
+        searches.push((pair.to_string(), manifest::table_path(&results, run, pair)));
+    }
+
+    if searches.is_empty() {
+        bail!("no finished {run:?} rows in {}/manifest.tbl", out.display());
+    }
+
+    Ok(searches)
 }
 
 /// Cell fraction of the last hit in a nail table, which is the one these
@@ -76,4 +138,3 @@ fn last_cell_frac(path: &Path) -> anyhow::Result<f64> {
         .map(|h| h.cell_frac)
         .context("no hits in table")
 }
-

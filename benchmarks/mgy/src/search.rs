@@ -39,7 +39,7 @@ pub struct Dirs {
 
 impl Dirs {
     pub fn new(name: &str) -> Dirs {
-        let root = crate::runs().join(name);
+        let root = crate::outputs().join(name);
         Dirs {
             results: root.join("results"),
             tmp: root.join("tmp"),
@@ -312,9 +312,9 @@ pub struct Bins {
 impl Bins {
     pub fn find() -> anyhow::Result<Bins> {
         Ok(Bins {
-            nail: tools::nail().context("nail")?,
-            mmseqs: tools::mmseqs().context("mmseqs")?,
-            hmmsearch: tools::hmmsearch().context("hmmsearch")?,
+            nail: bench::tools::nail().context("nail")?,
+            mmseqs: bench::tools::mmseqs().context("mmseqs")?,
+            hmmsearch: bench::tools::hmmsearch().context("hmmsearch")?,
         })
     }
 }

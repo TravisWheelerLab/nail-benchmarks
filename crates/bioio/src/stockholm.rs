@@ -1,6 +1,6 @@
 use std::{
     fmt::Display,
-    io::{BufRead, BufReader, BufWriter, Read, Write},
+    io::{BufRead, BufReader, Read},
     path::Path,
 };
 
@@ -136,17 +136,6 @@ impl Stockholm {
         self.records.get_mut(name)
     }
 
-    pub fn write<W: Write>(&self, buf: W) -> anyhow::Result<()> {
-        let mut out = BufWriter::new(buf);
-        self.records
-            .values()
-            .try_for_each(|r| writeln!(out, "{r}"))
-            .context("Stockholm::write() failed")
-    }
-
-    pub fn seq_cnt(&self) -> usize {
-        self.records.values().map(|r| r.sequences.len()).sum()
-    }
 }
 
 /// Copy the records whose `#=GF ID` is in `names` from `src` to `dst`.

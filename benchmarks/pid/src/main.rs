@@ -11,7 +11,7 @@ mod search;
 use clap::{Parser, Subcommand};
 
 #[derive(Parser)]
-#[command(name = "pct-id", about = "percent-identity benchmark")]
+#[command(name = "pid", about = "percent-identity benchmark")]
 struct Cli {
     #[command(subcommand)]
     command: Command,

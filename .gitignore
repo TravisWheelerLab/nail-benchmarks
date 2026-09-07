@@ -13,14 +13,15 @@
 # matters, or this also swallows the benchmarks/ source tree.
 **/benchmark-*/
 **/benchmark/
-# mgy keeps its inputs and its pipelines' output at the crate root rather than
-# under a benchmark directory, so the generated ones are named one by one
+# every benchmark keeps what it was given under inputs/ and what it produced
+# under outputs/. mgy's and pid's inputs are generated, so both halves are
+# ignored; long-seqs' are checked in, so only its outputs are.
 /benchmarks/mgy/inputs/
-/benchmarks/mgy/runs/
+/benchmarks/mgy/outputs/
 /benchmarks/mgy/cutoffs/
-# pct-id keeps the same shape: one input set per size, one run directory each
-/benchmarks/pct-id/inputs/
-/benchmarks/pct-id/runs/
+/benchmarks/pid/inputs/
+/benchmarks/pid/outputs/
+/benchmarks/long-seqs/outputs/
 **/figures*/
 **/profmark/
 **/results/

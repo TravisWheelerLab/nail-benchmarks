@@ -55,7 +55,7 @@ impl Which {
     fn out_dir(&self) -> PathBuf {
         self.out
             .clone()
-            .unwrap_or_else(|| self.set().run_dir().join("figures"))
+            .unwrap_or_else(|| self.set().output_dir().join("figures"))
     }
 }
 
@@ -140,7 +140,7 @@ fn table(args: TableArgs) -> anyhow::Result<()> {
 
     let mut tuples = vec![];
 
-    for run in runs(&set.run_dir())? {
+    for run in runs(&set.output_dir())? {
         fn true_hit_filter(hit: &Hit) -> bool {
             if hit.target.starts_with("decoy") {
                 return false;
@@ -312,7 +312,7 @@ fn table(args: TableArgs) -> anyhow::Result<()> {
 }
 
 fn score(args: ScoreArgs) -> anyhow::Result<()> {
-    let results = args.which.set().run_dir().join("results");
+    let results = args.which.set().output_dir().join("results");
 
     let read = |name: &str| -> anyhow::Result<_> {
         let path = manifest::table_path(&results, name, "");
@@ -348,7 +348,7 @@ fn score(args: ScoreArgs) -> anyhow::Result<()> {
 
 fn cells(args: CellsArgs) -> anyhow::Result<()> {
     let set = args.which.set();
-    let table = manifest::table_path(&set.run_dir().join("results"), &args.run, "");
+    let table = manifest::table_path(&set.output_dir().join("results"), &args.run, "");
 
     let tbl = bioio::tbl::nail::NailTable::parse(
         File::open(&table).with_context(|| format!("failed to open {}", table.display()))?,
@@ -405,7 +405,7 @@ fn recall(args: RecallArgs) -> anyhow::Result<()> {
 
     let set = args.which.set();
     let benchmark = Benchmark::new(set.benchmark_tbl())?;
-    let data = RecallData::new(&set.run_dir(), &benchmark)?;
+    let data = RecallData::new(&set.output_dir(), &benchmark)?;
 
     let figures = args.which.out_dir();
     std::fs::create_dir_all(&figures)?;
@@ -582,9 +582,9 @@ impl Run {
 /// run, and psiblast's per-family calls are one run run a family at a time.
 /// [`Wall`] adds those up, and takes the longest rather than the sum of the
 /// hmmer parts, which overlap.
-fn runs(run_dir: &Path) -> anyhow::Result<Vec<Run>> {
-    let manifest = Manifest::read(&run_dir.join("manifest.tbl"))?;
-    let results = run_dir.join("results");
+fn runs(dir: &Path) -> anyhow::Result<Vec<Run>> {
+    let manifest = Manifest::read(&dir.join("manifest.tbl"))?;
+    let results = dir.join("results");
 
     let failed: Vec<&str> = manifest
         .failed()
@@ -638,7 +638,7 @@ fn runs(run_dir: &Path) -> anyhow::Result<Vec<Run>> {
     anyhow::ensure!(
         !out.is_empty(),
         "no finished runs in {}/manifest.tbl",
-        run_dir.display()
+        dir.display()
     );
 
     Ok(out)
@@ -794,7 +794,7 @@ struct RecallData {
 }
 
 impl RecallData {
-    fn new(run_dir: &Path, bm: &Benchmark) -> anyhow::Result<Self> {
+    fn new(dir: &Path, bm: &Benchmark) -> anyhow::Result<Self> {
         let mut pid_bin_tot_cnts = vec![];
         bm.entries.iter().map(|e| e.pid).for_each(|pid| {
             if pid >= pid_bin_tot_cnts.len() {
@@ -806,7 +806,7 @@ impl RecallData {
         let mut tables = vec![];
         let mut times = vec![];
 
-        for run in runs(run_dir)? {
+        for run in runs(dir)? {
             tables.push(HitTable2::new(&run.hits()?, bm, run.mode));
             times.push(run.wall_s);
         }

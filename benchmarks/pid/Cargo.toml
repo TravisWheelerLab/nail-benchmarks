@@ -1,17 +1,16 @@
 [package]
-name = "pct-id"
+name = "pid"
 version = "0.1.0"
 edition = "2024"
 
 [[bin]]
-name = "pct-id"
+name = "pid"
 path = "src/main.rs"
 
 [dependencies]
 bench = { workspace = true }
 bioio = { workspace = true }
 pail = { workspace = true }
-tools = { workspace = true }
 
 anyhow = { workspace = true }
 clap = { workspace = true }

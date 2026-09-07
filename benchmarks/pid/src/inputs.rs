@@ -33,8 +33,8 @@ pub fn profmark_target() -> PathBuf {
 
 /// Where the pipelines write. One directory per input set, since there is one
 /// pipeline and several sizes.
-pub fn runs() -> PathBuf {
-    dir().join("runs")
+pub fn outputs() -> PathBuf {
+    dir().join("outputs")
 }
 
 /// One assembled benchmark: the queries, the targets they are hidden in, and
@@ -94,8 +94,8 @@ impl Inputs {
     }
 
     /// Where a run over this set writes.
-    pub fn run_dir(&self) -> PathBuf {
-        runs().join(&self.size)
+    pub fn output_dir(&self) -> PathBuf {
+        outputs().join(&self.size)
     }
 
     pub fn exists(&self) -> bool {

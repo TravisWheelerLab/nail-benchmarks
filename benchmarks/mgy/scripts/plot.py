@@ -31,7 +31,8 @@ PANELS = (22, 9)
 # small enough to fit inside a heatmap cell, which the base size does not
 CELL_SIZE = 11
 
-# the palette pct-id and mgnify use, so figures from all three sit together
+# the palette the pid and mgnify benchmarks use, so figures from all three sit
+# together
 TOL_RED = "#CC3311"
 
 HMMER_COLOR = TOL_RED

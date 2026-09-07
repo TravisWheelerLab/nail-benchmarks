@@ -92,13 +92,13 @@ pub struct Args {
 }
 
 pub fn main(args: Args) -> anyhow::Result<()> {
-    let src_sto = tools::pfam_sto()?;
-    let src_fa = tools::swissprot()?;
+    let src_sto = bench::tools::pfam_sto()?;
+    let src_fa = bench::tools::swissprot()?;
 
     // resolved up front: the assembly takes long enough that finding out about
     // a missing hmmbuild afterwards would be miserable
-    let hmmbuild = tools::hmmbuild()?;
-    let hmmemit = tools::hmmemit()?;
+    let hmmbuild = bench::tools::hmmbuild()?;
+    let hmmemit = bench::tools::hmmemit()?;
 
     let set = Inputs::new(&args.size);
 
@@ -126,7 +126,7 @@ pub fn main(args: Args) -> anyhow::Result<()> {
 
         pl = pl
             .step(
-                Step::serial([Cmd::new(tools::create_profmark()?)
+                Step::serial([Cmd::new(bench::tools::create_profmark()?)
                     .name("create-profmark")
                     .arg("-S", args.seed)
                     .arg("-1", format!("{:.2}", args.train_test_id))
@@ -175,7 +175,7 @@ pub fn main(args: Args) -> anyhow::Result<()> {
                 .stdout_to(set.query_cons())])
             .name("consensus"),
         )
-        .stderr_dir(set.run_dir().join("tmp/stderr"))
+        .stderr_dir(set.output_dir().join("tmp/stderr"))
         .sink(Progress::new())
         .build()
         .context("failed to build the assembly")?;

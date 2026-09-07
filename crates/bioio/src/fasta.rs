@@ -281,46 +281,7 @@ where
 use std::io::{BufWriter, Write};
 use rand::rngs::StdRng;
 use rand::seq::SliceRandom;
-use rand::{Rng, SeedableRng};
-
-/// Deal a fasta into `n` shards, reshuffling the destination order every `n`
-/// records so shards stay comparable in composition rather than reflecting
-/// whatever order the source happened to be in.
-pub fn split(fa_path: &Path, n: usize, out_dir: &Path, seed: u64) -> anyhow::Result<()> {
-    std::fs::create_dir_all(out_dir)
-        .with_context(|| format!("failed to create {}", out_dir.display()))?;
-
-    let mut writers = Vec::with_capacity(n);
-    for i in 1..=n {
-        let path = out_dir.join(format!("{i}.fa"));
-        let file = std::fs::File::create(&path)
-            .with_context(|| format!("failed to create {}", path.display()))?;
-        writers.push(BufWriter::new(file));
-    }
-
-    let mut index: FastaByteIndex<_, 64> = FastaByteIndex::new(
-        std::fs::File::open(fa_path)
-            .with_context(|| format!("failed to open {}", fa_path.display()))?,
-    )?;
-
-    let mut rng = StdRng::seed_from_u64(seed);
-    let mut order: Vec<usize> = (0..n).collect();
-
-    for i in 1..=index.size {
-        let j = i % n;
-        if j == 0 {
-            order.shuffle(&mut rng);
-        }
-        let seq = index.get(i)?;
-        write!(&mut writers[order[j]], "{seq}")?;
-    }
-
-    for mut w in writers {
-        w.flush()?;
-    }
-
-    Ok(())
-}
+use rand::Rng;
 
 /// Write a copy of `fa_path` with every sequence reversed. Reversed sequences
 /// keep the composition of the original but destroy its homology, which makes
@@ -348,42 +309,6 @@ pub fn reverse(fa_path: &Path, out_path: &Path) -> anyhow::Result<()> {
 
     out.flush()?;
     Ok(())
-}
-
-/// Write the first `n` records of a fasta to `out_path`.
-pub fn sample_to(fa_path: &Path, n: usize, out_path: &Path) -> anyhow::Result<()> {
-    if let Some(dir) = out_path.parent() {
-        std::fs::create_dir_all(dir)?;
-    }
-
-    let mut index: FastaByteIndex<_, 64> = FastaByteIndex::new(
-        std::fs::File::open(fa_path)
-            .with_context(|| format!("failed to open {}", fa_path.display()))?,
-    )?;
-    let mut out = BufWriter::new(std::fs::File::create(out_path)?);
-
-    for i in 1..=n.min(index.size) {
-        write!(out, "{}", index.get(i)?)?;
-    }
-
-    out.flush()?;
-    Ok(())
-}
-
-/// Number of records in a fasta, counted without holding the file in memory.
-pub fn count(path: impl AsRef<Path>) -> anyhow::Result<usize> {
-    use std::io::BufRead;
-
-    let reader = std::io::BufReader::new(std::fs::File::open(path.as_ref())?);
-    let mut n = 0usize;
-
-    for line in reader.lines() {
-        if line?.starts_with('>') {
-            n += 1;
-        }
-    }
-
-    Ok(n)
 }
 
 /// Residue count of a fasta holding exactly one sequence.

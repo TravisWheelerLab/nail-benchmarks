@@ -12,7 +12,6 @@ bench = { workspace = true }
 bioio = { workspace = true }
 feisty = { workspace = true }
 pail = { workspace = true }
-tools = { workspace = true }
 
 anyhow = { workspace = true }
 clap = { workspace = true }

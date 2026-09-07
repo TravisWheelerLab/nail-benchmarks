@@ -42,7 +42,7 @@ pub struct Dirs {
 
 impl Dirs {
     pub fn new(set: &Inputs) -> Dirs {
-        let root = set.run_dir();
+        let root = set.output_dir();
         Dirs {
             results: root.join("results"),
             tmp: root.join("tmp"),
@@ -305,16 +305,16 @@ pub struct Bins {
 impl Bins {
     pub fn find() -> anyhow::Result<Bins> {
         Ok(Bins {
-            nail: tools::nail().context("nail")?,
-            mmseqs: tools::mmseqs().context("mmseqs")?,
-            hmmsearch: tools::hmmsearch().context("hmmsearch")?,
-            phmmer: tools::phmmer().context("phmmer")?,
-            blastp: tools::blastp().context("blastp")?,
-            psiblast: tools::psiblast().context("psiblast")?,
-            makeblastdb: tools::makeblastdb().context("makeblastdb")?,
-            lastal: tools::lastal().context("lastal")?,
-            lastdb: tools::lastdb().context("lastdb")?,
-            diamond: tools::diamond().context("diamond")?,
+            nail: bench::tools::nail().context("nail")?,
+            mmseqs: bench::tools::mmseqs().context("mmseqs")?,
+            hmmsearch: bench::tools::hmmsearch().context("hmmsearch")?,
+            phmmer: bench::tools::phmmer().context("phmmer")?,
+            blastp: bench::tools::blastp().context("blastp")?,
+            psiblast: bench::tools::psiblast().context("psiblast")?,
+            makeblastdb: bench::tools::makeblastdb().context("makeblastdb")?,
+            lastal: bench::tools::lastal().context("lastal")?,
+            lastdb: bench::tools::lastdb().context("lastdb")?,
+            diamond: bench::tools::diamond().context("diamond")?,
         })
     }
 }

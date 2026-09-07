@@ -3,8 +3,8 @@
 //! `build` cuts the two sources into an input set under `inputs/<kind>/`, and
 //! every pipeline that reads a set of that shape searches those same files. What a pipeline owns
 //! is everything downstream of them -- its own seeds, its own hmmer run, its
-//! own results -- so a directory under `runs/` can be read on its own without
-//! asking what else has been run.
+//! own results -- so a directory under `outputs/` can be read on its own
+//! without asking what else has been run.
 //!
 //! There are two shapes, and [`inputs`] is where they are written down.
 
@@ -80,8 +80,9 @@ pub fn dir() -> PathBuf {
 }
 
 /// Where the pipelines write. One directory each, under the one name, so what
-/// is an input and what is a result is a matter of which side of `runs/` a
-/// path is on rather than of remembering the three pipeline names.
-pub fn runs() -> PathBuf {
-    dir().join("runs")
+/// a pipeline read and what it produced are told apart by which of `inputs/`
+/// and `outputs/` a path is under, rather than by remembering the pipeline
+/// names.
+pub fn outputs() -> PathBuf {
+    dir().join("outputs")
 }

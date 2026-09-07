@@ -22,7 +22,7 @@ const SCRIPT: &str = "scripts/plot.py";
 #[derive(Parser, Debug)]
 pub struct Args {
     /// The summary.tbl `parse summary` wrote, the pipeline directory holding
-    /// one, or the name of one under benchmarks/mgy/runs/.
+    /// one, or the name of one under benchmarks/mgy/outputs/.
     #[arg(value_name = "recall|cloud-search|hit-loss")]
     summary: String,
 
@@ -42,7 +42,7 @@ pub fn main(args: Args) -> anyhow::Result<()> {
     let summary = match PathBuf::from(&args.summary) {
         path if path.is_file() => path,
         path if path.is_dir() => path.join("summary.tbl"),
-        _ => crate::runs().join(&args.summary).join("summary.tbl"),
+        _ => crate::outputs().join(&args.summary).join("summary.tbl"),
     };
 
     if !summary.is_file() {

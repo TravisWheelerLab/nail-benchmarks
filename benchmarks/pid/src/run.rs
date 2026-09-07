@@ -1,4 +1,4 @@
-//! Runs every tool against the one query/target set `pct-id build` made.
+//! Runs every tool against the one query/target set `pid build` made.
 //!
 //! nail and mmseqs sweep their prefilter sensitivity (`-s`); every other knob
 //! is fixed. Every tool but last and diamond runs in both profile mode
@@ -71,7 +71,7 @@ pub fn main(args: Args) -> anyhow::Result<()> {
     let set = Inputs::new(&args.size);
     if !set.exists() {
         bail!(
-            "{} does not exist; run `pct-id build --size {}` first",
+            "{} does not exist; run `pid build --size {}` first",
             set.dir().display(),
             args.size
         );
