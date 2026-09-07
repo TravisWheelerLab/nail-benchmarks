@@ -142,7 +142,7 @@ pub fn mgnify() -> anyhow::Result<PathBuf> {
 /// so `make setup` has nothing to say about it being missing. A calibration run
 /// writes a replacement, which is then promoted here by hand.
 pub fn mgy_cutoffs() -> anyhow::Result<PathBuf> {
-    let path = repo().join("data/mgy-cutoffs.txt");
+    let path = repo().join("data/mgy-cutoffs.tbl");
 
     if !path.is_file() {
         anyhow::bail!(

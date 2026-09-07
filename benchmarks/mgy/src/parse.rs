@@ -41,7 +41,7 @@ pub struct ScoresArgs {
 
     /// The per-family cutoffs a calibration learned. Defaults to the committed
     /// ones.
-    #[arg(long, value_name = "cutoffs.txt")]
+    #[arg(long, value_name = "cutoffs.tbl")]
     cutoffs: Option<PathBuf>,
 
     /// Which decoy to cut at. The cutoffs file holds each family's five

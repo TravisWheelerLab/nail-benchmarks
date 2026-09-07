@@ -52,10 +52,12 @@ pub fn subset_hmm(
     Ok(names)
 }
 
-/// Write each model whose `NAME` is in `names` to its own `dst_dir/<name>.hmm`,
-/// returning how many were written.
+/// Write each model whose `NAME` is in `names` to
+/// `dst_dir/<name>/query.hmm`, returning how many were written.
 ///
-/// Tools that take one profile per invocation need the models as separate files.
+/// One directory per family holding a `query.hmm` and a `query.sto`, which is
+/// the shape a ladder rung's query directory has and what the tools that take
+/// one family at a time want.
 pub fn explode_hmm(
     src: impl AsRef<Path>,
     names: &HashSet<String>,
@@ -76,7 +78,7 @@ pub fn explode_hmm(
             continue;
         }
 
-        write_one(&dst_dir.join(format!("{}.hmm", model.header.name)), |w| {
+        write_one(&dst_dir.join(&model.header.name).join("query.hmm"), |w| {
             model.write_to(w).map_err(Into::into)
         })?;
 
@@ -111,8 +113,10 @@ pub fn subset_sto(
     Ok(kept)
 }
 
-/// Write each alignment whose `#=GF ID` is in `names` to its own
-/// `dst_dir/<id>.sto`, returning how many were written.
+/// Write each alignment whose `#=GF ID` is in `names` to
+/// `dst_dir/<id>/query.sto`, returning how many were written.
+///
+/// The same per-family directory [`explode_hmm`] writes into.
 pub fn explode_sto(
     src: impl AsRef<Path>,
     names: &HashSet<String>,
@@ -125,7 +129,7 @@ pub fn explode_sto(
     for_each_named(src.as_ref(), names, |rec| {
         let id = rec.id().expect("named by the walk that selected it");
 
-        write_one(&dst_dir.join(format!("{id}.sto")), |w| {
+        write_one(&dst_dir.join(id).join("query.sto"), |w| {
             rec.write_to(w).map_err(Into::into)
         })
     })
@@ -180,11 +184,16 @@ where
     Ok(kept)
 }
 
-/// Write one record to its own file.
+/// Write one record to its own file, making the directory it goes in.
 fn write_one<F>(path: &Path, f: F) -> anyhow::Result<()>
 where
     F: FnOnce(&mut BufWriter<std::fs::File>) -> anyhow::Result<()>,
 {
+    if let Some(dir) = path.parent() {
+        std::fs::create_dir_all(dir)
+            .with_context(|| format!("failed to create {}", dir.display()))?;
+    }
+
     let mut writer = BufWriter::new(
         std::fs::File::create(path)
             .with_context(|| format!("failed to write {}", path.display()))?,
@@ -298,15 +307,15 @@ s3 WWWWWWWW
     }
 
     #[test]
-    fn explode_hmm_writes_one_file_per_named_model() {
+    fn explode_hmm_writes_one_directory_per_named_model() {
         let src = tmp("explode.hmm", two_models().as_bytes());
         let out = src.with_file_name("split");
 
         let names: HashSet<String> = ["beta".to_string()].into_iter().collect();
         assert_eq!(explode_hmm(&src, &names, &out).unwrap(), 1);
-        assert!(!out.join("alpha.hmm").exists());
+        assert!(!out.join("alpha").exists());
 
-        let back = IndexedHmm::open(out.join("beta.hmm")).unwrap();
+        let back = IndexedHmm::open(out.join("beta").join("query.hmm")).unwrap();
         assert_eq!(back.len(), 1);
 
         let rec = back.cloned(0).unwrap();
@@ -316,16 +325,40 @@ s3 WWWWWWWW
         std::fs::remove_dir_all(src.parent().unwrap()).ok();
     }
 
+    /// Both formats land in the same per-family directory, which is what makes
+    /// it a query set rather than two parallel piles.
     #[test]
-    fn explode_sto_writes_one_file_per_named_record() {
+    fn both_explodes_fill_one_directory_per_family() {
+        let hmm = tmp("pair.hmm", two_models().as_bytes());
+        let sto = hmm.with_file_name("pair.sto");
+        std::fs::write(&sto, TWO_ALIGNMENTS).unwrap();
+
+        let out = hmm.with_file_name("queries");
+        let names: HashSet<String> = ["alpha".to_string(), "beta".to_string()]
+            .into_iter()
+            .collect();
+
+        assert_eq!(explode_hmm(&hmm, &names, &out).unwrap(), 2);
+        assert_eq!(explode_sto(&sto, &names, &out).unwrap(), 2);
+
+        for family in ["alpha", "beta"] {
+            assert!(out.join(family).join("query.hmm").is_file(), "{family} hmm");
+            assert!(out.join(family).join("query.sto").is_file(), "{family} sto");
+        }
+
+        std::fs::remove_dir_all(hmm.parent().unwrap()).ok();
+    }
+
+    #[test]
+    fn explode_sto_writes_one_directory_per_named_record() {
         let src = tmp("explode.sto", TWO_ALIGNMENTS.as_bytes());
         let out = src.with_file_name("split");
 
         let names: HashSet<String> = ["beta".to_string()].into_iter().collect();
         assert_eq!(explode_sto(&src, &names, &out).unwrap(), 1);
-        assert!(!out.join("alpha.sto").exists());
+        assert!(!out.join("alpha").exists());
 
-        let got = ids_and_rows(&out.join("beta.sto"));
+        let got = ids_and_rows(&out.join("beta").join("query.sto"));
         assert_eq!(got.len(), 1);
         assert_eq!(got[0].0, "beta");
         assert_eq!(got[0].1, vec!["s3 WWWWWWWW"]);

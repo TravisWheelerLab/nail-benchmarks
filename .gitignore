@@ -6,7 +6,7 @@
 # calibration run, not a download
 /data/*
 !/data/long-seqs/
-!/data/mgy-cutoffs.txt
+!/data/mgy-cutoffs.tbl
 /tools/
 # generated benchmark instances are benchmark-<size>/ or, for the crates with
 # no size axis, the bare name benchmark/. The trailing dash on the first form
@@ -31,3 +31,4 @@
 **/tmp/
 **/tmp-*/
 **/__pycache__/
+00claude.md

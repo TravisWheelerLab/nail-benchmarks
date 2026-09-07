@@ -806,41 +806,55 @@ impl Cutoffs {
 /// tool learned nothing about it and gets no cutoff. The two tools are kept
 /// apart rather than dropped together: a family nail has a threshold for is
 /// still measurable against nail, whatever mmseqs made of it.
+///
+/// `cutoffs.tbl` names its columns `<tool>_1..<tool>_5` and `<tool>_n`, so the
+/// column to read is found by name rather than by counting -- which is what
+/// lets the calibration add a tool without moving anything here.
 fn cutoffs(path: &Path, c: usize) -> anyhow::Result<Cutoffs> {
-    let file = File::open(path).with_context(|| format!("failed to open {}", path.display()))?;
+    let text =
+        std::fs::read_to_string(path).with_context(|| format!("failed to read {}", path.display()))?;
+
+    let headers: Vec<&str> = text
+        .lines()
+        .find_map(|line| {
+            let rest = line.strip_prefix('#')?.trim_start();
+            (!rest.starts_with('-')).then(|| rest.split_whitespace().collect())
+        })
+        .with_context(|| format!("no header in {}", path.display()))?;
+
+    // by name rather than by counting, which is what lets the calibration add
+    // a tool without moving anything here
+    let column = |tool: &str| -> anyhow::Result<usize> {
+        let name = format!("{tool}_{}", c + 1);
+        headers
+            .iter()
+            .position(|h| *h == name)
+            .with_context(|| format!("{} has no {name} column", path.display()))
+    };
+
+    let (nail_at, mmseqs_at) = (column("nail")?, column("mmseqs")?);
 
     let mut out = Cutoffs {
         nail: HashMap::new(),
         mmseqs: HashMap::new(),
     };
 
-    for line in BufReader::new(file).lines() {
-        let line = line?;
-
-        let Some((family, rest)) = line.split_once(',') else {
+    for line in text.lines() {
+        if line.starts_with('#') || line.trim().is_empty() {
             continue;
-        };
+        }
 
-        for group in rest.split("),(") {
-            let group = group.trim_matches(|c| c == '(' || c == ')');
-            let mut it = group.split(',');
+        let cells: Vec<&str> = line.split_whitespace().collect();
+        let Some(family) = cells.first() else { continue };
 
-            let Some(tool) = it.next() else { continue };
-            let mut nums: Vec<f32> = it.filter_map(|x| x.parse().ok()).collect();
-            // the last number is how many decoys there were, not a score
-            nums.pop();
+        let score = |at: usize| cells.get(at).and_then(|x| x.parse::<f32>().ok());
 
-            let Some(&score) = nums.get(c) else { continue };
-            if score <= 0.0 {
-                continue;
-            }
-
-            match tool {
-                "nail" => out.nail.insert(family.to_string(), score),
-                "mmseqs" => out.mmseqs.insert(family.to_string(), score),
-                // the calibration also scores hmmer, which nothing is held to
-                _ => None,
-            };
+        // a zero is a family that tool learned nothing about
+        if let Some(s) = score(nail_at).filter(|s| *s > 0.0) {
+            out.nail.insert(family.to_string(), s);
+        }
+        if let Some(s) = score(mmseqs_at).filter(|s| *s > 0.0) {
+            out.mmseqs.insert(family.to_string(), s);
         }
     }
 

@@ -32,7 +32,6 @@
 //! this file.
 
 use std::collections::{HashMap, HashSet};
-use std::fs::File;
 use std::io::{BufWriter, Write};
 use std::path::{Path, PathBuf};
 use std::process::Command;
@@ -49,14 +48,15 @@ use libsail::tbl::blast::BlastTable;
 use libsail::tbl::hmmer::HmmerTable;
 use libsail::tbl::nail::NailTable;
 use libsail::tbl::{Hit, HitColumns, Table};
-use pail::{Cmd as PCmd, PipelineBuilder, Progress, Step};
+use pail::{Cmd as PCmd, PipelineBuilder, Progress, Step, Table as PTable};
 use util::tools::{hmmsearch, mmseqs, nail};
+use util::{manifest, tbl};
 
 use crate::cut;
 use crate::inputs::{self, shards};
 
-/// Name of the calibration directory when none is given.
-pub const DEFAULT_OUT: &str = "cutoffs";
+/// Name of the calibration when none is given.
+pub const DEFAULT_NAME: &str = "default";
 
 // every stage reports down to here, so scores are comparable
 const EVALUE: &str = "10";
@@ -72,12 +72,24 @@ const RECRUIT_MAX_SEQS: &str = "5000";
 const DECOY_S: &str = "12.0";
 const DECOY_MAX_SEQS: &str = "1000000000";
 
-const NAIL_RECRUIT: &str = "nail-recruit";
-const MMSEQS_RECRUIT: &str = "mmseqs-recruit";
+// the run names both stages file their tables under. Each stage has its own
+// results directory, so the stage does not need naming again in the file
+const NAIL: &str = "nail";
+const MMSEQS: &str = "mmseqs";
+const HMMER: &str = "hmmer";
 
-const NAIL_DECOY: &str = "nail";
-const MMSEQS_DECOY: &str = "mmseqs";
-const HMMER_DECOY: &str = "hmmer";
+/// Which direction of a family's decoys a search covered. The forward run keeps
+/// the bare tool name; only the reversed one needs saying.
+const FORWARD: &str = "fwd";
+const REVERSE: &str = "rev";
+
+/// The run name for one tool searching one direction.
+fn run_name(tool: &str, direction: &str) -> String {
+    match direction {
+        REVERSE => format!("{tool}-{REVERSE}"),
+        _ => tool.to_string(),
+    }
+}
 
 // ------------------------------------------------------------------ layout
 
@@ -88,13 +100,27 @@ const HMMER_DECOY: &str = "hmmer";
 /// parameters — can sit side by side and be deleted as a unit. What it produces
 /// is a data file to be promoted by hand, not a benchmark's results.
 ///
-/// The inputs it reads are the fixed set every recall pipeline reads.
+/// Inside, it has the shape the rest of the crate has: what a stage generates
+/// for a later stage to read is under `inputs/`, and what a stage produces for
+/// its own sake is under `outputs/`.
+///
+/// ```text
+/// cutoffs/<name>/inputs/targets-rev/<i>.fa        the reversed shards
+/// cutoffs/<name>/inputs/decoys/<family>.fa        what recruited, un-reversed
+/// cutoffs/<name>/inputs/decoys-rev/<family>.fa    ... and reversed again
+/// cutoffs/<name>/inputs/queries/<family>/         the query set, per family
+/// cutoffs/<name>/outputs/recruit/                 stage 1's tables
+/// cutoffs/<name>/outputs/search/                  stage 2's tables
+/// cutoffs/<name>/outputs/cutoffs.tbl              what was learned
+/// ```
+///
+/// The inputs it starts from are the fixed set every recall pipeline reads.
 struct Layout {
     root: PathBuf,
 }
 
 impl Layout {
-    fn new(out: &str) -> anyhow::Result<Self> {
+    fn new(name: &str) -> anyhow::Result<Self> {
         let set = inputs::fixed::dir();
         if !set.is_dir() {
             bail!(
@@ -103,9 +129,27 @@ impl Layout {
             );
         }
 
+        // a name, not a path: joining an unchecked one would let a calibration
+        // be written anywhere on the machine
+        if name.is_empty()
+            || name == ".."
+            || name.contains(std::path::MAIN_SEPARATOR)
+            || name.contains('/')
+        {
+            bail!("--name {name:?} is a directory name, not a path");
+        }
+
         Ok(Layout {
-            root: crate::dir().join(out),
+            root: crate::dir().join("cutoffs").join(name),
         })
+    }
+
+    fn inputs(&self) -> PathBuf {
+        self.root.join("inputs")
+    }
+
+    fn outputs(&self) -> PathBuf {
+        self.root.join("outputs")
     }
 
     /// Forward shards, built by `mgy build fixed`.
@@ -128,39 +172,57 @@ impl Layout {
     }
 
     fn targets_rev(&self) -> PathBuf {
-        self.root.join("targets-rev")
-    }
-
-    fn recruit(&self) -> PathBuf {
-        self.root.join("recruit")
-    }
-
-    fn recruit_results(&self) -> PathBuf {
-        self.recruit().join("results")
+        self.inputs().join("targets-rev")
     }
 
     fn decoys(&self) -> PathBuf {
-        self.root.join("decoys")
+        self.inputs().join("decoys")
     }
 
     fn decoys_rev(&self) -> PathBuf {
-        self.root.join("decoys-rev")
+        self.inputs().join("decoys-rev")
     }
 
-    fn queries_hmm(&self) -> PathBuf {
-        self.root.join("queries/hmm")
+    /// One directory per family, each holding a `query.hmm` and a `query.sto`
+    /// -- the same shape as a ladder rung's query directory.
+    fn queries(&self) -> PathBuf {
+        self.inputs().join("queries")
     }
 
-    fn queries_sto(&self) -> PathBuf {
-        self.root.join("queries/sto")
+    fn recruit(&self) -> Stage {
+        Stage {
+            root: self.outputs().join("recruit"),
+        }
     }
 
+    fn search(&self) -> Stage {
+        Stage {
+            root: self.outputs().join("search"),
+        }
+    }
+
+    fn cutoffs_tbl(&self) -> PathBuf {
+        self.outputs().join("cutoffs.tbl")
+    }
+}
+
+/// One stage's output directory, in the shape every pipeline in this crate
+/// writes: what ran, what it produced, and the scratch it wanted.
+struct Stage {
+    root: PathBuf,
+}
+
+impl Stage {
     fn results(&self) -> PathBuf {
         self.root.join("results")
     }
 
-    fn cutoffs_txt(&self) -> PathBuf {
-        self.root.join("cutoffs.txt")
+    fn tmp(&self) -> PathBuf {
+        self.root.join("tmp")
+    }
+
+    fn manifest(&self) -> PathBuf {
+        self.root.join("manifest.tbl")
     }
 }
 
@@ -182,12 +244,12 @@ pub enum Cmd {
     All(AllArgs),
 }
 
-/// Which calibration directory to work in.
+/// Which calibration to work in.
 #[derive(Parser, Debug, Clone)]
 pub struct Where {
-    /// Calibration directory, created under benchmarks/mgy/.
-    #[arg(long, default_value = DEFAULT_OUT)]
-    pub out: String,
+    /// Names the calibration, under benchmarks/mgy/cutoffs/.
+    #[arg(long, default_value = DEFAULT_NAME)]
+    pub name: String,
 }
 
 #[derive(Parser, Debug)]
@@ -305,7 +367,7 @@ fn write_reversed(src: &Path, dst: &Path) -> anyhow::Result<()> {
 }
 
 fn reverse(args: ReverseArgs) -> anyhow::Result<()> {
-    let layout = Layout::new(&args.place.out)?;
+    let layout = Layout::new(&args.place.name)?;
     let src = layout.targets();
     let dst = layout.targets_rev();
 
@@ -351,7 +413,7 @@ fn reverse(args: ReverseArgs) -> anyhow::Result<()> {
 // ----------------------------------------------------------------- recruit
 
 fn recruit(args: RecruitArgs) -> anyhow::Result<()> {
-    let layout = Layout::new(&args.place.out)?;
+    let layout = Layout::new(&args.place.name)?;
     let rev = layout.targets_rev();
 
     if !rev.is_dir() {
@@ -367,9 +429,8 @@ fn recruit(args: RecruitArgs) -> anyhow::Result<()> {
     let query_hmm = layout.query_hmm();
     let query_db = layout.query_db();
 
-    let recruit_dir = layout.recruit();
-    let results = layout.recruit_results();
-    let tmp = recruit_dir.join("tmp");
+    let stage = layout.recruit();
+    let (results, tmp) = (stage.results(), stage.tmp());
 
     let mut pl = PipelineBuilder::new().step(PCmd::new("mkdir").flag("-p").path(&results));
 
@@ -397,6 +458,9 @@ fn recruit(args: RecruitArgs) -> anyhow::Result<()> {
             .step(
                 Step::serial([PCmd::new(&nail_bin)
                     .sub("search")
+                    .field(manifest::NAME, NAIL)
+                    .field(manifest::TOOL, NAIL)
+                    .field(manifest::SHARD, idx.to_string())
                     .arg("--mmseqs-path", &mmseqs_bin)
                     .arg("-t", args.threads)
                     .arg("--tmp-dir", scratch.join("nail"))
@@ -405,7 +469,7 @@ fn recruit(args: RecruitArgs) -> anyhow::Result<()> {
                     .arg("-E", EVALUE)
                     .arg(
                         "--tbl-out",
-                        results.join(format!("{NAIL_RECRUIT}.{idx}.tbl")),
+                        manifest::table_path(&results, NAIL, &idx.to_string()),
                     )
                     .flag("--allow-overwrite")
                     .path(&query_hmm)
@@ -428,11 +492,14 @@ fn recruit(args: RecruitArgs) -> anyhow::Result<()> {
                     PCmd::new(&mmseqs_bin)
                         .name("convertalis")
                         .sub("convertalis")
+                        .field(manifest::NAME, MMSEQS)
+                        .field(manifest::TOOL, MMSEQS)
+                        .field(manifest::SHARD, idx.to_string())
                         .arg("--format-mode", 0)
                         .path(&query_db)
                         .path(&target_db)
                         .path(&aln_db)
-                        .path(results.join(format!("{MMSEQS_RECRUIT}.{idx}.tbl"))),
+                        .path(manifest::table_path(&results, MMSEQS, &idx.to_string())),
                 ])
                 .name(format!("mmseqs.{idx}")),
             )
@@ -442,6 +509,7 @@ fn recruit(args: RecruitArgs) -> anyhow::Result<()> {
     let pipeline = pl
         .stderr_dir(tmp.join("stderr"))
         .sink(Progress::new())
+        .sink(PTable::new(stage.manifest()))
         .build()?;
 
     if args.dry_run {
@@ -455,8 +523,8 @@ fn recruit(args: RecruitArgs) -> anyhow::Result<()> {
 // ------------------------------------------------------------------ decoys
 
 fn decoys(args: DecoysArgs) -> anyhow::Result<()> {
-    let layout = Layout::new(&args.place.out)?;
-    let recruit_results = layout.recruit_results();
+    let layout = Layout::new(&args.place.name)?;
+    let recruit_results = layout.recruit().results();
 
     let shard_list: Vec<String> = shards(&layout.targets_rev())?
         .into_iter()
@@ -476,12 +544,12 @@ fn decoys(args: DecoysArgs) -> anyhow::Result<()> {
                 |shard| -> anyhow::Result<(String, HashMap<String, Vec<String>>)> {
                     let mut map: HashMap<String, Vec<String>> = HashMap::new();
 
-                    let path = recruit_results.join(format!("{NAIL_RECRUIT}.{shard}.tbl"));
+                    let path = manifest::table_path(&recruit_results, NAIL, shard);
                     let tbl = Table::<NailTable>::open(&path)
                         .with_context(|| format!("failed to read {}", path.display()))?;
                     collect(&tbl, &mut map);
 
-                    let path = recruit_results.join(format!("{MMSEQS_RECRUIT}.{shard}.tbl"));
+                    let path = manifest::table_path(&recruit_results, MMSEQS, shard);
                     let tbl = Table::<BlastTable>::open(&path)
                         .with_context(|| format!("failed to read {}", path.display()))?;
                     collect(&tbl, &mut map);
@@ -581,9 +649,11 @@ fn decoys(args: DecoysArgs) -> anyhow::Result<()> {
     let names: Vec<&String> = families.iter().collect();
     pool.install(|| {
         names.par_iter().try_for_each(|f| -> anyhow::Result<()> {
+            // plain `<family>.fa`, not `<family>.rev.fa`: the directory already
+            // says these are reversed, the same call `reverse` makes for shards
             write_reversed(
                 &decoy_dir.join(format!("{f}.fa")),
-                &rev_dir.join(format!("{f}.rev.fa")),
+                &rev_dir.join(format!("{f}.fa")),
             )
             .with_context(|| format!("failed to reverse decoys for {f}"))
         })
@@ -593,8 +663,9 @@ fn decoys(args: DecoysArgs) -> anyhow::Result<()> {
 
     println!("splitting queries for {} families...", families.len());
 
-    let hmm = cut::explode_hmm(layout.query_hmm(), &families, layout.queries_hmm())?;
-    let sto = cut::explode_sto(layout.query_sto(), &families, layout.queries_sto())?;
+    let queries = layout.queries();
+    let hmm = cut::explode_hmm(layout.query_hmm(), &families, &queries)?;
+    let sto = cut::explode_sto(layout.query_sto(), &families, &queries)?;
 
     if hmm != families.len() || sto != families.len() {
         bail!(
@@ -642,7 +713,7 @@ fn run(cmd: &mut Command, log: &Path) -> anyhow::Result<()> {
 }
 
 fn search(args: SearchArgs) -> anyhow::Result<()> {
-    let layout = Layout::new(&args.place.out)?;
+    let layout = Layout::new(&args.place.name)?;
     let decoy_dir = layout.decoys();
 
     if !decoy_dir.is_dir() {
@@ -665,16 +736,16 @@ fn search(args: SearchArgs) -> anyhow::Result<()> {
     }
 
     let rev_dir = layout.decoys_rev();
-    let hmm_dir = layout.queries_hmm();
-    let sto_dir = layout.queries_sto();
+    let queries = layout.queries();
 
-    let results = layout.results();
+    let stage = layout.search();
+    let results = stage.results();
     if results.exists() {
         std::fs::remove_dir_all(&results)?;
     }
     std::fs::create_dir_all(&results)?;
 
-    let tmp = layout.root.join("tmp");
+    let tmp = stage.tmp();
     std::fs::create_dir_all(&tmp)?;
 
     let nail_bin = nail()?;
@@ -699,8 +770,8 @@ fn search(args: SearchArgs) -> anyhow::Result<()> {
                 std::fs::create_dir_all(&scratch)?;
                 let log = scratch.join("log");
 
-                let hmm = hmm_dir.join(format!("{family}.hmm"));
-                let sto = sto_dir.join(format!("{family}.sto"));
+                let hmm = queries.join(family).join("query.hmm");
+                let sto = queries.join(family).join("query.sto");
 
                 // the query profile is the same for both directions, so it is
                 // built once per family rather than once per search
@@ -725,17 +796,20 @@ fn search(args: SearchArgs) -> anyhow::Result<()> {
                     &log,
                 )?;
 
+                // the family is the shard and the direction is the run, so a
+                // table is named the way every other pipeline names one
                 let directions = [
-                    (family.clone(), decoy_dir.join(format!("{family}.fa"))),
-                    (
-                        format!("{family}.rev"),
-                        rev_dir.join(format!("{family}.rev.fa")),
-                    ),
+                    (FORWARD, decoy_dir.join(format!("{family}.fa"))),
+                    (REVERSE, rev_dir.join(format!("{family}.fa"))),
                 ];
 
-                for (label, target) in directions {
-                    let dir_scratch = scratch.join(&label);
+                for (direction, target) in directions {
+                    let dir_scratch = scratch.join(direction);
                     std::fs::create_dir_all(&dir_scratch)?;
+
+                    let table = |tool: &str| {
+                        manifest::table_path(&results, &run_name(tool, direction), family)
+                    };
 
                     run(
                         Command::new(&nail_bin)
@@ -754,7 +828,7 @@ fn search(args: SearchArgs) -> anyhow::Result<()> {
                             .arg(EVALUE)
                             .arg("--allow-overwrite")
                             .arg("--tbl-out")
-                            .arg(results.join(format!("{NAIL_DECOY}.{label}.tbl")))
+                            .arg(table(NAIL))
                             .arg(&hmm)
                             .arg(&target),
                         &log,
@@ -795,7 +869,7 @@ fn search(args: SearchArgs) -> anyhow::Result<()> {
                             .arg(&query_db)
                             .arg(&target_db)
                             .arg(&aln_db)
-                            .arg(results.join(format!("{MMSEQS_DECOY}.{label}.tbl")))
+                            .arg(table(MMSEQS))
                             .arg("--format-mode")
                             .arg("0"),
                         &log,
@@ -810,9 +884,13 @@ fn search(args: SearchArgs) -> anyhow::Result<()> {
                             .arg("-o")
                             .arg("/dev/null")
                             .arg("--tblout")
-                            .arg(results.join(format!("{HMMER_DECOY}.{label}.tbl")))
+                            .arg(table(HMMER))
                             .arg("--domtblout")
-                            .arg(results.join(format!("{HMMER_DECOY}.{label}.domtbl")))
+                            .arg(manifest::dom_path(
+                                &results,
+                                &run_name(HMMER, direction),
+                                family,
+                            ))
                             .arg(&hmm)
                             .arg(&target),
                         &log,
@@ -831,8 +909,50 @@ fn search(args: SearchArgs) -> anyhow::Result<()> {
     })?;
     eprintln!();
 
+    write_manifest(&stage.manifest(), &families)?;
+
     println!("wrote {}", results.display());
     Ok(())
+}
+
+/// Record what this stage searched, in the shape `parse` reads elsewhere.
+///
+/// Assembled by hand rather than by a [`PTable`] sink: the searches run on a
+/// rayon pool and not through a pipeline. Only the rows a reader needs are
+/// here -- a name, what produced it, which family, which direction, and that it
+/// finished. Every command is checked by `run`, so reaching this point means
+/// they all did.
+fn write_manifest(path: &Path, families: &[String]) -> anyhow::Result<()> {
+    let headers = ["name", "tool", "shard", "direction", "exit"]
+        .map(str::to_string)
+        .to_vec();
+
+    let rows: Vec<Vec<String>> = families
+        .iter()
+        .flat_map(|family| {
+            [FORWARD, REVERSE].into_iter().flat_map(move |direction| {
+                [NAIL, MMSEQS, HMMER].into_iter().map(move |tool| {
+                    vec![
+                        run_name(tool, direction),
+                        tool.to_string(),
+                        family.clone(),
+                        direction.to_string(),
+                        "0".to_string(),
+                    ]
+                })
+            })
+        })
+        .collect();
+
+    tbl::write(
+        path,
+        tbl::Table {
+            meta: "",
+            headers: &headers,
+            rows: &rows,
+            ragged_last: false,
+        },
+    )
 }
 
 // ------------------------------------------------------------------- learn
@@ -840,60 +960,87 @@ fn search(args: SearchArgs) -> anyhow::Result<()> {
 /// How many decoy scores are recorded per family per tool.
 const N_SCORES: usize = 5;
 
+/// The tools a calibration scores, in the order `cutoffs.tbl` writes them.
+const TOOLS: [&str; 3] = [NAIL, MMSEQS, HMMER];
+
 fn learn(args: LearnArgs) -> anyhow::Result<()> {
-    let layout = Layout::new(&args.place.out)?;
-    let results = layout.results();
+    let layout = Layout::new(&args.place.name)?;
+    let stage = layout.search();
+    let results = stage.results();
 
-    let mut families: Vec<String> = std::fs::read_dir(layout.decoys())?
-        .filter_map(|e| e.ok())
-        .map(|e| e.path())
-        .filter(|p| p.extension().is_some_and(|x| x == "fa"))
-        .filter_map(|p| Some(p.file_stem()?.to_str()?.to_string()))
+    // what the search stage actually did, rather than what is on disk: a run
+    // that died leaves a table behind, and a half-written one reads as a family
+    // with fewer decoys than it has
+    let searched = manifest::Manifest::read(&stage.manifest())?;
+
+    let mut families: Vec<String> = searched
+        .runs()
+        .filter_map(|row| row.get(manifest::SHARD).map(str::to_string))
         .collect();
-    families.sort();
+    families.sort_unstable();
+    families.dedup();
 
-    let out_path = layout.cutoffs_txt();
-    let out = Mutex::new(BufWriter::new(File::create(&out_path)?));
+    let failed = searched.failed().count();
+    if failed > 0 {
+        bail!(
+            "{failed} searches in {} did not finish; re-run `mgy cutoffs search`",
+            stage.manifest().display()
+        );
+    }
+
+    if families.is_empty() {
+        bail!("no finished searches in {}", stage.manifest().display());
+    }
+
     let skipped = AtomicUsize::new(0);
 
+    // collected rather than written as they finish, so the file is in family
+    // order however the pool interleaves
     let pool = pool(args.threads)?;
-    pool.install(|| {
+    let rows: Vec<Option<Vec<String>>> = pool.install(|| {
         families
             .par_iter()
-            .try_for_each(|family| -> anyhow::Result<()> {
-                let nail_scores =
-                    decoy_scores::<NailTable>(&results, NAIL_DECOY, family, args.reverse_e_cutoff)?;
-                let mmseqs_scores = decoy_scores::<BlastTable>(
-                    &results,
-                    MMSEQS_DECOY,
-                    family,
-                    args.reverse_e_cutoff,
-                )?;
-                let hmmer_scores = decoy_scores::<HmmerTable>(
-                    &results,
-                    HMMER_DECOY,
-                    family,
-                    args.reverse_e_cutoff,
-                )?;
+            .map(|family| -> anyhow::Result<Option<Vec<String>>> {
+                let nail = decoy_scores::<NailTable>(&results, NAIL, family, args.reverse_e_cutoff)?;
+                let mmseqs =
+                    decoy_scores::<BlastTable>(&results, MMSEQS, family, args.reverse_e_cutoff)?;
+                let hmmer =
+                    decoy_scores::<HmmerTable>(&results, HMMER, family, args.reverse_e_cutoff)?;
 
-                let (Some(n), Some(m)) = (nail_scores, mmseqs_scores) else {
+                if nail.is_none() || mmseqs.is_none() {
                     // a family without both tables tells us nothing comparative
                     skipped.fetch_add(1, Ordering::Relaxed);
-                    return Ok(());
-                };
-
-                let mut line = format!("{family},{},{}", group("nail", &n), group("mmseqs", &m));
-                if let Some(h) = hmmer_scores {
-                    line.push(',');
-                    line.push_str(&group("hmmer", &h));
+                    return Ok(None);
                 }
 
-                writeln!(out.lock().expect("output mutex poisoned"), "{line}")?;
-                Ok(())
+                let mut row = vec![family.clone()];
+                for scores in [nail, mmseqs, hmmer] {
+                    row.extend(cells(scores.as_ref()));
+                }
+
+                Ok(Some(row))
             })
+            .collect::<anyhow::Result<Vec<_>>>()
     })?;
 
-    out.into_inner().expect("output mutex poisoned").flush()?;
+    let rows: Vec<Vec<String>> = rows.into_iter().flatten().collect();
+
+    let mut headers = vec!["family".to_string()];
+    for tool in TOOLS {
+        headers.extend((1..=N_SCORES).map(|i| format!("{tool}_{i}")));
+        headers.push(format!("{tool}_n"));
+    }
+
+    let out_path = layout.cutoffs_tbl();
+    tbl::write(
+        &out_path,
+        tbl::Table {
+            meta: "",
+            headers: &headers,
+            rows: &rows,
+            ragged_last: false,
+        },
+    )?;
 
     let skipped = skipped.load(Ordering::Relaxed);
     if skipped > 0 {
@@ -903,6 +1050,22 @@ fn learn(args: LearnArgs) -> anyhow::Result<()> {
     Ok(())
 }
 
+/// One tool's cells: its `N_SCORES` decoy scores and how many decoys there
+/// were. A tool that scored none writes zeros, which is what a reader already
+/// treats as "no usable cutoff".
+fn cells(scores: Option<&(Vec<f32>, usize)>) -> Vec<String> {
+    match scores {
+        Some((scores, count)) => scores
+            .iter()
+            .map(|s| format!("{s:.1}"))
+            .chain(std::iter::once(count.to_string()))
+            .collect(),
+        None => std::iter::repeat_n("0.0".to_string(), N_SCORES)
+            .chain(std::iter::once("0".to_string()))
+            .collect(),
+    }
+}
+
 /// The top decoy scores for one family and tool, plus how many decoys survived.
 ///
 /// A reversed hit only counts as a decoy if the same (query, target) pair did
@@ -910,15 +1073,18 @@ fn learn(args: LearnArgs) -> anyhow::Result<()> {
 /// genuine family member's reversal can score for reasons that are not chance.
 fn decoy_scores<T>(
     results: &Path,
-    run: &str,
+    tool: &str,
     family: &str,
     e_cutoff: f64,
 ) -> anyhow::Result<Option<(Vec<f32>, usize)>>
 where
     T: HitColumns,
 {
-    let fwd_path = results.join(format!("{run}.{family}.tbl"));
-    let rev_path = results.join(format!("{run}.{family}.rev.tbl"));
+    let table = |direction| {
+        manifest::table_path(results, &run_name(tool, direction), family)
+    };
+
+    let (fwd_path, rev_path) = (table(FORWARD), table(REVERSE));
 
     if !fwd_path.exists() || !rev_path.exists() {
         return Ok(None);
@@ -964,16 +1130,6 @@ where
         .collect();
 
     Ok(Some((scores, decoys.len())))
-}
-
-/// One tool's group in a cutoffs line: `(tool,s1,...,sN,count)`.
-fn group(tool: &str, (scores, count): &(Vec<f32>, usize)) -> String {
-    let scores = scores
-        .iter()
-        .map(|s| format!("{s:.1}"))
-        .collect::<Vec<_>>()
-        .join(",");
-    format!("({tool},{scores},{count})")
 }
 
 // --------------------------------------------------------------------- all
