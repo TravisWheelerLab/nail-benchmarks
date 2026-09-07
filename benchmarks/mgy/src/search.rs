@@ -14,10 +14,10 @@ use std::path::{Path, PathBuf};
 
 use anyhow::Context;
 
-use bioio::split::{self, Kind};
 use pail::{Closure, Cmd, Step};
 
 use bench::manifest;
+use bench::split::{self, Kind};
 
 /// hmmsearch doesn't scale past a couple of threads, so its query gets split
 /// threads/HMMER_CPU ways and the parts run at the same time.
@@ -89,9 +89,11 @@ pub struct Split {
 impl Split {
     pub fn new(query: impl Into<PathBuf>, dir: impl Into<PathBuf>, jobs: usize) -> Split {
         let dir = dir.into();
+        let ext = Kind::Hmm.extension();
+
         Split {
             query: query.into(),
-            parts: (0..jobs).map(|i| dir.join(format!("{i}.hmm"))).collect(),
+            parts: (0..jobs).map(|i| dir.join(format!("{i}.{ext}"))).collect(),
             dir,
         }
     }

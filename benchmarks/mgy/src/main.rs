@@ -11,6 +11,7 @@
 mod analyze;
 mod build;
 mod cloud_search;
+mod cut;
 mod cutoffs;
 mod hit_loss;
 mod inputs;

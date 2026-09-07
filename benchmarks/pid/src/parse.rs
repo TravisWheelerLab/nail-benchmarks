@@ -17,7 +17,13 @@ use std::{
     path::{Path, PathBuf},
 };
 
-use bioio::tbl::{BlastTable, Hit, HitTable, HmmerTable, NailTable};
+use libsail::collection::Iterable;
+use libsail::seq::fasta::IndexedFasta;
+use libsail::seq::p7hmm::Hmm;
+use libsail::tbl::blast::BlastTable;
+use libsail::tbl::hmmer::HmmerTable;
+use libsail::tbl::nail::NailTable;
+use libsail::tbl::{Hit, HitColumns, Table};
 
 use anyhow::{Context, bail};
 use bench::manifest::{self, Manifest, Wall};
@@ -152,12 +158,7 @@ fn table(args: TableArgs) -> anyhow::Result<()> {
             q == t
         }
 
-        let hits: Vec<Hit> = run
-            .hits()?
-            .hits
-            .into_iter()
-            .filter(true_hit_filter)
-            .collect();
+        let hits: Vec<Hit> = run.hits()?.into_iter().filter(true_hit_filter).collect();
 
         // a target's name carries which pair it is; everything past that is
         // the family it came from and the identity it was drawn at
@@ -314,13 +315,16 @@ fn table(args: TableArgs) -> anyhow::Result<()> {
 fn score(args: ScoreArgs) -> anyhow::Result<()> {
     let results = args.which.set().output_dir().join("results");
 
-    let read = |name: &str| -> anyhow::Result<_> {
+    let read = |name: &str| -> anyhow::Result<HashMap<(String, String), f32>> {
         let path = manifest::table_path(&results, name, "");
-        Ok(bioio::tbl::nail::NailTable::parse(
-            File::open(&path).with_context(|| format!("failed to open {}", path.display()))?,
-            "",
-        )?
-        .to_map())
+        let tbl = Table::<NailTable>::open(&path)
+            .with_context(|| format!("failed to open {}", path.display()))?;
+
+        // one entry per pair, the last row for it winning
+        Ok(tbl
+            .iter()
+            .map(|h| ((h.query.clone(), h.target.clone()), h.score))
+            .collect())
     };
 
     let full_tbl = read(&args.full)?;
@@ -336,10 +340,8 @@ fn score(args: ScoreArgs) -> anyhow::Result<()> {
 
     let mut out = BufWriter::new(File::create(figures.join("score.txt"))?);
     for k in intersection {
-        let f = full_tbl.get(k).unwrap();
-        let s = sparse_tbl.get(k).unwrap();
-        let x = f.score;
-        let y = s.score;
+        let x = full_tbl.get(k).expect("present by intersection");
+        let y = sparse_tbl.get(k).expect("present by intersection");
         writeln!(out, "{x:.1},{y:.1}")?;
     }
 
@@ -350,20 +352,23 @@ fn cells(args: CellsArgs) -> anyhow::Result<()> {
     let set = args.which.set();
     let table = manifest::table_path(&set.output_dir().join("results"), &args.run, "");
 
-    let tbl = bioio::tbl::nail::NailTable::parse(
-        File::open(&table).with_context(|| format!("failed to open {}", table.display()))?,
-        "",
-    )?;
+    let hits = bench::nail::cell_fracs(&table)
+        .with_context(|| format!("failed to read {}", table.display()))?;
 
     // read out of the files rather than shelled out to hmmstat and
     // esl-seqstat: neither is a dependency this benchmark declares, and both
     // were being found on PATH rather than through `tools`
-    let query_lens = bioio::hmm::lengths(set.query_hmm())?;
+    let query_lens: HashMap<String, usize> = Hmm::open(set.query_hmm())
+        .with_context(|| format!("failed to parse {}", set.query_hmm().display()))?
+        .iter()
+        .map(|model| (model.header.name.clone(), model.header.leng))
+        .collect();
 
     let mut target_lens: HashMap<String, usize> = HashMap::new();
-    let mut reader = bioio::fasta::Reader::from_path(set.target_fa())?;
-    while let Some(rec) = reader.next_record()? {
-        target_lens.insert(rec.name.clone(), rec.seq.len());
+    let target_fa = IndexedFasta::open(set.target_fa())
+        .with_context(|| format!("failed to open {}", set.target_fa().display()))?;
+    for rec in target_fa.iter() {
+        target_lens.insert(rec.name_str()?.to_string(), rec.seq.len());
     }
 
     let figures = args.which.out_dir();
@@ -372,7 +377,7 @@ fn cells(args: CellsArgs) -> anyhow::Result<()> {
     let mut true_out = BufWriter::new(File::create(figures.join("cells.true.txt"))?);
     let mut decoy_out = BufWriter::new(File::create(figures.join("cells.decoy.txt"))?);
 
-    tbl.hits.iter().try_for_each(|h| -> anyhow::Result<()> {
+    hits.iter().try_for_each(|h| -> anyhow::Result<()> {
         let intended_query = h
             .target
             .split('|')
@@ -557,19 +562,19 @@ impl Run {
     /// The hits it reported. Which reader to use comes off the `tool` field --
     /// mmseqs, last, blast and diamond all write blast's tabular format,
     /// whatever wrote it.
-    fn hits(&self) -> anyhow::Result<HitTable> {
-        let file = BufReader::new(
-            File::open(&self.table)
-                .with_context(|| format!("failed to open {}", self.table.display()))?,
-        );
-
+    fn hits(&self) -> anyhow::Result<Vec<Hit>> {
         match self.tool.as_str() {
-            "nail" => HitTable::parse::<_, NailTable>(file, &self.name),
-            "hmmer" | "phmmer" => HitTable::parse::<_, HmmerTable>(file, &self.name),
-            _ => HitTable::parse::<_, BlastTable>(file, &self.name),
+            "nail" => read_hits::<NailTable>(&self.table),
+            "hmmer" | "phmmer" => read_hits::<HmmerTable>(&self.table),
+            _ => read_hits::<BlastTable>(&self.table),
         }
         .with_context(|| format!("failed to read {}", self.table.display()))
     }
+}
+
+/// Every row of a table read as layout `C`.
+fn read_hits<C: HitColumns>(path: &Path) -> libsail::Result<Vec<Hit>> {
+    Ok(Table::<C>::open(path)?.iter().cloned().collect())
 }
 
 /// The runs a pipeline finished, in the order it declared them.
@@ -720,9 +725,9 @@ struct HitTable2 {
 }
 
 impl HitTable2 {
-    fn new(tbl: &HitTable, bm: &Benchmark, search_type: SearchType) -> Self {
+    fn new(hits: &[Hit], name: &str, bm: &Benchmark, search_type: SearchType) -> Self {
         let mut hits_by_target_query_pair: HashMap<(String, String), Vec<Hit2>> = HashMap::new();
-        tbl.hits.iter().map(Hit2::new).for_each(|h| {
+        hits.iter().map(Hit2::new).for_each(|h| {
             hits_by_target_query_pair
                 .entry((h.target.clone(), h.query.clone()))
                 .or_default()
@@ -779,7 +784,7 @@ impl HitTable2 {
         adjusted_decoys.sort_by(e_value_cmp);
 
         Self {
-            name: tbl.name.clone(),
+            name: name.to_string(),
             positives,
             adjusted_decoys,
         }
@@ -807,7 +812,7 @@ impl RecallData {
         let mut times = vec![];
 
         for run in runs(dir)? {
-            tables.push(HitTable2::new(&run.hits()?, bm, run.mode));
+            tables.push(HitTable2::new(&run.hits()?, &run.name, bm, run.mode));
             times.push(run.wall_s);
         }
 

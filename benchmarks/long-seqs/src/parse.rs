@@ -11,6 +11,8 @@ use std::path::{Path, PathBuf};
 
 use anyhow::{Context, bail, ensure};
 use clap::{Parser, Subcommand};
+use libsail::collection::Indexable;
+use libsail::seq::fasta::Fasta;
 
 use bench::manifest::{self, Manifest};
 
@@ -65,8 +67,8 @@ fn cells(args: CellsArgs) -> anyhow::Result<()> {
         let cell_frac = last_cell_frac(&table)
             .with_context(|| format!("failed to read a hit from {}", table.display()))?;
 
-        let q_len = bioio::fasta::residue_len(inputs::query(&pair))?;
-        let t_len = bioio::fasta::residue_len(inputs::target(&pair))?;
+        let q_len = residue_len(&inputs::query(&pair))?;
+        let t_len = residue_len(&inputs::target(&pair))?;
 
         writeln!(file, "{},{:.5}", q_len * t_len, cell_frac)?;
     }
@@ -130,11 +132,23 @@ fn searches(out: &Path, run: &str) -> anyhow::Result<Vec<(String, PathBuf)>> {
 /// Cell fraction of the last hit in a nail table, which is the one these
 /// single-pair searches are about.
 fn last_cell_frac(path: &Path) -> anyhow::Result<f64> {
-    let tbl = bioio::tbl::nail::NailTable::from_path(path)
-        .with_context(|| format!("failed to read {}", path.display()))?;
-
-    tbl.hits
+    bench::nail::cell_fracs(path)?
         .last()
         .map(|h| h.cell_frac)
         .context("no hits in table")
+}
+
+/// Residue count of a fasta holding exactly one sequence.
+fn residue_len(path: &Path) -> anyhow::Result<usize> {
+    let fa =
+        Fasta::open(path).with_context(|| format!("failed to parse {}", path.display()))?;
+
+    ensure!(
+        fa.len() == 1,
+        "expected exactly one sequence in {}, found {}",
+        path.display(),
+        fa.len()
+    );
+
+    Ok(fa.get(0).expect("one record").seq.len())
 }

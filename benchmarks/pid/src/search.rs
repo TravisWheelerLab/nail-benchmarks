@@ -13,7 +13,7 @@ use std::path::{Path, PathBuf};
 use anyhow::Context;
 
 use bench::manifest;
-use bioio::split::{self, Kind};
+use bench::split::{self, Kind};
 use pail::{Closure, Cmd, Step};
 
 use crate::inputs::Inputs;
@@ -97,10 +97,7 @@ impl Split {
         jobs: usize,
     ) -> Split {
         let dir = dir.into();
-        let ext = match kind {
-            Kind::Hmm => "hmm",
-            Kind::Fasta => "fa",
-        };
+        let ext = kind.extension();
 
         Split {
             query: query.into(),

@@ -43,10 +43,16 @@ use anyhow::{Context, bail};
 use clap::{Parser, Subcommand};
 use rayon::iter::{IntoParallelRefIterator, ParallelIterator};
 
-use bioio::tbl::{BlastTable, HitTable, HmmerTable, NailTable};
+use libsail::collection::Iterable;
+use libsail::seq::fasta::{DEFAULT_LINE_WIDTH, IndexedFasta};
+use libsail::tbl::blast::BlastTable;
+use libsail::tbl::hmmer::HmmerTable;
+use libsail::tbl::nail::NailTable;
+use libsail::tbl::{Hit, HitColumns, Table};
 use pail::{Cmd as PCmd, PipelineBuilder, Progress, Step};
 use bench::tools::{hmmsearch, mmseqs, nail};
 
+use crate::cut;
 use crate::inputs::{self, shards};
 
 /// Name of the calibration directory when none is given.
@@ -274,6 +280,30 @@ pub fn main(cmd: Cmd) -> anyhow::Result<()> {
 
 // ----------------------------------------------------------------- reverse
 
+/// Write a copy of `src` with every sequence reversed. Reversed sequences keep
+/// the composition of the original but destroy its homology, which makes them
+/// usable as decoys when calibrating score cutoffs.
+fn write_reversed(src: &Path, dst: &Path) -> anyhow::Result<()> {
+    if let Some(dir) = dst.parent() {
+        std::fs::create_dir_all(dir)?;
+    }
+
+    let fa = IndexedFasta::open(src)
+        .with_context(|| format!("failed to open {}", src.display()))?;
+    let mut out = BufWriter::new(
+        std::fs::File::create(dst)
+            .with_context(|| format!("failed to create {}", dst.display()))?,
+    );
+
+    for mut rec in fa.iter() {
+        rec.reverse();
+        rec.write_to(&mut out, DEFAULT_LINE_WIDTH)?;
+    }
+
+    out.flush()?;
+    Ok(())
+}
+
 fn reverse(args: ReverseArgs) -> anyhow::Result<()> {
     let layout = Layout::new(&args.place.out)?;
     let src = layout.targets();
@@ -309,7 +339,7 @@ fn reverse(args: ReverseArgs) -> anyhow::Result<()> {
                 // plain `<n>.fa`, not `<n>.rev.fa`: the directory already says
                 // these are reversed, and the shard index has to stay readable off
                 // the stem for the stages downstream
-                bioio::fasta::reverse(path, &dst.join(format!("{i}.fa")))
+                write_reversed(path, &dst.join(format!("{i}.fa")))
                     .with_context(|| format!("failed to reverse shard {i}"))
             })
     })?;
@@ -447,14 +477,14 @@ fn decoys(args: DecoysArgs) -> anyhow::Result<()> {
                     let mut map: HashMap<String, Vec<String>> = HashMap::new();
 
                     let path = recruit_results.join(format!("{NAIL_RECRUIT}.{shard}.tbl"));
-                    let tbl = HitTable::from_path::<_, NailTable>(&path)
+                    let tbl = Table::<NailTable>::open(&path)
                         .with_context(|| format!("failed to read {}", path.display()))?;
-                    collect(tbl, &mut map);
+                    collect(&tbl, &mut map);
 
                     let path = recruit_results.join(format!("{MMSEQS_RECRUIT}.{shard}.tbl"));
-                    let tbl = HitTable::from_path::<_, BlastTable>(&path)
+                    let tbl = Table::<BlastTable>::open(&path)
                         .with_context(|| format!("failed to read {}", path.display()))?;
-                    collect(tbl, &mut map);
+                    collect(&tbl, &mut map);
 
                     for v in map.values_mut() {
                         v.sort();
@@ -510,17 +540,17 @@ fn decoys(args: DecoysArgs) -> anyhow::Result<()> {
                 }
 
                 let path = targets.join(format!("{shard}.fa"));
-                let mut reader = bioio::fasta::Reader::from_path(&path)
+                let shard_fa = IndexedFasta::open(&path)
                     .with_context(|| format!("failed to open {}", path.display()))?;
 
-                let mut buffers: HashMap<&str, String> = HashMap::new();
-                while let Some(rec) = reader.next_record()? {
-                    let Some(fams) = by_target.get(rec.name.as_str()) else {
+                let mut buffers: HashMap<&str, Vec<u8>> = HashMap::new();
+                for rec in shard_fa.iter() {
+                    let Some(fams) = by_target.get(rec.name_str()?) else {
                         continue;
                     };
                     for family in fams {
                         let buf = buffers.entry(family).or_default();
-                        buf.push_str(&format!("{rec}\n"));
+                        rec.write_to(buf, DEFAULT_LINE_WIDTH)?;
                     }
                 }
 
@@ -535,7 +565,7 @@ fn decoys(args: DecoysArgs) -> anyhow::Result<()> {
                         .create(true)
                         .append(true)
                         .open(&*guard)?;
-                    file.write_all(text.as_bytes())?;
+                    file.write_all(&text)?;
                 }
 
                 Ok(())
@@ -551,7 +581,7 @@ fn decoys(args: DecoysArgs) -> anyhow::Result<()> {
     let names: Vec<&String> = families.iter().collect();
     pool.install(|| {
         names.par_iter().try_for_each(|f| -> anyhow::Result<()> {
-            bioio::fasta::reverse(
+            write_reversed(
                 &decoy_dir.join(format!("{f}.fa")),
                 &rev_dir.join(format!("{f}.rev.fa")),
             )
@@ -563,8 +593,8 @@ fn decoys(args: DecoysArgs) -> anyhow::Result<()> {
 
     println!("splitting queries for {} families...", families.len());
 
-    let hmm = bioio::hmm::explode(layout.query_hmm(), &families, layout.queries_hmm())?;
-    let sto = bioio::stockholm::explode(layout.query_sto(), &families, layout.queries_sto())?;
+    let hmm = cut::explode_hmm(layout.query_hmm(), &families, layout.queries_hmm())?;
+    let sto = cut::explode_sto(layout.query_sto(), &families, layout.queries_sto())?;
 
     if hmm != families.len() || sto != families.len() {
         bail!(
@@ -578,10 +608,11 @@ fn decoys(args: DecoysArgs) -> anyhow::Result<()> {
 }
 
 /// Fold a hit table into a family to target-name map.
-fn collect(tbl: HitTable, map: &mut HashMap<String, Vec<String>>) {
-    for (query, hits) in tbl.to_query_map() {
-        let entry = map.entry(query).or_default();
-        entry.extend(hits.iter().map(|h| h.target.clone()));
+fn collect<C: HitColumns>(tbl: &Table<C>, map: &mut HashMap<String, Vec<String>>) {
+    for hit in tbl.iter() {
+        map.entry(hit.query.clone())
+            .or_default()
+            .push(hit.target.clone());
     }
 }
 
@@ -884,7 +915,7 @@ fn decoy_scores<T>(
     e_cutoff: f64,
 ) -> anyhow::Result<Option<(Vec<f32>, usize)>>
 where
-    T: bioio::tbl::HitColumns,
+    T: HitColumns,
 {
     let fwd_path = results.join(format!("{run}.{family}.tbl"));
     let rev_path = results.join(format!("{run}.{family}.rev.tbl"));
@@ -893,18 +924,27 @@ where
         return Ok(None);
     }
 
-    let mut fwd = HitTable::from_path::<_, T>(&fwd_path)
+    let fwd = Table::<T>::open(&fwd_path)
         .with_context(|| format!("failed to read {}", fwd_path.display()))?;
-    let rev = HitTable::from_path::<_, T>(&rev_path)
+    let rev = Table::<T>::open(&rev_path)
         .with_context(|| format!("failed to read {}", rev_path.display()))?;
 
-    fwd.hits.retain(|h| h.e_value <= e_cutoff);
-    let real = fwd.to_map();
+    let real: HashSet<(&str, &str)> = fwd
+        .iter()
+        .filter(|h| h.e_value <= e_cutoff)
+        .map(|h| (h.query.as_str(), h.target.as_str()))
+        .collect();
 
-    let mut decoys: Vec<_> = rev
-        .to_map()
+    // one entry per pair, the last row for it winning, so a pair reported
+    // twice counts as one decoy
+    let mut by_pair: HashMap<(&str, &str), &Hit> = HashMap::new();
+    for hit in rev.iter() {
+        by_pair.insert((hit.query.as_str(), hit.target.as_str()), hit);
+    }
+
+    let mut decoys: Vec<&Hit> = by_pair
         .into_iter()
-        .filter(|(k, _)| !real.contains_key(k))
+        .filter(|(k, _)| !real.contains(k))
         .map(|(_, v)| v)
         .collect();
 

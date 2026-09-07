@@ -14,7 +14,7 @@ use anyhow::{Context, bail, ensure};
 use clap::Parser;
 
 use bench::manifest;
-use bioio::split::Kind;
+use bench::split::Kind;
 use pail::{Cmd, OnError, Output, PipelineBuilder, Progress, Step, Table};
 
 use crate::inputs::Inputs;

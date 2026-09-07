@@ -21,8 +21,12 @@ use std::path::Path;
 
 use anyhow::{Context, bail, ensure};
 
-use bioio::split::{self, Kind};
-use bioio::tbl::{BlastTable, HitTable, HmmerTable, NailTable, hmmer::HmmerDomainTable};
+use libsail::collection::{Indexable, Iterable};
+use libsail::seq::p7hmm::IndexedHmm;
+use libsail::tbl::blast::BlastTable;
+use libsail::tbl::hmmer::HmmerTable;
+use libsail::tbl::nail::NailTable;
+use libsail::tbl::{HitColumns, HmmerDomHits, Table};
 
 use bench::manifest::{self, Manifest, Wall};
 use bench::tbl;
@@ -53,24 +57,29 @@ impl Tool {
     /// mmseqs is read as blast: `convertalis --format-mode 0` is blast's
     /// tabular format, whatever wrote it.
     fn read(self, path: &Path) -> anyhow::Result<HashMap<Pair, f32>> {
-        let tbl = match self {
-            Tool::Nail => HitTable::from_path::<_, NailTable>(path),
-            Tool::Mmseqs => HitTable::from_path::<_, BlastTable>(path),
-            Tool::Hmmer => HitTable::from_path::<_, HmmerTable>(path),
+        match self {
+            Tool::Nail => best_scores::<NailTable>(path),
+            Tool::Mmseqs => best_scores::<BlastTable>(path),
+            Tool::Hmmer => best_scores::<HmmerTable>(path),
         }
+    }
+}
+
+/// The best score each pair got in one table read as layout `C`.
+fn best_scores<C: HitColumns>(path: &Path) -> anyhow::Result<HashMap<Pair, f32>> {
+    let tbl = Table::<C>::open(path)
         .with_context(|| format!("failed to read {}", path.display()))?;
 
-        let mut best: HashMap<Pair, f32> = HashMap::new();
-        for hit in tbl.hits {
-            // a pair can be reported more than once; the best of them is the
-            // one a threshold would see
-            best.entry((hit.query, hit.target))
-                .and_modify(|s| *s = s.max(hit.score))
-                .or_insert(hit.score);
-        }
-
-        Ok(best)
+    let mut best: HashMap<Pair, f32> = HashMap::new();
+    for hit in tbl.iter() {
+        // a pair can be reported more than once; the best of them is the
+        // one a threshold would see
+        best.entry((hit.query.clone(), hit.target.clone()))
+            .and_modify(|s| *s = s.max(hit.score))
+            .or_insert(hit.score);
     }
+
+    Ok(best)
 }
 
 impl fmt::Display for Tool {
@@ -720,20 +729,24 @@ fn shard_path(targets: &Path, shard: &str) -> std::path::PathBuf {
 /// carries that a run of anything else does not. A pair in the hit table but
 /// not here simply has no breakdown.
 fn read_domains(path: &Path) -> anyhow::Result<HashMap<Pair, Vec<f32>>> {
-    let dom = HmmerDomainTable::from_path(path, |_| true)
-        .with_context(|| format!("failed to read {}", path.display()))?;
+    let dom =
+        HmmerDomHits::open(path).with_context(|| format!("failed to read {}", path.display()))?;
 
-    Ok(dom
-        .hits
-        .into_iter()
-        .map(|(pair, hit)| {
-            let mut domains: Vec<f32> = hit.domains.iter().map(|d| d.score).collect();
-            // best first, so the one a threshold would see is in front and the
-            // rest read as the tail behind it
-            domains.sort_by(|x, y| y.total_cmp(x));
-            (pair, domains)
-        })
-        .collect())
+    // one row per domain, so the rows of a pair are its breakdown
+    let mut out: HashMap<Pair, Vec<f32>> = HashMap::new();
+    for hit in dom.iter() {
+        out.entry((hit.query.clone(), hit.target.clone()))
+            .or_default()
+            .push(hit.score);
+    }
+
+    // best first, so the one a threshold would see is in front and the rest
+    // read as the tail behind it
+    for domains in out.values_mut() {
+        domains.sort_by(|x, y| y.total_cmp(x));
+    }
+
+    Ok(out)
 }
 
 /// The (query, target) pairs `--seeds-out` wrote: nail's own prf/seq column
@@ -849,12 +862,14 @@ fn hmm_size(path: &Path) -> anyhow::Result<Size> {
         .with_context(|| format!("failed to stat {}", path.display()))?
         .len();
 
-    // LENG per model, which is what the index weights records by
-    let models = split::index(path, Kind::Hmm)?;
+    let models =
+        IndexedHmm::open(path).with_context(|| format!("failed to index {}", path.display()))?;
 
     Ok(Size {
         count: models.len(),
-        residues: models.iter().map(|r| r.weight).sum(),
+        // LENG is the query axis of a search's matrix, and so the honest
+        // measure of how much work the set is
+        residues: models.iter().map(|m| m.header.leng as u64).sum(),
         bytes,
     })
 }

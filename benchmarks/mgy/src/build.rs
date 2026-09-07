@@ -21,23 +21,21 @@ use std::path::Path;
 
 use anyhow::{Context, bail};
 use clap::{Parser, Subcommand};
+use libsail::collection::{Aggregate, Indexable, Iterable};
+use libsail::seq::fasta::{DEFAULT_LINE_WIDTH, IndexedFasta};
+use libsail::seq::p7hmm::IndexedHmm;
 use rand::SeedableRng;
 use rand::rngs::StdRng;
-use rand::seq::SliceRandom;
 
 use bench::tbl;
-use bioio::aggregate::AggregateFasta;
-use bioio::split::{self, Kind as SplitKind};
-use bioio::{fasta, hmm, stockholm};
-use feisty::Permutation;
 use pail::{Closure, Cmd as PCmd, PipelineBuilder, Progress, Step};
 use bench::tools::{mgnify, mmseqs, pfam_hmm, pfam_sto};
 
+use crate::cut;
 use crate::inputs;
 
-// the index that comes with the collection. building one from scratch is a pass
-// over every byte of MGnify, so this is not a file to go without
-const INDEX_NAME: &str = "mgnify.afi";
+/// Extensions in the MGnify directory treated as fasta.
+const FASTA_EXTENSIONS: [&str; 2] = ["fa", "fasta"];
 
 #[derive(Subcommand)]
 pub enum Cmd {
@@ -110,13 +108,13 @@ fn fixed(args: FixedArgs) -> anyhow::Result<()> {
                         let total = seqs.len();
                         let n_seqs = match n_seqs {
                             None => total,
-                            Some(n) if n as u64 > total => {
+                            Some(n) if n > total => {
                                 eprintln!(
                                     "warning: asked for {n} sequences but the collection holds {total}"
                                 );
                                 total
                             }
-                            Some(n) => n as u64,
+                            Some(n) => n,
                         };
 
                         deal(&seqs, n_seqs, shards, seed, &targets)
@@ -137,12 +135,11 @@ fn fixed(args: FixedArgs) -> anyhow::Result<()> {
 
 /// Deals `n_seqs` sequences into `shards` files, `<i>.fa` for `i` in `1..=shards`.
 ///
-/// Dealing everything reshuffles the shard order every round rather than
-/// drawing a permutation, since a permutation over the whole collection is a
-/// cost this doesn't need to pay when nothing is actually being left out.
+/// The draw is a permutation, so plain round robin is enough to leave a shard
+/// with nothing of the collection's own order in it.
 fn deal(
-    seqs: &AggregateFasta,
-    n_seqs: u64,
+    seqs: &Aggregate<IndexedFasta>,
+    n_seqs: usize,
     shards: usize,
     seed: u64,
     out_dir: &Path,
@@ -158,32 +155,11 @@ fn deal(
         writers.push(BufWriter::new(file));
     }
 
-    if n_seqs == seqs.len() {
-        // sequences arrive in collection order, so the shard order is
-        // reshuffled every round to break up neighbours
-        let mut rng = StdRng::seed_from_u64(seed);
-        let mut order: Vec<usize> = (0..shards).collect();
+    let mut rng = StdRng::seed_from_u64(seed);
+    let drawn = seqs.permute_with(&mut rng).take(n_seqs);
 
-        let mut i = 0;
-        for path in seqs.files() {
-            let mut reader = fasta::Reader::from_path(path)?;
-            while let Some(rec) = reader.next_record()? {
-                let slot = i % shards;
-                if slot == 0 {
-                    order.shuffle(&mut rng);
-                }
-                writeln!(&mut writers[order[slot]], "{rec}")?;
-                i += 1;
-            }
-        }
-    } else {
-        let perm = Permutation::new(seqs.len(), seed);
-        let mut records = seqs.records();
-
-        for i in 0..n_seqs {
-            let bytes = records.get(perm.get(i))?;
-            writers[(i % shards as u64) as usize].write_all(&bytes)?;
-        }
+    for (i, rec) in drawn.iter().enumerate() {
+        rec.write_to(&mut writers[i % shards], DEFAULT_LINE_WIDTH)?;
     }
 
     for mut w in writers {
@@ -232,7 +208,11 @@ fn ladder(args: LadderArgs) -> anyhow::Result<()> {
 
     // ---- queries
 
-    let n_fams = split::index(&src.hmm, SplitKind::Hmm)?.len();
+    // an index of the file and nothing more: counting families does not need
+    // the models parsed
+    let n_fams = IndexedHmm::open(&src.hmm)
+        .with_context(|| format!("failed to index {}", src.hmm.display()))?
+        .len();
     let ladder = rungs(&args.queries, n_fams);
     println!("pfam holds {n_fams} families; query rungs: {ladder:?}");
 
@@ -251,11 +231,14 @@ fn ladder(args: LadderArgs) -> anyhow::Result<()> {
         // subset says by being asked for nothing
         subset_query(&src, (q < n_fams).then_some(q), &query_hmm, &query_sto)?;
 
-        // LENG per model, which is what the index weights records by
-        let models = split::index(&query_hmm, SplitKind::Hmm)?;
+        // LENG is the query axis of a search's matrix, and so the honest
+        // measure of how much work a rung is
+        let models = IndexedHmm::open(&query_hmm)
+            .with_context(|| format!("failed to index {}", query_hmm.display()))?;
+
         sizes.push(Size {
             rung: q,
-            residues: models.iter().map(|r| r.weight).sum(),
+            residues: models.iter().map(|m| m.header.leng as u64).sum(),
             bytes: std::fs::metadata(&query_hmm)?.len(),
         });
 
@@ -275,10 +258,10 @@ fn ladder(args: LadderArgs) -> anyhow::Result<()> {
     let seqs = src.collection()?;
 
     let total = seqs.len();
-    let ladder = rungs(&args.targets, total as usize);
+    let ladder = rungs(&args.targets, total);
     println!(
         "the collection holds {total} sequences across {} files; target rungs: {ladder:?}",
-        seqs.files().len()
+        seqs.parts().len()
     );
 
     let drawn = deal_nested(&seqs, &ladder, args.seed, &targets)?;
@@ -318,7 +301,7 @@ fn rungs(asked: &[usize], max: usize) -> Vec<usize> {
 ///
 /// Returns the residues and bytes that landed in each.
 fn deal_nested(
-    seqs: &AggregateFasta,
+    seqs: &Aggregate<IndexedFasta>,
     rungs: &[usize],
     seed: u64,
     out_dir: &Path,
@@ -336,26 +319,31 @@ fn deal_nested(
 
     let mut counted = vec![(0u64, 0u64); rungs.len()];
 
-    let largest = rungs.last().copied().unwrap_or(0) as u64;
-    let perm = Permutation::new(seqs.len(), seed);
-    let mut records = seqs.records();
+    let largest = rungs.last().copied().unwrap_or(0);
+    let mut rng = StdRng::seed_from_u64(seed);
+    let drawn = seqs.permute_with(&mut rng).take(largest);
 
     // the rungs are ascending, so record i belongs to every rung past the first
     // one big enough to hold it, and that boundary only ever moves forward
     let mut first = 0usize;
 
+    // one record's bytes, written once and copied into every rung that holds
+    // it -- and its length is the bytes that rung grew by
+    let mut bytes: Vec<u8> = Vec::new();
+
     // every draw is a seek into a collection of billions, so the top rung takes
     // a while and says nothing while it does
     let start = std::time::Instant::now();
-    const TICK: u64 = 10_000;
+    const TICK: usize = 10_000;
 
-    for i in 0..largest {
-        while first < rungs.len() && (rungs[first] as u64) <= i {
+    for (i, rec) in drawn.iter().enumerate() {
+        while first < rungs.len() && rungs[first] <= i {
             first += 1;
         }
 
-        let bytes = records.get(perm.get(i))?;
-        let residues = count_residues(&bytes);
+        bytes.clear();
+        rec.write_to(&mut bytes, DEFAULT_LINE_WIDTH)?;
+        let residues = rec.seq.len() as u64;
 
         for (w, c) in writers[first..].iter_mut().zip(counted[first..].iter_mut()) {
             w.write_all(&bytes)?;
@@ -379,17 +367,6 @@ fn deal_nested(
     }
 
     Ok(counted)
-}
-
-/// Residues in one fasta record: everything past the header line that isn't
-/// whitespace.
-fn count_residues(record: &[u8]) -> u64 {
-    let body = match record.iter().position(|&b| b == b'\n') {
-        Some(i) => &record[i + 1..],
-        None => return 0,
-    };
-
-    body.iter().filter(|b| !b.is_ascii_whitespace()).count() as u64
 }
 
 struct Size {
@@ -452,16 +429,44 @@ impl Sources {
         })
     }
 
-    /// allow_overwrite only bites when the index no longer matches its sources,
-    /// and then it rebuilds rather than refusing. That is a pass over every byte
-    /// of MGnify, so a run that suddenly goes quiet for hours is this.
-    fn collection(&self) -> anyhow::Result<AggregateFasta> {
-        AggregateFasta::builder()
-            .dir(&self.dir)
-            .index(self.dir.join(INDEX_NAME))
-            .allow_overwrite()
-            .build()
+    fn collection(&self) -> anyhow::Result<Aggregate<IndexedFasta>> {
+        collection_at(&self.dir)
     }
+}
+
+/// Every fasta in `dir`, indexed and addressed as one collection.
+///
+/// Nothing is kept between runs, so this is a pass over every byte of MGnify on
+/// every build -- a run that suddenly goes quiet for hours is this.
+fn collection_at(dir: &Path) -> anyhow::Result<Aggregate<IndexedFasta>> {
+    let mut paths: Vec<std::path::PathBuf> = std::fs::read_dir(dir)
+        .with_context(|| format!("failed to read {}", dir.display()))?
+        .filter_map(|entry| entry.ok().map(|entry| entry.path()))
+        .filter(|path| {
+            path.extension()
+                .and_then(|ext| ext.to_str())
+                .is_some_and(|ext| FASTA_EXTENSIONS.contains(&ext.to_ascii_lowercase().as_str()))
+        })
+        .collect();
+
+    if paths.is_empty() {
+        bail!("no {} files in {}", FASTA_EXTENSIONS.join("/"), dir.display());
+    }
+
+    // read_dir hands them over in whatever order the filesystem holds, and a
+    // record's position in the collection has to mean the same thing on every
+    // run for a seed to reproduce a draw
+    paths.sort();
+
+    let mut parts = Vec::with_capacity(paths.len());
+    for path in &paths {
+        parts.push(
+            IndexedFasta::open(path)
+                .with_context(|| format!("failed to index {}", path.display()))?,
+        );
+    }
+
+    Ok(Aggregate::new(parts))
 }
 
 /// Refuse to build over an input set that is already there.
@@ -494,9 +499,9 @@ fn subset_query(
         return Ok(());
     };
 
-    let names: HashSet<String> = hmm::subset(&src.hmm, n, query_hmm)?;
+    let names: HashSet<String> = cut::subset_hmm(&src.hmm, n, query_hmm)?;
 
-    let kept = stockholm::subset_by_id(&src.sto, &names, query_sto)?;
+    let kept = cut::subset_sto(&src.sto, &names, query_sto)?;
     if kept != names.len() {
         bail!(
             "kept {kept} stockholm records but the hmm subset named {}; \
@@ -562,8 +567,8 @@ mod tests {
     }
 
     /// Deal into a fresh directory and read back what landed in each shard.
-    fn shards_of(dir: &Path, n: u64, shards: usize) -> (Vec<Vec<String>>, PathBuf) {
-        let agg = AggregateFasta::builder().dir(dir).build().unwrap();
+    fn shards_of(dir: &Path, n: usize, shards: usize) -> (Vec<Vec<String>>, PathBuf) {
+        let agg = collection_at(dir).unwrap();
         let out = dir.join(format!("out-{n}-{shards}"));
         deal(&agg, n, shards, 67779, &out).unwrap();
 
@@ -627,11 +632,11 @@ mod tests {
         let dir = collection("ragged", 2, 50);
 
         // 100 records over 7 shards leaves a remainder, as does the subset
-        for (n, k) in [(100u64, 7usize), (97, 7), (13, 5), (100, 3)] {
+        for (n, k) in [(100usize, 7usize), (97, 7), (13, 5), (100, 3)] {
             let (shards, out) = shards_of(&dir, n, k);
             assert_balanced(&shards);
             let placed: usize = shards.iter().map(|s| s.len()).sum();
-            assert_eq!(placed as u64, n, "n={n} k={k}: wrong number placed");
+            assert_eq!(placed, n, "n={n} k={k}: wrong number placed");
             std::fs::remove_dir_all(&out).ok();
         }
 
@@ -670,7 +675,7 @@ mod tests {
     #[test]
     fn ladder_rungs_are_nested() {
         let dir = collection("ladder", 2, 60);
-        let agg = AggregateFasta::builder().dir(&dir).build().unwrap();
+        let agg = collection_at(&dir).unwrap();
 
         let out = dir.join("ladder-out");
         let rungs = [10usize, 30, 90];

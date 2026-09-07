@@ -9,11 +9,12 @@ path = "src/main.rs"
 
 [dependencies]
 bench = { workspace = true }
-bioio = { workspace = true }
+libsail = { workspace = true }
 pail = { workspace = true }
 
 anyhow = { workspace = true }
 clap = { workspace = true }
 glob = { workspace = true }
+indexmap = { workspace = true }
 rand = { workspace = true }
 regex = { workspace = true }

@@ -9,8 +9,7 @@ path = "src/main.rs"
 
 [dependencies]
 bench = { workspace = true }
-bioio = { workspace = true }
-feisty = { workspace = true }
+libsail = { workspace = true }
 pail = { workspace = true }
 
 anyhow = { workspace = true }
