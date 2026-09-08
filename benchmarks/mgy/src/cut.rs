@@ -2,7 +2,7 @@
 //!
 //! Two shapes of cut, each in both formats: `subset_*` takes a prefix into one
 //! file, and `explode_*` fans records out one file per family. Only this
-//! benchmark cuts Pfam up, so they live here rather than in `bench`.
+//! benchmark cuts Pfam up, so they live here rather than in `util`.
 
 use std::collections::HashSet;
 use std::io::{BufWriter, Write};
@@ -56,8 +56,8 @@ pub fn subset_hmm(
 /// `dst_dir/<name>/query.hmm`, returning how many were written.
 ///
 /// One directory per family holding a `query.hmm` and a `query.sto`, which is
-/// the shape a ladder rung's query directory has and what the tools that take
-/// one family at a time want.
+/// the shape a ladder rung's query directory has, and what the tools that take
+/// one family at a time read.
 pub fn explode_hmm(
     src: impl AsRef<Path>,
     names: &HashSet<String>,

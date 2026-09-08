@@ -30,15 +30,15 @@ pub enum Cmd {
 
 #[derive(Parser)]
 pub struct CellsArgs {
-    /// Where the run wrote. Defaults to this benchmark's outputs/.
+    /// Where the run wrote. Defaults to this benchmark's outputs/
     #[arg(long, value_name = "dir")]
     out: Option<PathBuf>,
 
-    /// Where cells.long.txt goes. Defaults to figures/ beside the run.
+    /// Where cells.long.txt goes. Defaults to figures/ beside the run
     #[arg(short, long, value_name = "dir")]
     figures: Option<PathBuf>,
 
-    /// Which run's tables to read cell fractions from.
+    /// Which run's tables to read cell fractions from
     #[arg(long, value_name = "NAME", default_value = RUN_NAME)]
     run: String,
 }

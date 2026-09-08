@@ -35,27 +35,27 @@ pub fn main(cmd: Cmd) -> anyhow::Result<()> {
 
 #[derive(Parser, Debug)]
 pub struct ScoresArgs {
-    /// A pipeline directory, or the name of one under benchmarks/mgy/outputs/.
+    /// A pipeline directory, or the name of one under benchmarks/mgy/outputs/
     #[arg(value_name = "recall|cloud-search|hit-loss")]
     pipeline: String,
 
     /// The per-family cutoffs a calibration learned. Defaults to the committed
-    /// ones.
+    /// ones
     #[arg(long, value_name = "cutoffs.tbl")]
     cutoffs: Option<PathBuf>,
 
     /// Which decoy to cut at. The cutoffs file holds each family's five
     /// best-scoring decoys, so this admits at most `c` false positives per
     /// family. It is fixed here rather than in the analyses, since the cutoff
-    /// travels in the table.
+    /// travels in the table
     #[arg(short = 'c', default_value_t = 2, value_name = "N")]
     c: usize,
 
-    /// The query set that was searched. Defaults to the shared one.
+    /// The query set that was searched. Defaults to the shared one
     #[arg(long, value_name = "query.hmm")]
     queries: Option<PathBuf>,
 
-    /// The directory holding the target shards. Defaults to the shared one.
+    /// The directory holding the target shards. Defaults to the shared one
     #[arg(long, value_name = "dir")]
     targets: Option<PathBuf>,
 
@@ -101,7 +101,7 @@ fn scores(args: ScoresArgs) -> anyhow::Result<()> {
 #[derive(Parser, Debug)]
 pub struct TableArgs {
     /// The scores.tbl `parse scores` wrote, the pipeline directory holding
-    /// one, or the name of one under benchmarks/mgy/outputs/.
+    /// one, or the name of one under benchmarks/mgy/outputs/
     #[arg(value_name = "recall|cloud-search|hit-loss")]
     scores: String,
 

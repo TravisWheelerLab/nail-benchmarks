@@ -3,7 +3,7 @@
 //! A `#` header naming the columns, a `#` rule of dashes under it, then one row
 //! per line with the cells padded so they sit under their names. Above all of
 //! that, an optional block of `#` metadata: what was searched, what a fraction
-//! is a fraction of, whatever the figures want as a reference line.
+//! is a fraction of, whatever reference line a figure needs.
 //!
 //! It is a format for reading, not for round-tripping. A reader that wants its
 //! own table back writes the parser for it -- `#=` metadata lines and a known

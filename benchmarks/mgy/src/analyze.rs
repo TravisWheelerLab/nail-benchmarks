@@ -210,7 +210,7 @@ fn frac(n: usize, of: usize) -> f64 {
 }
 
 /// What was searched, what the fractions are fractions of, and the two times
-/// the figures want as reference lines.
+/// the figures use as reference lines.
 fn meta(scores: &Scores, hmmer: usize, truth: usize) -> String {
     let (mut count, mut residues, mut bytes) = (0usize, 0u64, 0u64);
     for (_, size) in &scores.targets {

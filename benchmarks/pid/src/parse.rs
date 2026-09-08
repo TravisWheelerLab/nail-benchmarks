@@ -48,7 +48,7 @@ pub struct Which {
     #[arg(short, long, default_value = "toy")]
     size: String,
 
-    /// Where the tables go. Defaults to figures/ beside the run.
+    /// Where the tables go. Defaults to figures/ beside the run
     #[arg(short, long, value_name = "dir")]
     out: Option<PathBuf>,
 }
@@ -76,7 +76,7 @@ pub struct CellsArgs {
     #[command(flatten)]
     which: Which,
 
-    /// Which run's table to read cell fractions from. Only nail reports them.
+    /// Which run's table to read cell fractions from. Only nail reports them
     #[arg(long, value_name = "NAME", default_value = "nail-s12.0-ms2000.prf")]
     run: String,
 }
@@ -84,7 +84,7 @@ pub struct CellsArgs {
 #[derive(Parser)]
 pub struct ScoreArgs {
     /// Two nail tables to correlate, by run name. There is no --full-dp run in
-    /// the sweep today, so these are given rather than assumed.
+    /// the sweep today, so these are given rather than assumed
     #[arg(long, value_name = "NAME")]
     full: String,
 
@@ -320,7 +320,7 @@ fn score(args: ScoreArgs) -> anyhow::Result<()> {
         let tbl = Table::<NailTable>::open(&path)
             .with_context(|| format!("failed to open {}", path.display()))?;
 
-        // one entry per pair, the last row for it winning
+        // one entry per pair; a repeated pair keeps its last row
         Ok(tbl
             .iter()
             .map(|h| ((h.query.clone(), h.target.clone()), h.score))
@@ -536,8 +536,8 @@ enum SearchType {
 }
 
 impl SearchType {
-    /// Off the `mode` field, which the run records rather than the filename
-    /// spelling it.
+    /// Reads the search type off the `mode` field, which the run records
+    /// rather than the filename spelling it.
     fn parse(mode: &str) -> anyhow::Result<SearchType> {
         match mode {
             "prf" => Ok(SearchType::Profile),
@@ -584,7 +584,7 @@ fn read_hits<C: HitColumns>(path: &Path) -> libsail::Result<Vec<Hit>> {
 /// what makes a run's tool and mode facts rather than guesses.
 ///
 /// Several rows can share a name: mmseqs' search and its conversion are one
-/// run, and psiblast's per-family calls are one run run a family at a time.
+/// run, and psiblast's per-family calls are one run, done a family at a time.
 /// [`Wall`] adds those up, and takes the longest rather than the sum of the
 /// hmmer parts, which overlap.
 fn runs(dir: &Path) -> anyhow::Result<Vec<Run>> {
@@ -838,6 +838,8 @@ impl RecallData {
         self.tables.iter().try_for_each(|tbl| {
             write!(out, "{}", tbl.name)?;
 
+            // TODO: why decoy_cnt + 1 rather than decoy_cnt? the same
+            //       indexing is in write_runtime
             let e_value_threshold = match tbl.adjusted_decoys.get(decoy_cnt + 1) {
                 Some(hit) => hit.e_value,
                 None => {

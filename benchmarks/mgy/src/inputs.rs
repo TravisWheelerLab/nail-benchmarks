@@ -2,9 +2,9 @@
 //!
 //! Both kinds are cut from the same two sources -- Pfam and MGnify -- and
 //! differ only in how. The `fixed` kind is one query set against target shards
-//! of equal size, which is what a question about recall wants: the shards are
+//! of equal size, which is what a question about recall needs: the shards are
 //! units of work rather than a variable. The `ladder` kind is nested rungs on
-//! both axes, which is what a question about scaling wants: each rung is a
+//! both axes, which is what a question about scaling needs: each rung is a
 //! measurement, and every rung is a prefix of the next one up.
 //!
 //! A kind names a shape; a pipeline names a question. Which kind a pipeline

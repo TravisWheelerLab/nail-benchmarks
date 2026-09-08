@@ -24,11 +24,11 @@ use util::manifest;
 
 #[derive(Parser, Debug)]
 pub struct Args {
-    /// Threads per search, and the cores each search is pinned to.
+    /// Threads per search, and the cores each search is pinned to
     #[arg(short, long, default_value_t = 8)]
     threads: usize,
 
-    /// How many times to time each cell. The analysis wants the minimum.
+    /// How many times to time each cell. The analysis takes the minimum
     #[arg(long, default_value_t = 1)]
     reps: usize,
 

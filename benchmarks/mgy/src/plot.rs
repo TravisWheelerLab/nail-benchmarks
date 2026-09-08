@@ -22,15 +22,15 @@ const SCRIPT: &str = "scripts/plot.py";
 #[derive(Parser, Debug)]
 pub struct Args {
     /// The summary.tbl `parse summary` wrote, the pipeline directory holding
-    /// one, or the name of one under benchmarks/mgy/outputs/.
+    /// one, or the name of one under benchmarks/mgy/outputs/
     #[arg(value_name = "recall|cloud-search|hit-loss")]
     summary: String,
 
-    /// Where the pdfs go. Defaults to figures/ beside summary.tbl.
+    /// Where the pdfs go. Defaults to figures/ beside summary.tbl
     #[arg(short, long, value_name = "dir")]
     out: Option<PathBuf>,
 
-    /// The interpreter to run the script with.
+    /// The interpreter to run the script with
     #[arg(long, default_value = "python3", value_name = "python")]
     python: String,
 
@@ -71,7 +71,7 @@ pub fn main(args: Args) -> anyhow::Result<()> {
     matplotlib(&args.python)?;
 
     // the script goes in the subcommand slot rather than in a path: a Cmd
-    // renders its options before its positionals, and python wants the script
+    // renders its options before its positionals, and python needs the script
     // ahead of everything
     let cmd = Cmd::new(&args.python)
         .name("plot")
@@ -96,7 +96,7 @@ pub fn main(args: Args) -> anyhow::Result<()> {
     Ok(())
 }
 
-/// That the interpreter is there and can import matplotlib.
+/// Checks that the interpreter is there and can import matplotlib.
 fn matplotlib(python: &str) -> anyhow::Result<()> {
     let out = Command::new(python)
         .args(["-c", "import matplotlib"])

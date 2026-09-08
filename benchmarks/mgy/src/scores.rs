@@ -822,8 +822,6 @@ fn cutoffs(path: &Path, c: usize) -> anyhow::Result<Cutoffs> {
         })
         .with_context(|| format!("no header in {}", path.display()))?;
 
-    // by name rather than by counting, which is what lets the calibration add
-    // a tool without moving anything here
     let column = |tool: &str| -> anyhow::Result<usize> {
         let name = format!("{tool}_{}", c + 1);
         headers

@@ -174,7 +174,7 @@ fn deal(
 #[derive(Parser, Debug)]
 pub struct LadderArgs {
     /// Query rungs, as Pfam family counts. Anything at or past the number of
-    /// families Pfam holds becomes all of Pfam.
+    /// families Pfam holds becomes all of Pfam
     #[arg(
         long,
         value_delimiter = ',',
@@ -183,7 +183,7 @@ pub struct LadderArgs {
     )]
     pub queries: Vec<usize>,
 
-    /// Target rungs, as MGnify sequence counts.
+    /// Target rungs, as MGnify sequence counts
     #[arg(
         long,
         value_delimiter = ',',
@@ -484,7 +484,7 @@ fn claim(set: &Path) -> anyhow::Result<()> {
 /// The first `n` families of Pfam, as both an hmm file and its alignments.
 ///
 /// `None` is all of Pfam, where there is nothing to pick out and a copy beats
-/// reading 1.6GB a line at a time.
+/// reading the whole file a line at a time.
 fn subset_query(
     src: &Sources,
     n: Option<usize>,

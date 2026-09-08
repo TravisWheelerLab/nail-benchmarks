@@ -32,11 +32,11 @@ const HMMER: &str = "hmmer";
 
 #[derive(Parser, Debug)]
 pub struct Args {
-    /// Which target shard to search.
+    /// Which target shard to search
     #[arg(long, default_value = "1", value_name = "N")]
     shard: String,
 
-    /// Local score pruning thresholds to sweep (nail's -A).
+    /// Local score pruning thresholds to sweep (nail's -A)
     #[arg(
         long,
         value_delimiter = ',',
@@ -45,7 +45,7 @@ pub struct Args {
     )]
     alpha: Vec<f32>,
 
-    /// Global score pruning thresholds to sweep (nail's -B).
+    /// Global score pruning thresholds to sweep (nail's -B)
     #[arg(
         long,
         value_delimiter = ',',
@@ -54,7 +54,7 @@ pub struct Args {
     )]
     beta: Vec<f32>,
 
-    /// Threads per search, and the cores each search is pinned to.
+    /// Threads per search, and the cores each search is pinned to
     #[arg(short, long, default_value_t = 8)]
     threads: usize,
 
@@ -198,7 +198,7 @@ pub fn main(args: Args) -> anyhow::Result<()> {
                 .name(&label)
                 // every cell on the same cores, so the only thing moving
                 // between them is -A and -B. without this a cell is timed
-                // against whatever the scheduler felt like that second, and
+                // against whatever else the scheduler ran that second, and
                 // the differences here are small enough for that to show
                 .cores(args.threads),
         );

@@ -1,4 +1,4 @@
-//! Reading back the table a [`pail::Table`] sink wrote.
+//! Reading back the table a `pail::Table` sink wrote.
 //!
 //! A run records what it did in `manifest.tbl`, and `parse` learns the shape
 //! of a pipeline from that rather than from filenames or from knowing which
@@ -93,12 +93,9 @@ impl Row {
 
     /// Whether this command ran alongside the others in its step rather than
     /// after them.
-    ///
-    /// A batched step marks its commands with `||` in the step cell. Their
-    /// wall clocks overlap, so the longest of them is what the step took --
-    /// adding them up would report the work rather than the time. A step
-    /// holding one command collapses to a single row and reads as serial,
-    /// which for one command comes to the same thing either way.
+    //
+    // a step holding one command collapses to a single row and reads as
+    // serial, which for one command comes to the same thing either way
     pub fn batched(&self) -> bool {
         self.cells.get("step").map(String::as_str) == Some(BATCH)
     }
@@ -117,8 +114,8 @@ impl Row {
     }
 }
 
-/// The columns every block ends with, which are the pipeline's own accounting
-/// rather than anything a benchmark asked for.
+// the columns every block ends with, which are the pipeline's own accounting
+// rather than anything a benchmark asked for
 fn is_metric(key: &str) -> bool {
     matches!(
         key,
@@ -136,16 +133,11 @@ fn is_metric(key: &str) -> bool {
     )
 }
 
-/// What a set of commands cost.
-///
-/// Kept per bucket, so overlapping work is not counted twice. Within a bucket,
-/// whatever ran in a batched step overlapped and contributes the longest of
-/// itself; everything else ran one after another and adds up. Buckets run in
-/// sequence, so their totals add.
+/// What a set of commands cost, totalled per bucket so overlapping work is not
+/// counted twice.
 ///
 /// What a bucket is belongs to the caller: a target shard for a pipeline with
-/// several, one bucket for a pipeline with one. The rule is the same either
-/// way -- adding up a batch reports the work rather than the time.
+/// several, one bucket for a pipeline with one.
 #[derive(Default)]
 pub struct Wall {
     by_bucket: BTreeMap<String, (f64, f64)>,
@@ -156,6 +148,9 @@ impl Wall {
         let wall = row.wall_s().unwrap_or(0.0);
         let at = self.by_bucket.entry(bucket.to_string()).or_default();
 
+        // a batched step's commands overlap, so the longest of them is what
+        // the step took; adding them up would report the work rather than the
+        // time. everything else ran one after another and adds
         match row.batched() {
             true => at.1 = at.1.max(wall),
             false => at.0 += wall,

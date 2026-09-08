@@ -22,7 +22,7 @@ use crate::search::{self, Bins, Dirs, Split};
 use util::manifest;
 
 /// mmseqs' own default is 300, which loses hits nail's seeding keeps. 2000 is
-/// what the comparison has always been run at.
+/// what the other pipelines here search at, so the columns stay comparable.
 const MMSEQS_MAX_SEQS: usize = 2000;
 
 /// nail's seeding mode, matching what cloud-search and hit-loss seed with.
@@ -33,11 +33,11 @@ const HMMER: &str = "hmmer";
 
 #[derive(Parser, Debug)]
 pub struct Args {
-    /// Search only the first N shards. Every shard by default.
+    /// Search only the first N shards. Every shard by default
     #[arg(short = 'n', long, value_name = "N")]
     shards: Option<usize>,
 
-    /// nail's --mmseqs-s values to sweep.
+    /// nail's --mmseqs-s values to sweep
     #[arg(
         long,
         value_delimiter = ',',
@@ -46,7 +46,7 @@ pub struct Args {
     )]
     nail_s: Vec<f32>,
 
-    /// mmseqs' -s values to sweep.
+    /// mmseqs' -s values to sweep
     #[arg(
         long,
         value_delimiter = ',',

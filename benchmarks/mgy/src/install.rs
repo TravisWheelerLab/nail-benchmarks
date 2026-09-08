@@ -10,7 +10,7 @@
 //! Nothing is copied. The tables are found where they already are, under
 //! `outputs/<pipeline>/results/`, and the only thing written is the manifest
 //! beside them -- a result set large enough to be worth running elsewhere is
-//! too large to want a second copy of.
+//! too large to keep a second copy of.
 //!
 //! What a run was is read out of its filename, since that is already the one
 //! place every pipeline in this crate records it. See [`Run::parse`] for the

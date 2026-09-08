@@ -2,7 +2,7 @@
 //!
 //! Each benchmark asks its own question and keeps its own analyses. Two things
 //! are the same for all of them. The first is the shape of the record a run
-//! leaves behind: a [`pail::Table`] sink writes `manifest.tbl`, `parse` reads it
+//! leaves behind: a `pail::Table` sink writes `manifest.tbl`, `parse` reads it
 //! back through [`manifest`], and whatever it works out gets written through
 //! [`tbl`]. The second is where the programs being benchmarked and the sequence
 //! data they run on were put, which is [`tools`].
@@ -24,11 +24,11 @@ pub mod time;
 pub mod tools;
 
 /// Replace every byte that is not part of a valid UTF-8 sequence with `?`.
-///
-/// Pfam's SEED alignments carry author names in Latin-1 -- `pfam.sto` holds an
-/// `ô` as a single byte in a `#=GF RA` line -- and libsail wants a record to be
-/// text. The bytes are always in `#=GF` metadata rather than in an alignment
-/// row or a sequence, so replacing them costs nothing any benchmark reads.
+//
+// Pfam's SEED alignments carry author names in Latin-1: `pfam.sto` holds an
+// `ô` as a single byte in a `#=GF RA` line, and libsail requires a record to
+// be text. those bytes sit in `#=GF` metadata rather than in an alignment row
+// or a sequence, so replacing them costs nothing any benchmark reads
 pub fn repair_utf8(bytes: &mut [u8]) {
     let mut from = 0;
 
@@ -46,9 +46,9 @@ pub fn repair_utf8(bytes: &mut [u8]) {
 
 /// A profile of `leng` nodes over a two-symbol alphabet, which is the smallest
 /// thing libsail's parser accepts.
-///
-/// Public because the tests that need a profile libsail will read are in two
-/// crates: [`split`]'s here, and mgy's around the Pfam cuts.
+//
+// pub because the tests that need a profile libsail will read are in two
+// crates: `split`'s here, and mgy's around the Pfam cuts
 pub fn profile(name: &str, leng: usize) -> String {
     let mut out = format!(
         "HMMER3/f\nNAME  {name}\nLENG  {leng}\nALPH  amino\n\

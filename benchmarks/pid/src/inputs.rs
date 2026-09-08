@@ -69,8 +69,10 @@ impl Inputs {
         self.dir().join("query.sto")
     }
 
-    /// One consensus sequence per profile, for asking what a profile is worth
-    /// against a tool that cannot read one.
+    /// One consensus sequence per profile, written by `build`.
+    //
+    // nothing under `run` searches against it: the modes are prf and seq, so
+    // this is written and never read
     pub fn query_cons(&self) -> PathBuf {
         self.dir().join("query.cons.fa")
     }

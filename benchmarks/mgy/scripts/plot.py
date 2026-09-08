@@ -20,9 +20,8 @@ import matplotlib.pyplot as plt
 import numpy as np
 from matplotlib.colors import Normalize
 
-# what util/scripts/plot.py does for the other benchmarks: a big canvas with
-# the text scaled up to match, so a figure dropped into a document or a slide
-# is legible without anyone zooming
+# a big canvas with the text scaled up to match, so a figure dropped into a
+# document or a slide is legible without anyone zooming
 SCALE = 1.75
 mpl.rcParams.update({"font.size": mpl.rcParams["font.size"] * SCALE})
 

@@ -247,7 +247,7 @@ pub enum Cmd {
 /// Which calibration to work in.
 #[derive(Parser, Debug, Clone)]
 pub struct Where {
-    /// Names the calibration, under benchmarks/mgy/cutoffs/.
+    /// Names the calibration, under benchmarks/mgy/cutoffs/
     #[arg(long, default_value = DEFAULT_NAME)]
     pub name: String,
 }
@@ -258,11 +258,11 @@ pub struct ReverseArgs {
     pub place: Where,
 
     /// Reverse only the first N shards. This is the one place the size of the
-    /// calibration set is decided; every later stage uses whatever is here.
+    /// calibration set is decided; every later stage uses whatever is here
     #[arg(short = 'n', long)]
     pub shards: Option<usize>,
 
-    /// Threads for the reversal itself.
+    /// Threads for the reversal itself
     #[arg(short, long, default_value_t = 4)]
     pub threads: usize,
 }
@@ -275,7 +275,7 @@ pub struct RecruitArgs {
     #[arg(short, long, default_value_t = 8)]
     pub threads: usize,
 
-    /// List the commands and exit without executing anything.
+    /// List the commands and exit without executing anything
     #[arg(long)]
     pub dry_run: bool,
 }
@@ -295,7 +295,7 @@ pub struct SearchArgs {
     pub place: Where,
 
     /// How many families to search at once. Each search is single-threaded,
-    /// so this is the whole of the parallelism.
+    /// so this is the whole of the parallelism
     #[arg(short = 'j', long)]
     pub jobs: Option<usize>,
 }
@@ -306,7 +306,7 @@ pub struct LearnArgs {
     pub place: Where,
 
     /// Forward hits at or below this E-value are treated as real, and their
-    /// reversed counterparts are excluded from the decoy scores.
+    /// reversed counterparts are excluded from the decoy scores
     #[arg(short = 'e', default_value_t = 1e-3, value_name = "F")]
     pub reverse_e_cutoff: f64,
 
@@ -1124,7 +1124,7 @@ where
         .iter()
         .map(|h| h.score)
         // a family with fewer than N_SCORES decoys pads with zero, which
-        // parse_cutoffs reads as "no usable cutoff"
+        // `cutoffs` in scores.rs reads as "no usable cutoff"
         .chain(std::iter::repeat(0.0))
         .take(N_SCORES)
         .collect();
@@ -1166,7 +1166,8 @@ fn all(args: AllArgs) -> anyhow::Result<()> {
 
 // ------------------------------------------------------------------- utils
 
-/// A thread pool scoped to one phase, so it does not fight with any global one.
+/// A thread pool scoped to one phase, so it never shares threads with a global
+/// one.
 fn pool(threads: usize) -> anyhow::Result<rayon::ThreadPool> {
     rayon::ThreadPoolBuilder::new()
         .num_threads(threads.max(1))

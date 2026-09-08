@@ -1,9 +1,8 @@
 //! The steps every pipeline is assembled out of.
 //!
 //! These return [`Step`]s and [`Cmd`]s for a pipeline to compose. Nothing here
-//! owns a pipeline or decides what a run measures — a pipeline that wants
-//! hmmer against a shard asks for those steps and puts them where it wants
-//! them.
+//! owns a pipeline or decides what a run measures: a pipeline searching hmmer
+//! against a shard takes those steps and puts them where it needs them.
 //!
 //! Every search command carries the fields `parse` reads back: `name` for the
 //! column it becomes, `tool` for how to read its table, and `shard` for which

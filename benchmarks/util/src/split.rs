@@ -64,11 +64,11 @@ pub fn write_splits(
 
 /// Deal `c` into `n` files, `<i>.<ext>` for `i` in `0..n`, heaviest record
 /// first onto whichever part is lightest so far.
-///
-/// Weight rather than count: a model's length and a sequence's residues are
-/// what a search against it costs, and the parts go to jobs whose slowest one
-/// is the wall time this repo reports. Round robin over the same order leaves
-/// 0.5% of the work misplaced at 8 parts and 14% at 256; this leaves 0.03%.
+//
+// weight rather than count: a model's length and a sequence's residues are
+// what a search against it costs, and the parts go to jobs whose slowest one
+// is the wall time this repo reports. round robin over the same order leaves
+// more of the work on one part as the part count grows; this keeps it level
 fn deal<C>(
     c: C,
     n: usize,

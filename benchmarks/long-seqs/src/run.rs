@@ -50,7 +50,7 @@ pub struct Args {
     #[arg(short, long, default_value_t = 24)]
     pub threads: usize,
 
-    /// Where the results and the manifest go. Defaults to outputs/.
+    /// Where the results and the manifest go. Defaults to outputs/
     #[arg(long, value_name = "dir")]
     pub out: Option<PathBuf>,
 

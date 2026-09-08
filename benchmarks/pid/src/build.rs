@@ -56,36 +56,36 @@ static AMINO: [bool; 256] = {
 
 #[derive(Parser, Debug)]
 pub struct Args {
-    /// Names the input set, under inputs/<size>/.
+    /// Names the input set, under `inputs/<size>/`
     #[arg(short, long, default_value = "toy")]
     pub size: String,
 
     /// Benchmark pairs to sample; 0 uses every pair that survives filtering.
-    /// Decoys are added to the target database on top of this.
+    /// Decoys are added to the target database on top of this
     #[arg(short, long, default_value_t = 50)]
     pub pairs: usize,
 
-    /// Seed for pair sampling and decoy generation, and for the profmark split.
+    /// Seed for pair sampling and decoy generation, and for the profmark split
     #[arg(long, default_value_t = 67779)]
     pub seed: u64,
 
-    /// Maximum identity between the train and test halves of the split.
+    /// Maximum identity between the train and test halves of the split
     #[arg(long, default_value_t = 0.30)]
     pub train_test_id: f64,
 
-    /// Minimum test sequences per family.
+    /// Minimum test sequences per family
     #[arg(long, default_value_t = 10)]
     pub min_test: usize,
 
-    /// Maximum test sequences per family.
+    /// Maximum test sequences per family
     #[arg(long, default_value_t = 30)]
     pub max_test: usize,
 
-    /// Rebuild the profmark train/test split even if it already exists.
+    /// Rebuild the profmark train/test split even if it already exists
     #[arg(long)]
     pub refresh_profmark: bool,
 
-    /// Threads for hmmbuild.
+    /// Threads for hmmbuild
     #[arg(short, long, default_value_t = 8)]
     pub threads: usize,
 
@@ -490,7 +490,7 @@ fn assemble(
 /// everything this benchmark reads.
 fn families(path: &Path) -> anyhow::Result<IndexMap<String, StockholmRecord>> {
     // repaired in place rather than through from_utf8_lossy, which would hold
-    // a second copy of a 500MB file
+    // a second copy of the whole file
     let mut bytes =
         std::fs::read(path).with_context(|| format!("failed to read {}", path.display()))?;
     util::repair_utf8(&mut bytes);

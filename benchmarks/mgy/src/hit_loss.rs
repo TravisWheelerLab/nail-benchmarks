@@ -37,17 +37,17 @@ const HMMER: &str = "hmmer";
 
 #[derive(Parser, Debug)]
 pub struct Args {
-    /// Which target shard to search.
+    /// Which target shard to search
     #[arg(long, default_value = "1", value_name = "N")]
     shard: String,
 
     /// nail's -E, set far above its default so the final e-value gate can't be
     /// mistaken for a cloud/align filter. Only lower this to study the e-value
-    /// gate itself.
+    /// gate itself
     #[arg(long, default_value_t = 1e6, value_name = "X")]
     nail_evalue: f64,
 
-    /// Threads per search, and the cores each search is pinned to.
+    /// Threads per search, and the cores each search is pinned to
     #[arg(short, long, default_value_t = 8)]
     threads: usize,
 

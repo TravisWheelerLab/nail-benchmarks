@@ -2,13 +2,13 @@
 //!
 //! Every benchmark shells out to the same handful of binaries and reads from
 //! the same downloads, and neither is looked for on `PATH`: `make` puts the
-//! tools in `tools/bin/` and the data in `data/`, and a benchmark asks here
-//! rather than guessing. That is what makes a run reproducible -- whichever
+//! tools in `tools/bin/` and the data in `data/`, and a benchmark reads from
+//! here rather than guessing. That is what makes a run reproducible -- whichever
 //! `hmmsearch` was built for this repo is the one that ran.
 //!
-//! A tool accessor checks the binary is there and answers `-h` before handing
-//! back its path, so a missing or broken install fails by name at the front of
-//! a pipeline rather than as a mystery exit code an hour in.
+//! A tool accessor checks the binary is there and runs it with `-h` before
+//! handing back its path, so a missing or broken install fails by name at the
+//! front of a pipeline rather than as a mystery exit code an hour in.
 
 use std::path::{Path, PathBuf};
 use std::process::Command;
@@ -138,7 +138,7 @@ pub fn mgnify() -> anyhow::Result<PathBuf> {
 
 /// The per-family score cutoffs mgy holds every hit against.
 ///
-/// Not routed through [`data`]: this one is checked in rather than downloaded,
+/// Not routed through `data`: this one is checked in rather than downloaded,
 /// so `make setup` has nothing to say about it being missing. A calibration run
 /// writes a replacement, which is then promoted here by hand.
 pub fn mgy_cutoffs() -> anyhow::Result<PathBuf> {

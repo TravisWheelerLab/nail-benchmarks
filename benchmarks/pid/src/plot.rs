@@ -60,21 +60,21 @@ const FIGURES: &[Figure] = &[
 
 #[derive(Parser, Debug)]
 pub struct Args {
-    /// Which input set's figures to draw, naming outputs/<size>/.
+    /// Which input set's figures to draw, naming `outputs/<size>/`
     #[arg(short, long, default_value = "toy")]
     size: String,
 
     /// Where `parse` wrote its tables, and where the pdfs go. Defaults to
-    /// figures/ beside the run.
+    /// figures/ beside the run
     #[arg(short, long, value_name = "dir")]
     out: Option<PathBuf>,
 
     /// Draw only this figure. Repeatable; every one it has the input for by
-    /// default.
+    /// default
     #[arg(long, value_name = "NAME")]
     only: Vec<String>,
 
-    /// The interpreter to run the scripts with.
+    /// The interpreter to run the scripts with
     #[arg(long, default_value = "python3", value_name = "python")]
     python: String,
 
@@ -143,7 +143,7 @@ pub fn main(args: Args) -> anyhow::Result<()> {
         }
 
         // the script goes in the subcommand slot rather than in a path: a Cmd
-        // renders its options before its positionals, and python wants the
+        // renders its options before its positionals, and python needs the
         // script ahead of everything
         let cmd = figure
             .inputs
@@ -184,7 +184,7 @@ pub fn main(args: Args) -> anyhow::Result<()> {
     Ok(())
 }
 
-/// That the interpreter is there and can import matplotlib.
+/// Checks that the interpreter is there and can import matplotlib.
 fn matplotlib(python: &str) -> anyhow::Result<()> {
     let out = Command::new(python)
         .args(["-c", "import matplotlib"])

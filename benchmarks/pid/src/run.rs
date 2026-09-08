@@ -22,11 +22,11 @@ use crate::search::{self, Bins, Dirs, MODE, PRF, SEQ, Split};
 
 #[derive(Parser, Debug)]
 pub struct Args {
-    /// Which input set to search, naming inputs/<size>/.
+    /// Which input set to search, naming `inputs/<size>/`
     #[arg(short, long, default_value = "toy")]
     pub size: String,
 
-    /// nail's --mmseqs-s values to sweep.
+    /// nail's --mmseqs-s values to sweep
     #[arg(
         long,
         value_delimiter = ',',
@@ -35,7 +35,7 @@ pub struct Args {
     )]
     pub nail_s: Vec<f32>,
 
-    /// mmseqs' -s values to sweep.
+    /// mmseqs' -s values to sweep
     #[arg(
         long,
         value_delimiter = ',',
