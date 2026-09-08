@@ -147,11 +147,20 @@ DIAMOND     := $(TOOL_BIN)/diamond
 
 .PHONY: nail hmmer mmseqs blast last diamond
 
-NAIL_SRC_URL  := https://github.com/TravisWheelerLab/nail/archive/refs/tags/nail-v0.4.0.tar.gz
+NAIL_SRC_URL  := https://github.com/TravisWheelerLab/nail/archive/refs/tags/nail-v0.7.1.tar.gz
 NAIL_SRC_TGZ  := $(TOOL_DIR)/nail.tgz
+NAIL_SRC_DIR  := $(TOOL_DIR)/nail
+NAIL_TGT_DIR  := $(NAIL_SRC_DIR)/target
+# the build passes --target-dir explicitly: CARGO_TARGET_DIR in the environment
+# would otherwise move the binary and leave the symlink dangling, since ln -s
+# does not check
 nail: $(TOOL_BIN)
-	@echo TODO: retrieve/build nail
-	@False	
+	@wget -O $(NAIL_SRC_TGZ) $(NAIL_SRC_URL)
+	@mkdir -p $(NAIL_SRC_DIR)
+	@tar --strip-components=1 -xzf $(NAIL_SRC_TGZ) -C $(NAIL_SRC_DIR)
+	@cd $(NAIL_SRC_DIR) && cargo build --release -p nail --target-dir $(NAIL_TGT_DIR)
+	@rm $(NAIL_SRC_TGZ)
+	@ln -sf $(NAIL_TGT_DIR)/release/nail $(NAIL)
 
 HMMER_SRC_URL := http://eddylab.org/software/hmmer/hmmer-3.4.tar.gz
 HMMER_SRC_TGZ := $(TOOL_DIR)/hmmer.tgz
