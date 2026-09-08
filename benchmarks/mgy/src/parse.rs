@@ -142,7 +142,7 @@ fn derive(
 }
 
 /// A pipeline directory, given either as a path or by name.
-fn pipeline(name: &str) -> anyhow::Result<PathBuf> {
+pub fn pipeline(name: &str) -> anyhow::Result<PathBuf> {
     let dir = match PathBuf::from(name) {
         path if path.is_dir() => path,
         _ => crate::outputs().join(name),

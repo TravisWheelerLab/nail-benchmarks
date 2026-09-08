@@ -9,7 +9,9 @@
 //!
 //! Two smaller things are shared for want of a second home: [`split`], which
 //! cuts a query set up for a batch of jobs, and [`nail`], which reads the one
-//! column of nail's table that libsail's layout does not carry.
+//! column of nail's table that libsail's layout does not carry. [`time`] is
+//! for the other way a run can be recorded: timed by a shell rather than by a
+//! pipeline, on a machine this workspace never sees.
 //!
 //! Nothing here decides what counts as a *true* hit. That is the part every
 //! benchmark answers differently, and it stays with the benchmark.
@@ -18,6 +20,7 @@ pub mod manifest;
 pub mod nail;
 pub mod split;
 pub mod tbl;
+pub mod time;
 pub mod tools;
 
 /// Replace every byte that is not part of a valid UTF-8 sequence with `?`.
