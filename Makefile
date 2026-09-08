@@ -153,6 +153,8 @@ NAIL        := $(TOOL_BIN)/nail
 PHMMER      := $(TOOL_BIN)/phmmer
 HMMSEARCH   := $(TOOL_BIN)/hmmsearch
 ESL_SEQSTAT := $(TOOL_BIN)/esl-seqstat
+ESL_ALISTAT := $(TOOL_BIN)/esl-alistat
+HMMSTAT     := $(TOOL_BIN)/hmmstat
 PROFMARK    := $(TOOL_BIN)/create-profmark
 HMMBUILD    := $(TOOL_BIN)/hmmbuild
 HMMEMIT     := $(TOOL_BIN)/hmmemit
@@ -197,6 +199,8 @@ hmmer: $(TOOL_BIN)
 	@ln -sf $(HMMER_BIN_DIR)/hmmsearch $(HMMSEARCH)
 	@ln -sf $(HMMER_BIN_DIR)/phmmer $(PHMMER)
 	@ln -sf $(HMMER_BIN_DIR)/esl-seqstat $(ESL_SEQSTAT)
+	@ln -sf $(HMMER_BIN_DIR)/esl-alistat $(ESL_ALISTAT)
+	@ln -sf $(HMMER_BIN_DIR)/hmmstat $(HMMSTAT)
 	@ln -sf $(HMMER_BIN_DIR)/hmmbuild $(HMMBUILD)
 	@ln -sf $(HMMER_BIN_DIR)/hmmemit $(HMMEMIT)
 	@ln -sf $(HMMER_SRC_DIR)/profmark/create-profmark $(PROFMARK)
@@ -310,6 +314,55 @@ check:
 	else \
 	  echo "something is missing: make tools, make data"; \
 	fi; \
+	exit $$fail
+
+# check says a file is there; validate reads it. each file goes through the
+# tool that parses its format, and a pass means that tool ran to the end of the
+# file and said how many records it found. mgy-cutoffs.tbl has no such tool, so
+# its rows are counted directly. the counts are printed for a human to look at,
+# not compared against anything: nothing here knows how many records a file is
+# supposed to hold
+.PHONY: validate
+validate:
+	$(call need_tool,$(ESL_ALISTAT),hmmer)
+	$(call need_tool,$(ESL_SEQSTAT),hmmer)
+	$(call need_tool,$(HMMSTAT),hmmer)
+	@fail=0; \
+	ok() { printf '  ✔ %-24s %s\n' "$$1" "$$2"; }; \
+	bad() { printf '  ✘ %-24s %s\n' "$$1" "$$2"; fail=1; }; \
+	records() { printf '%s\n' "$$1" | awk '!/^#/ && NF { n++ } END { print n+0 }'; }; \
+	seqs() { \
+	  if out=$$($(ESL_SEQSTAT) "$$2" 2>&1); then \
+	    ok "$$1" "$$(printf '%s\n' "$$out" | awk '/^Number of sequences:/ { print $$4 }') sequences"; \
+	  else bad "$$1" "esl-seqstat did not finish"; fi; \
+	}; \
+	echo "data  $(DATA_DIR)"; \
+	if [ ! -e $(PFAM_STO) ]; then bad pfam.sto missing; \
+	elif out=$$($(ESL_ALISTAT) -1 --informat stockholm $(PFAM_STO) 2>&1); then \
+	  ok pfam.sto "$$(records "$$out") alignments"; \
+	else bad pfam.sto "esl-alistat did not finish"; fi; \
+	if [ ! -e $(PFAM_HMM) ]; then bad pfam.hmm "missing; run make pfam-hmm"; \
+	elif out=$$($(HMMSTAT) $(PFAM_HMM) 2>&1); then \
+	  ok pfam.hmm "$$(records "$$out") models"; \
+	else bad pfam.hmm "hmmstat did not finish"; fi; \
+	if [ ! -e $(SWISSPROT_FA) ]; then bad swissprot.fa missing; \
+	else seqs swissprot.fa $(SWISSPROT_FA); fi; \
+	n=0; \
+	for f in $(MGY_DIR)/*.fa $(MGY_DIR)/*.fasta; do \
+	  [ -e "$$f" ] || continue; \
+	  n=$$((n + 1)); seqs "mgnify/$$(basename $$f)" "$$f"; \
+	done; \
+	if [ $$n = 0 ]; then bad mgnify "no .fa/.fasta in it"; fi; \
+	for f in $(DATA_DIR)/long-seqs/*/*.fa; do \
+	  [ -e "$$f" ] || continue; \
+	  seqs "long-seqs/$$(basename $$f)" "$$f"; \
+	done; \
+	if [ ! -e $(DATA_DIR)/mgy-cutoffs.tbl ]; then bad mgy-cutoffs.tbl missing; \
+	else ok mgy-cutoffs.tbl \
+	  "$$(awk '!/^#/ && NF { n++ } END { print n+0 }' $(DATA_DIR)/mgy-cutoffs.tbl) rows"; fi; \
+	echo; \
+	if [ $$fail = 0 ]; then echo "every reader finished"; \
+	else echo "a reader did not finish"; fi; \
 	exit $$fail
 
 .PHONY: clean
