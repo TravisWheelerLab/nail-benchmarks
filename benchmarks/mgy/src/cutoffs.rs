@@ -48,7 +48,7 @@ use libsail::tbl::blast::BlastTable;
 use libsail::tbl::hmmer::HmmerTable;
 use libsail::tbl::nail::NailTable;
 use libsail::tbl::{Hit, HitColumns, Table};
-use pail::{Cmd as PCmd, PipelineBuilder, Progress, Step, Table as PTable};
+use michi::{Cmd as PCmd, PipelineBuilder, Progress, Step, Table as PTable};
 use util::tools::{hmmsearch, mmseqs, nail};
 use util::{manifest, tbl};
 

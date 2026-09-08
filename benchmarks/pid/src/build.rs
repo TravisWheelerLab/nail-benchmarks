@@ -22,7 +22,7 @@ use indexmap::IndexMap;
 use libsail::collection::{Indexable, Iterable};
 use libsail::seq::fasta::{DEFAULT_LINE_WIDTH, Fasta, FastaRecord};
 use libsail::seq::stockholm::StockholmRecord;
-use pail::{Closure, Cmd, PipelineBuilder, Progress, Step};
+use michi::{Closure, Cmd, PipelineBuilder, Progress, Step};
 
 use rand::rngs::StdRng;
 use rand::seq::{IndexedRandom, SliceRandom};

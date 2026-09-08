@@ -2,7 +2,7 @@
 //!
 //! Each benchmark asks its own question and keeps its own analyses. Two things
 //! are the same for all of them. The first is the shape of the record a run
-//! leaves behind: a `pail::Table` sink writes `manifest.tbl`, `parse` reads it
+//! leaves behind: a `michi::Table` sink writes `manifest.tbl`, `parse` reads it
 //! back through [`manifest`], and whatever it works out gets written through
 //! [`tbl`]. The second is where the programs being benchmarked and the sequence
 //! data they run on were put, which is [`tools`].

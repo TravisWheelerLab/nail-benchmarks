@@ -4,7 +4,7 @@
 //! hmmsearch over every MGnify shard belongs on a cluster, not on the machine
 //! doing the analysis. What comes back is the same tables a pipeline here
 //! would have written, timed by whatever `time` that cluster had instead of by
-//! `pail`. This turns those into a `manifest.tbl`, after which `parse` cannot
+//! `michi`. This turns those into a `manifest.tbl`, after which `parse` cannot
 //! tell the difference.
 //!
 //! Nothing is copied. The tables are found where they already are, under
@@ -444,7 +444,7 @@ impl Extrapolate {
 
 /// Writes the manifest, in the shape `parse` reads back.
 ///
-/// Assembled by hand rather than by a [`pail::Table`] sink, since no pipeline
+/// Assembled by hand rather than by a [`michi::Table`] sink, since no pipeline
 /// ran: the commands happened somewhere else and all that came back is what
 /// they produced and what they cost. Only the columns a reader uses are here.
 fn write(path: &Path, runs: &[Run]) -> anyhow::Result<()> {
@@ -519,7 +519,7 @@ fn seconds(value: Option<f64>) -> String {
     value.map_or_else(dash, |s| format!("{s:.2}"))
 }
 
-/// Kilobytes as the units `pail` writes them in, so a manifest reads the same
+/// Kilobytes as the units `michi` writes them in, so a manifest reads the same
 /// however it was made.
 fn rss(kb: u64) -> String {
     const MIB: f64 = 1024.0;

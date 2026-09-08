@@ -14,7 +14,7 @@ use std::process::Command;
 use anyhow::{Context, bail};
 use clap::Parser;
 
-use pail::{Cmd, PipelineBuilder, Progress, Step};
+use michi::{Cmd, PipelineBuilder, Progress, Step};
 
 use crate::inputs::{self, Inputs};
 

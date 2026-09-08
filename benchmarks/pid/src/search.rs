@@ -14,7 +14,7 @@ use anyhow::Context;
 
 use util::manifest;
 use util::split::{self, Kind};
-use pail::{Closure, Cmd, Step};
+use michi::{Closure, Cmd, Step};
 
 use crate::inputs::Inputs;
 

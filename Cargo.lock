@@ -248,7 +248,7 @@ dependencies = [
  "anyhow",
  "clap",
  "libsail",
- "pail",
+ "michi",
  "util",
 ]
 
@@ -265,10 +265,20 @@ dependencies = [
  "anyhow",
  "clap",
  "libsail",
- "pail",
+ "michi",
  "rand",
  "rayon",
  "util",
+]
+
+[[package]]
+name = "michi"
+version = "0.1.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "528e7c74e05c6d5f40bc1d1ac7fb2a3dbdbee04e2899dc59427d5ffd5fe52d3a"
+dependencies = [
+ "anyhow",
+ "libc",
 ]
 
 [[package]]
@@ -276,16 +286,6 @@ name = "once_cell_polyfill"
 version = "1.70.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "384b8ab6d37215f3c5301a95a4accb5d64aa607f1fcb26a11b5303878451b4fe"
-
-[[package]]
-name = "pail"
-version = "0.1.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "8ead8b9ba322833686e798d089ff3c3ce6d3650b36648d9f65a62e0551d20a61"
-dependencies = [
- "anyhow",
- "libc",
-]
 
 [[package]]
 name = "pid"
@@ -296,7 +296,7 @@ dependencies = [
  "glob",
  "indexmap",
  "libsail",
- "pail",
+ "michi",
  "rand",
  "regex",
  "util",

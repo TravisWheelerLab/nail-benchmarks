@@ -25,7 +25,7 @@ whichever `hmmsearch` was built for this repo.
 
 ## External crates
 
-- `pail` runs a pipeline of commands, times each one, and writes what it did to
+- `michi` runs a pipeline of commands, times each one, and writes what it did to
   `manifest.tbl`.
 - `libsail` reads and writes the formats: FASTA, Stockholm, p7hmm, and the hit
   tables nail, HMMER, MMseqs2 and BLAST produce.
@@ -51,7 +51,7 @@ sweep adds a column without touching the reader.
 
 ## benchmarks/util
 
-- `manifest` reads back the table `pail`'s sink wrote, and builds the
+- `manifest` reads back the table `michi`'s sink wrote, and builds the
   `results/` paths from it.
 - `tbl` writes the padded, `#`-headed table every analysis produces.
 - `tools` holds where the binaries and the downloads are.

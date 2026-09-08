@@ -15,7 +15,7 @@ use clap::Parser;
 
 use util::manifest;
 use util::tools::nail;
-use pail::{Cmd, PipelineBuilder, Progress, Step, Table};
+use michi::{Cmd, PipelineBuilder, Progress, Step, Table};
 
 use crate::inputs;
 

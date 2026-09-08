@@ -28,7 +28,7 @@ use rand::SeedableRng;
 use rand::rngs::StdRng;
 
 use util::tbl;
-use pail::{Closure, Cmd as PCmd, PipelineBuilder, Progress, Step};
+use michi::{Closure, Cmd as PCmd, PipelineBuilder, Progress, Step};
 use util::tools::{mgnify, mmseqs, pfam_hmm, pfam_sto};
 
 use crate::cut;

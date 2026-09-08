@@ -1,6 +1,6 @@
 //! Reading the `.time` file a search run outside the harness left behind.
 //!
-//! A run driven by the harness is timed by `pail`, which calls `wait4` and
+//! A run driven by the harness is timed by `michi`, which calls `wait4` and
 //! writes what it measured straight into `manifest.tbl`. A run driven by a
 //! shell script on someone else's machine is timed by whatever that machine
 //! had, and the six things that could have been are not one format:

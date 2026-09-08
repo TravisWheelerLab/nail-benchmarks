@@ -15,7 +15,7 @@ use clap::Parser;
 
 use util::manifest;
 use util::split::Kind;
-use pail::{Cmd, OnError, Output, PipelineBuilder, Progress, Step, Table};
+use michi::{Cmd, OnError, Output, PipelineBuilder, Progress, Step, Table};
 
 use crate::inputs::Inputs;
 use crate::search::{self, Bins, Dirs, MODE, PRF, SEQ, Split};

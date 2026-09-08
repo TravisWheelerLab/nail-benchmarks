@@ -15,7 +15,7 @@ use std::path::{Path, PathBuf};
 
 use anyhow::Context;
 
-use pail::{Closure, Cmd, Step};
+use michi::{Closure, Cmd, Step};
 
 use util::manifest;
 use util::split::{self, Kind};
