@@ -1,5 +1,10 @@
 MAKEFILE_DIR := $(dir $(abspath $(lastword $(MAKEFILE_LIST))))
 .DEFAULT_GOAL := none
+# a recipe that dies partway leaves no target behind. it reaches the
+# decompression step's output and pfam.hmm, not the downloads: those land in a
+# sidecar (pfam.sto.gz, swissprot.tgz) or under a phony rule (mgnify), and make
+# only deletes the target named by the failing rule
+.DELETE_ON_ERROR:
 
 # detect platform + best x86_64 simd
 OS   := $(shell uname -s)
