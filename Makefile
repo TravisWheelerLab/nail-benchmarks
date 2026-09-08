@@ -11,19 +11,17 @@ else ifeq ($(OS),Linux)
   ifeq ($(ARCH),aarch64)
     PLATFORM := linux-arm64
   else ifeq ($(ARCH),x86_64)
-    CPUFLAGS := $(shell lscpu 2>/dev/null | awk -F: '/Flags|flags/{print $$2}' | tr A-Z a-z); \
-                if [ -z "$$CPUFLAGS" ]; then CPUFLAGS=$$(grep -im1 '^flags' /proc/cpuinfo | cut -d: -f2); fi; \
-                echo $$CPUFLAGS
+    CPUFLAGS := $(shell { lscpu 2>/dev/null || cat /proc/cpuinfo 2>/dev/null; } \
+                        | awk -F: 'tolower($$1) ~ /flags/ { print tolower($$2); exit }')
+    # only the three mmseqs2 ships a build for: avx without avx2 implies sse4.2,
+    # and sse2 is part of the x86_64 base ISA, so a flag list we cannot read
+    # costs the faster build rather than the build
     ifneq (,$(findstring avx2,$(CPUFLAGS)))
       SIMD := avx2
-    else ifneq (,$(findstring avx,$(CPUFLAGS)))
-      SIMD := avx
     else ifneq (,$(findstring sse4_1,$(CPUFLAGS)))
       SIMD := sse4.1
-    else ifneq (,$(findstring sse2,$(CPUFLAGS)))
-      SIMD := sse2
     else
-      SIMD := baseline
+      SIMD := sse2
     endif
     PLATFORM := linux-x86_64-$(SIMD)
   else
@@ -58,8 +56,8 @@ none:
 $(DATA_DIR):
 	@mkdir -p $@
 
-$(MGY_DIR): $(DATA_DIR)
-	@mkdir $(MGY_DIR)
+$(MGY_DIR): | $(DATA_DIR)
+	@mkdir -p $@
 
 $(SWISSPROT_FA): | $(DATA_DIR)
 	@wget -O $(SWISSPROT_TGZ) $(SWISSPROT_URL)
@@ -123,6 +121,9 @@ else
   DIAMOND_BIN_URL := none
 endif
 
+# stop at the platform rather than handing wget the string "none"
+need_url = @test "$(2)" != none || { echo "no $(1) binary release for $(PLATFORM)" >&2; exit 1; }
+
 TOOL_DIR := $(MAKEFILE_DIR)/tools
 TOOL_BIN := $(TOOL_DIR)/bin
 
@@ -177,6 +178,7 @@ MMSEQS_BIN_TGZ := $(TOOL_DIR)/mmseqs.tgz
 MMSEQS_DIR     := $(TOOL_DIR)/mmseqs
 MMSEQS_BIN     := $(MMSEQS_DIR)/bin/mmseqs
 mmseqs: $(TOOL_BIN)
+	$(call need_url,mmseqs,$(MMSEQS_BIN_URL))
 	@wget -O $(MMSEQS_BIN_TGZ) $(MMSEQS_BIN_URL)
 	@mkdir -p $(MMSEQS_DIR)
 	@tar --strip-components=1 -xzf $(MMSEQS_BIN_TGZ) -C $(MMSEQS_DIR)
@@ -200,6 +202,7 @@ BLAST_BIN_TGZ := $(TOOL_DIR)/blast.tgz
 BLAST_DIR     := $(TOOL_DIR)/blast
 BLAST_BIN_DIR := $(BLAST_DIR)/bin
 blast: $(TOOL_BIN)
+	$(call need_url,blast,$(BLAST_BIN_URL))
 	@wget -O $(BLAST_BIN_TGZ) $(BLAST_BIN_URL)
 	@mkdir -p $(BLAST_DIR)
 	@tar --strip-components=1 -xzf $(BLAST_BIN_TGZ) -C $(BLAST_DIR)
@@ -209,8 +212,8 @@ blast: $(TOOL_BIN)
 	@ln -sf $(BLAST_BIN_DIR)/makeblastdb $(MAKEBLASTDB)
 
 DIAMOND_BIN_TGZ := $(TOOL_DIR)/diamond.tgz
-DIAMOND_BIN     := $(TOOL_DIR)/diamond
 diamond: $(TOOL_BIN)
+	$(call need_url,diamond,$(DIAMOND_BIN_URL))
 	@wget -O $(DIAMOND_BIN_TGZ) $(DIAMOND_BIN_URL)
 	@tar -xzf $(DIAMOND_BIN_TGZ) -C $(TOOL_BIN)
 	@rm $(DIAMOND_BIN_TGZ)
