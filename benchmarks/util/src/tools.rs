@@ -123,9 +123,21 @@ pub fn pfam_sto() -> anyhow::Result<PathBuf> {
     data("pfam.sto")
 }
 
-// not a make target: built from pfam.sto with hmmbuild
+/// Pfam's profiles, built from `pfam.sto`.
+///
+/// Not routed through `data`: `make data` does not produce it, since building
+/// it needs hmmer installed first.
 pub fn pfam_hmm() -> anyhow::Result<PathBuf> {
-    data("pfam.hmm")
+    let path = repo().join("data/pfam.hmm");
+
+    if !path.is_file() {
+        anyhow::bail!(
+            "missing {}; run `make pfam-hmm` from the repo root",
+            path.display()
+        );
+    }
+
+    Ok(path)
 }
 
 pub fn swissprot() -> anyhow::Result<PathBuf> {

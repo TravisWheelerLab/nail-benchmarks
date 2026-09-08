@@ -39,6 +39,8 @@ DATA_DIR := $(MAKEFILE_DIR)/data
 PFAM_URL := https://ftp.ebi.ac.uk/pub/databases/Pfam/releases/Pfam36.0/Pfam-A.seed.gz
 PFAM_GZ := $(DATA_DIR)/pfam.sto.gz
 PFAM_STO:= $(DATA_DIR)/pfam.sto
+PFAM_HMM := $(DATA_DIR)/pfam.hmm
+HMMBUILD_CPU ?= 4
 
 SWISSPROT_URL := https://ftp.uniprot.org/pub/databases/uniprot/previous_releases/release-2023_05/knowledgebase/uniprot_sprot-only2023_05.tar.gz
 SWISSPROT_TGZ := $(DATA_DIR)/swissprot.tgz
@@ -72,8 +74,16 @@ $(PFAM_STO): | $(DATA_DIR)
 	@wget -O $(PFAM_GZ) $(PFAM_URL)
 	@gunzip $(PFAM_GZ)
 
-.PHONY: pfam swissprot mgnify
+# derived rather than downloaded, and hmmbuild has to exist first, which is why
+# `data` does not build it
+$(PFAM_HMM): $(PFAM_STO)
+	$(call need_tool,$(HMMBUILD),hmmer)
+	$(HMMBUILD) --cpu $(HMMBUILD_CPU) $@ $(PFAM_STO)
+
+.PHONY: pfam pfam-hmm swissprot mgnify
 pfam: $(PFAM_STO)
+
+pfam-hmm: $(PFAM_HMM)
 
 swissprot: $(SWISSPROT_FA)
 
@@ -124,6 +134,9 @@ endif
 
 # stop at the platform rather than handing wget the string "none"
 need_url = @test "$(2)" != none || { echo "no $(1) binary release for $(PLATFORM)" >&2; exit 1; }
+
+# $(1) is the binary, $(2) the target that installs it
+need_tool = @test -x $(1) || { echo "no $(notdir $(1)); run make $(2)" >&2; exit 1; }
 
 TOOL_DIR := $(MAKEFILE_DIR)/tools
 TOOL_BIN := $(TOOL_DIR)/bin
@@ -276,7 +289,7 @@ check:
 	  if [ ! -e "$$path" ]; then \
 	    note="missing"; \
 	    if [ "$$item" = pfam.hmm ]; then \
-	      note="missing; hmmbuild it from pfam.sto"; \
+	      note="missing; run make pfam-hmm"; \
 	    fi; \
 	  elif [ "$$item" = mgnify ]; then \
 	    n=$$(ls $(MGY_DIR)/*.fa $(MGY_DIR)/*.fasta 2>/dev/null | wc -l | tr -d ' '); \
