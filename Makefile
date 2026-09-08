@@ -48,6 +48,7 @@ SWISSPROT_FA := $(DATA_DIR)/swissprot.fa
 
 MGY_URL = https://ftp.ebi.ac.uk/pub/databases/metagenomics/peptide_database/2024_04
 MGY_DIR = $(DATA_DIR)/mgnify
+MGY_SHARDS = 25
 
 .PHONY: none
 none:
@@ -79,17 +80,17 @@ swissprot: $(SWISSPROT_FA)
 mgnify: | $(MGY_DIR)
 	@set -e; \
 	if command -v aria2c >/dev/null 2>&1; then \
-	  for i in $$(seq 1 25); do \
+	  for i in $$(seq 1 $(MGY_SHARDS)); do \
 	    aria2c -x8 -s8 -d $(MGY_DIR) $(MGY_URL)/mgy_proteins_$${i}.fa.gz; \
 	  done; \
 	else \
-	  for i in $$(seq 1 25); do \
+	  for i in $$(seq 1 $(MGY_SHARDS)); do \
 	    wget -O $(MGY_DIR)/mgy_proteins_$${i}.fa.gz $(MGY_URL)/mgy_proteins_$${i}.fa.gz; \
 	  done; \
 	fi
 
-.PHONY: setup
-setup: pfam swissprot mgnify
+.PHONY: data
+data: pfam swissprot mgnify
 
 ####################################
 ####################################
@@ -226,6 +227,72 @@ diamond: $(TOOL_BIN)
 	@wget -O $(DIAMOND_BIN_TGZ) $(DIAMOND_BIN_URL)
 	@tar -xzf $(DIAMOND_BIN_TGZ) -C $(TOOL_BIN)
 	@rm $(DIAMOND_BIN_TGZ)
+
+# built from source, so every platform can have them
+TOOLS := nail hmmer last
+# the rest ship binaries, and not for every platform
+ifneq ($(MMSEQS_BIN_URL),none)
+  TOOLS += mmseqs
+endif
+ifneq ($(BLAST_BIN_URL),none)
+  TOOLS += blast
+endif
+ifneq ($(DIAMOND_BIN_URL),none)
+  TOOLS += diamond
+endif
+
+.PHONY: tools
+tools: $(TOOLS)
+
+# name:help-flag, matching what util::tools runs before handing back a path
+CHECK_TOOLS := nail:-h hmmsearch:-h phmmer:-h hmmbuild:-h hmmemit:-h \
+               esl-seqstat:-h create-profmark:-h mmseqs:-h \
+               blastp:-h psiblast:-h makeblastdb:-h \
+               lastal:-h lastdb:-h diamond:--help
+
+CHECK_DATA := pfam.sto pfam.hmm swissprot.fa mgnify mgy-cutoffs.tbl long-seqs
+
+.PHONY: check
+check:
+	@fail=0; \
+	echo "tools  $(TOOL_BIN)"; \
+	for spec in $(CHECK_TOOLS); do \
+	  name=$${spec%%:*}; flag=$${spec#*:}; bin=$(TOOL_BIN)/$$name; note=; \
+	  if [ -L "$$bin" ] && [ ! -e "$$bin" ]; then \
+	    note="dangling symlink -> $$(readlink $$bin)"; \
+	  elif [ ! -e "$$bin" ]; then \
+	    note="not installed"; \
+	  elif ! "$$bin" $$flag >/dev/null 2>&1; then \
+	    note="$$flag exited nonzero"; \
+	  fi; \
+	  if [ -n "$$note" ]; then \
+	    fail=1; printf '  ✘ %-18s %s\n' "$$name" "$$note"; \
+	  else printf '  ✔ %s\n' "$$name"; fi; \
+	done; \
+	echo; \
+	echo "data  $(DATA_DIR)"; \
+	for item in $(CHECK_DATA); do \
+	  path=$(DATA_DIR)/$$item; note=; \
+	  if [ ! -e "$$path" ]; then \
+	    note="missing"; \
+	    if [ "$$item" = pfam.hmm ]; then \
+	      note="missing; hmmbuild it from pfam.sto"; \
+	    fi; \
+	  elif [ "$$item" = mgnify ]; then \
+	    n=$$(ls $(MGY_DIR)/*.fa $(MGY_DIR)/*.fasta 2>/dev/null | wc -l | tr -d ' '); \
+	    if [ "$$n" = 0 ]; then note="no .fa/.fasta in it; the downloads are .gz"; fi; \
+	  fi; \
+	  if [ -n "$$note" ]; then \
+	    fail=1; printf '  ✘ %-18s %s\n' "$$item" "$$note"; \
+	  else printf '  ✔ %s\n' "$$item"; fi; \
+	done; \
+	echo; \
+	if [ $$fail = 0 ]; then \
+	  echo "all present"; \
+	else \
+	  echo "something is missing: make tools, make data"; \
+	fi; \
+	exit $$fail
 
 .PHONY: clean
 clean:
