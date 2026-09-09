@@ -5,14 +5,15 @@
 //! that, an optional block of `#` metadata: what was searched, what a fraction
 //! is a fraction of, whatever reference line a figure needs.
 //!
-//! It is a format for reading, not for round-tripping. A reader that wants its
-//! own table back writes the parser for it -- `#=` metadata lines and a known
-//! column order are what make that possible, and neither is this module's
-//! business.
+//! [`read`] gets the header and the rows back, keyed by column name, which is
+//! as far as a reader can go without knowing what it is reading. What a cell
+//! means, and what a `#=` metadata line says, stay with the caller: those are
+//! the parts every table spells differently.
 
+use std::collections::BTreeMap;
 use std::path::Path;
 
-use anyhow::Context;
+use anyhow::{Context, ensure};
 
 pub struct Table<'a> {
     /// Lines above the header, each already `#`-prefixed and newline-ended.
@@ -105,6 +106,77 @@ pub fn render(table: Table<'_>) -> String {
     out
 }
 
+// ---
+
+/// A table read back off disk.
+pub struct Rows {
+    /// The column names the header declared, in order.
+    pub headers: Vec<String>,
+    /// The lines above the header, `#` and all, for a caller that wrote
+    /// something up there and knows how to read it back.
+    pub meta: Vec<String>,
+    /// One per row, keyed by column name.
+    pub cells: Vec<BTreeMap<String, String>>,
+}
+
+pub fn read(path: &Path) -> anyhow::Result<Rows> {
+    let text = std::fs::read_to_string(path)
+        .with_context(|| format!("failed to read {}", path.display()))?;
+
+    parse(&text).with_context(|| format!("failed to read {}", path.display()))
+}
+
+/// The header and rows of a table [`render`] produced.
+pub fn parse(text: &str) -> anyhow::Result<Rows> {
+    let lines: Vec<&str> = text.lines().collect();
+
+    // the header is the comment directly above the rule. that is the only
+    // thing that tells it apart from a `#` metadata line, which a summary
+    // table writes several of
+    let rule = lines
+        .iter()
+        .position(|line| is_rule(line))
+        .filter(|&at| at > 0)
+        .context("no header naming the columns")?;
+
+    let headers: Vec<String> = lines[rule - 1]
+        .strip_prefix('#')
+        .unwrap_or_default()
+        .split_whitespace()
+        .map(str::to_string)
+        .collect();
+    ensure!(!headers.is_empty(), "no header naming the columns");
+
+    let cells = lines[rule + 1..]
+        .iter()
+        .filter(|line| !line.starts_with('#') && !line.trim().is_empty())
+        // a ragged last column holds spaces, so the zip stops at its first
+        // word. a caller that wrote one reads it back itself
+        .map(|line| {
+            headers
+                .iter()
+                .cloned()
+                .zip(line.split_whitespace().map(str::to_string))
+                .collect()
+        })
+        .collect();
+
+    Ok(Rows {
+        headers,
+        meta: lines[..rule - 1].iter().map(|l| l.to_string()).collect(),
+        cells,
+    })
+}
+
+fn is_rule(line: &str) -> bool {
+    let Some(rest) = line.strip_prefix('#') else {
+        return false;
+    };
+
+    let mut dashes = rest.split_whitespace().peekable();
+    dashes.peek().is_some() && dashes.all(|d| d.chars().all(|c| c == '-'))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -170,5 +242,52 @@ mod tests {
         });
 
         assert!(text.starts_with("# query 200\n#\n# a\n# -\n"));
+    }
+
+    #[test]
+    fn what_render_wrote_parses_back() {
+        let headers = strings(&["name", "wall(s)"]);
+        let rows = vec![strings(&["a-long-one", "1.50"]), strings(&["b", "22.00"])];
+
+        let text = render(Table {
+            meta: "# query 200\n",
+            headers: &headers,
+            rows: &rows,
+            ragged_last: false,
+        });
+        let back = parse(&text).unwrap();
+
+        assert_eq!(back.headers, headers);
+        assert_eq!(back.cells.len(), 2);
+        assert_eq!(back.cells[0]["name"], "a-long-one");
+        assert_eq!(back.cells[1]["wall(s)"], "22.00");
+    }
+
+    #[test]
+    fn a_metadata_line_is_not_the_header() {
+        // both spellings a table in this repo writes: `#=` for a reader,
+        // a bare `#` for a person
+        let text = "#= run nail 1.5\n# query 200 families\n#\n# name n\n# ---- -\n  a    1\n";
+        let back = parse(text).unwrap();
+
+        assert_eq!(back.headers, strings(&["name", "n"]));
+        assert_eq!(back.cells[0]["name"], "a");
+        assert_eq!(
+            back.meta,
+            strings(&["#= run nail 1.5", "# query 200 families", "#"])
+        );
+    }
+
+    #[test]
+    fn a_short_row_is_missing_its_tail_rather_than_shifted() {
+        let back = parse("# name tool shard\n# ---- ---- -----\n  a    nail\n").unwrap();
+
+        assert_eq!(back.cells[0]["tool"], "nail");
+        assert_eq!(back.cells[0].get("shard"), None);
+    }
+
+    #[test]
+    fn a_table_with_no_header_is_an_error() {
+        assert!(parse("  a 1\n  b 2\n").is_err());
     }
 }

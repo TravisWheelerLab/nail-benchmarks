@@ -13,7 +13,7 @@
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
-use anyhow::{Context, ensure};
+use anyhow::Context;
 
 /// The column a run's results file is filed under.
 pub const NAME: &str = "name";
@@ -183,36 +183,14 @@ impl Manifest {
             )
         })?;
 
-        let mut names: Vec<String> = Vec::new();
-        let mut rows = Vec::new();
+        // argv is the last column and full of spaces, so it comes back as its
+        // first word. nothing reads it
+        let rows = crate::tbl::parse(&text)
+            .with_context(|| format!("failed to read {}", path.display()))?;
 
-        for line in text.lines() {
-            if let Some(rest) = line.strip_prefix('#') {
-                // the first comment is the header, the second is the rule under it
-                let rest = rest.trim_start();
-                if names.is_empty() && !rest.starts_with('-') {
-                    names = rest.split_whitespace().map(str::to_string).collect();
-                }
-                continue;
-            }
-
-            if line.trim().is_empty() {
-                continue;
-            }
-
-            // argv is last and full of spaces, so the zip stops at its first
-            // word. nothing reads it.
-            rows.push(Row {
-                cells: names
-                    .iter()
-                    .cloned()
-                    .zip(line.split_whitespace().map(str::to_string))
-                    .collect(),
-            });
-        }
-
-        ensure!(!names.is_empty(), "no header in {}", path.display());
-        Ok(Manifest { rows })
+        Ok(Manifest {
+            rows: rows.cells.into_iter().map(|cells| Row { cells }).collect(),
+        })
     }
 
     /// The rows that name a run and finished, in the order they were declared.
