@@ -350,9 +350,12 @@ validate:
 	else bad swissprot.fa "esl-seqstat did not finish"; fi; \
 	if [ ! -d $(MGY_DIR) ]; then bad mgnify missing; \
 	else \
-	  n=$$(ls $(MGY_DIR) | wc -l | tr -d ' '); \
-	  if [ "$$n" = 0 ]; then bad mgnify empty; \
-	  else ok mgnify "$$(du -sh $(MGY_DIR) | cut -f1) in $$n files"; fi; \
+	  n=$$(ls $(MGY_DIR)/*.fa $(MGY_DIR)/*.fasta 2>/dev/null | wc -l | tr -d ' '); \
+	  if [ "$$n" = 0 ]; then bad mgnify "no .fa/.fasta in it"; \
+	  else \
+	    if [ "$$n" = 1 ]; then w=file; else w=files; fi; \
+	    ok mgnify "$$(du -sh $(MGY_DIR) | cut -f1) in $$n $$w"; \
+	  fi; \
 	fi; \
 	if [ ! -d $(DATA_DIR)/long-seqs ]; then bad long-seqs missing; \
 	else \
