@@ -128,6 +128,55 @@ query/target files, where `run` searches each query against its pair and
 `parse` turns that into the plot scripts' tables. Its inputs are small and
 checked in under `data/long-seqs/`, so only its `outputs/` is ignored.
 
+## Testing behaviour: work in your own copy
+
+This working tree belongs to whoever is at the keyboard. A pipeline writes into
+`benchmarks/*/outputs/`, a `build` subcommand rewrites `inputs/`, and when two
+people write there at once neither can tell which results are theirs. So run
+nothing here. Copy the source into `tmp-claude/sandbox/`, link the expensive
+directories, and work in the copy.
+
+```bash
+ROOT=$(git rev-parse --show-toplevel)
+SB=$ROOT/tmp-claude/sandbox
+
+rsync -a --delete \
+  --exclude '.git/' --exclude 'target/' --exclude 'tmp-claude/' \
+  --exclude '/data/' --exclude '/tools/' \
+  --exclude 'outputs/' --exclude 'profmark/' --exclude 'tmp/' \
+  "$ROOT/" "$SB/"
+
+ln -sfn "$ROOT/data" "$SB/data"
+ln -sfn "$ROOT/tools" "$SB/tools"
+ln -sfn "$ROOT/benchmarks/pid/profmark" "$SB/benchmarks/pid/profmark"
+```
+
+Run that before testing anything, and again after every edit: a copy goes
+stale, and a result from stale source is worth nothing. `--delete` is what
+keeps it current, and it drops what was deleted from the source without
+touching the sandbox's own `outputs/`, `target/` or links, since rsync leaves
+excluded paths on the receiving side alone. It copies uncommitted edits, which
+is the point: what wants testing is usually not committed yet.
+
+Then build and run inside `$SB`. Every path these crates resolve comes from
+their own `CARGO_MANIFEST_DIR` (`util/src/tools.rs:18`, `mgy/src/main.rs:84`,
+and the same in pid and long-seqs), so a build there reads the sandbox's
+`data/` and `tools/` links and writes the sandbox's `outputs/`. Re-syncing an
+existing copy is near instant, and the build from cold takes about fifteen
+seconds.
+
+The links are the two directories worth 4.3G between them, plus the profmark
+split, which is expensive for the reasons the pid section gives. The sandbox
+reads all three; nothing in it should write them, so do not run `make data` or
+`make tools` from the copy. The generated inputs under `benchmarks/*/inputs/`
+are copied rather than linked, which is what makes `mgy build` and `pid build`
+safe to run there.
+
+Edit in the real tree and re-sync, never in the sandbox: an edit in the copy is
+gone at the next sync. To check an analysis against a run that finished
+elsewhere, copy that run's `outputs/<pipeline>/` into the sandbox and parse it
+there.
+
 ## What is tracked
 
 The downloads under `data/` and the builds under `tools/bin/` are not, and
