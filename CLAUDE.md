@@ -91,11 +91,12 @@ older harness's files into the names it expects.
 ## benchmarks/pid
 
 Recall as a function of the percent identity between a query and its target.
-`pid build` assembles an input set from a profmark split, holding both axes and
-the truth table together: `benchmark.tbl` records which pair is which and at
-what identity, and belongs to neither side. Input sets are named by size, and
-the profmark split itself sits at the crate root, since it is expensive,
-depends only on Pfam and the split parameters, and every size is drawn from it.
+`pid build` assembles the benchmark from a profmark split, holding both axes
+and the truth table together: `benchmark.tbl` records which pair is which and
+at what identity, and belongs to neither side. There is one benchmark, under
+`inputs/`, and `build` refuses to overwrite it. The profmark split itself sits
+at the crate root, since it is expensive, depends only on Pfam and the split
+parameters, and a rebuild draws from the same one.
 
 `pid run` searches every tool against the benchmark, `parse` turns the results
 into the tables the plot scripts read, and `plot` draws them.

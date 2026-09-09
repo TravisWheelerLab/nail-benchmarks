@@ -28,7 +28,7 @@ use rand::rngs::StdRng;
 use rand::seq::{IndexedRandom, SliceRandom};
 use rand::{RngExt, SeedableRng};
 
-use crate::inputs::{self, Inputs};
+use crate::inputs;
 
 /// Decoys per true pair in the target database.
 const DECOY_RATIO: usize = 100;
@@ -56,29 +56,26 @@ static AMINO: [bool; 256] = {
 
 #[derive(Parser, Debug)]
 pub struct Args {
-    /// Names the input set, under `inputs/<size>/`
-    #[arg(short, long, default_value = "toy")]
-    pub size: String,
-
-    /// Benchmark pairs to sample; 0 uses every pair that survives filtering.
-    /// Decoys are added to the target database on top of this
-    #[arg(short, long, default_value_t = 50)]
-    pub pairs: usize,
+    /// Impose a limit on the number of benchmark pairs; the default keeps every
+    /// pair that survives filtering. Decoys are added to the target database on
+    /// top of this
+    #[arg(short, long, value_name = "N")]
+    pub pairs: Option<usize>,
 
     /// Seed for pair sampling and decoy generation, and for the profmark split
-    #[arg(long, default_value_t = 67779)]
+    #[arg(long, default_value_t = 67779, value_name = "N")]
     pub seed: u64,
 
     /// Maximum identity between the train and test halves of the split
-    #[arg(long, default_value_t = 0.30)]
+    #[arg(long, default_value_t = 0.30, value_name = "X")]
     pub train_test_id: f64,
 
     /// Minimum test sequences per family
-    #[arg(long, default_value_t = 10)]
+    #[arg(long, default_value_t = 10, value_name = "N")]
     pub min_test: usize,
 
     /// Maximum test sequences per family
-    #[arg(long, default_value_t = 30)]
+    #[arg(long, default_value_t = 30, value_name = "N")]
     pub max_test: usize,
 
     /// Rebuild the profmark train/test split even if it already exists
@@ -86,7 +83,7 @@ pub struct Args {
     pub refresh_profmark: bool,
 
     /// Threads for hmmbuild
-    #[arg(short, long, default_value_t = 8)]
+    #[arg(short, long, default_value_t = 8, value_name = "N")]
     pub threads: usize,
 
     #[arg(long)]
@@ -102,8 +99,6 @@ pub fn main(args: Args) -> anyhow::Result<()> {
     let hmmbuild = util::tools::hmmbuild()?;
     let hmmemit = util::tools::hmmemit()?;
 
-    let set = Inputs::new(&args.size);
-
     let pm = inputs::profmark();
     let split = args.refresh_profmark
         || !inputs::profmark_query().exists()
@@ -118,7 +113,7 @@ pub fn main(args: Args) -> anyhow::Result<()> {
             .name("dirs")
             .flag("-p")
             .path(&pm)
-            .path(set.afa()),
+            .path(inputs::afa()),
     );
 
     if split {
@@ -154,10 +149,9 @@ pub fn main(args: Args) -> anyhow::Result<()> {
     let pipeline = pl
         .step(
             Step::from_closures([Closure::new("assemble", {
-                let set = Inputs::new(&args.size);
                 let (pairs, seed) = (args.pairs, args.seed);
 
-                move || assemble(&set, &src_sto, &src_fa, (pairs > 0).then_some(pairs), seed)
+                move || assemble(&src_sto, &src_fa, pairs, seed)
             })])
             .name("assemble"),
         )
@@ -165,19 +159,19 @@ pub fn main(args: Args) -> anyhow::Result<()> {
             Step::serial([Cmd::new(&hmmbuild)
                 .name("hmmbuild")
                 .arg("--cpu", args.threads)
-                .path(set.query_hmm())
-                .path(set.query_sto())])
+                .path(inputs::query_hmm())
+                .path(inputs::query_sto())])
             .name("profiles"),
         )
         .step(
             Step::serial([Cmd::new(&hmmemit)
                 .name("hmmemit")
                 .flag("-c")
-                .path(set.query_hmm())
-                .stdout_to(set.query_cons())])
+                .path(inputs::query_hmm())
+                .stdout_to(inputs::query_cons())])
             .name("consensus"),
         )
-        .stderr_dir(set.output_dir().join("tmp/stderr"))
+        .stderr_dir(inputs::outputs().join("tmp/stderr"))
         .sink(Progress::new())
         .build()
         .context("failed to build the assembly")?;
@@ -187,16 +181,19 @@ pub fn main(args: Args) -> anyhow::Result<()> {
         return Ok(());
     }
 
-    // a rebuild in place would leave the last assembly's families alongside
-    // this one's in afa/, and psiblast searches the directory
-    if set.exists() {
-        fs::remove_dir_all(set.dir())
-            .with_context(|| format!("failed to clear {}", set.dir().display()))?;
+    // refused rather than cleared: there is one benchmark, assembling it is
+    // expensive, and a rebuild in place would leave the last assembly's
+    // families alongside this one's in afa/, which psiblast searches
+    if inputs::exists() {
+        bail!(
+            "{} already exists; remove it to rebuild",
+            inputs::dir().display()
+        );
     }
 
     pipeline.run()?;
 
-    println!("\nbuilt {}", set.dir().display());
+    println!("\nbuilt {}", inputs::dir().display());
     Ok(())
 }
 
@@ -211,9 +208,8 @@ struct Pair {
 /// Assemble a benchmark from the profmark train/test split.
 ///
 /// The RNG is seeded from the arguments rather than from entropy, so a given
-/// size and seed reproduce the same benchmark.
+/// pair limit and seed reproduce the same benchmark.
 fn assemble(
-    set: &Inputs,
     src_sto_path: &Path,
     src_fa_path: &Path,
     max_pairs: Option<usize>,
@@ -227,7 +223,7 @@ fn assemble(
     let src_sto = families(src_sto_path).context("failed to parse source sto")?;
     let src_fa = Fasta::open(src_fa_path).context("failed to parse source fasta")?;
 
-    let afa_dir = set.afa();
+    let afa_dir = inputs::afa();
 
     if target_sto.len() != query_sto.len() {
         bail!(
@@ -378,7 +374,7 @@ fn assemble(
     println!("{} benchmark pairs", pairs.len());
 
     let mut tbl_writer =
-        BufWriter::new(File::create(set.benchmark_tbl()).context("failed to open benchmark.tbl")?);
+        BufWriter::new(File::create(inputs::benchmark_tbl()).context("failed to open benchmark.tbl")?);
     writeln!(tbl_writer, "#identity family target query")?;
 
     let mut targets: Vec<FastaRecord> = Vec::new();
@@ -417,13 +413,13 @@ fn assemble(
     }
 
     let mut target_writer =
-        BufWriter::new(File::create(set.target_fa()).context("failed to open target.fa")?);
+        BufWriter::new(File::create(inputs::target_fa()).context("failed to open target.fa")?);
     targets
         .iter()
         .try_for_each(|t| t.write_to(&mut target_writer, DEFAULT_LINE_WIDTH))?;
 
     let mut query_fa_writer =
-        BufWriter::new(File::create(set.query_fa()).context("failed to open query.fa")?);
+        BufWriter::new(File::create(inputs::query_fa()).context("failed to open query.fa")?);
 
     let mut queries = queries.into_iter().collect::<Vec<_>>();
     queries.sort_by(|a, b| a.name.cmp(&b.name));
@@ -432,7 +428,7 @@ fn assemble(
         .try_for_each(|q| q.write_to(&mut query_fa_writer, DEFAULT_LINE_WIDTH))?;
 
     let mut query_sto_writer =
-        BufWriter::new(File::create(set.query_sto()).context("failed to open query.sto")?);
+        BufWriter::new(File::create(inputs::query_sto()).context("failed to open query.sto")?);
     fs::create_dir_all(&afa_dir)?;
 
     let query_names = queries

@@ -16,7 +16,7 @@ use util::manifest;
 use util::split::{self, Kind};
 use michi::{Closure, Cmd, Step};
 
-use crate::inputs::Inputs;
+use crate::inputs;
 
 /// hmmsearch and phmmer scale poorly past a couple of threads, so the query set
 /// is split threads/HMMER_CPU ways and the parts run at the same time.
@@ -41,8 +41,8 @@ pub struct Dirs {
 }
 
 impl Dirs {
-    pub fn new(set: &Inputs) -> Dirs {
-        let root = set.output_dir();
+    pub fn new() -> Dirs {
+        let root = inputs::outputs();
         Dirs {
             results: root.join("results"),
             tmp: root.join("tmp"),

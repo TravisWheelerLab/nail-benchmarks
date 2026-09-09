@@ -16,7 +16,7 @@ use clap::Parser;
 
 use michi::{Cmd, PipelineBuilder, Progress, Step};
 
-use crate::inputs::{self, Inputs};
+use crate::inputs;
 
 /// A figure: which script draws it, and which of `parse`'s files it reads.
 ///
@@ -60,10 +60,6 @@ const FIGURES: &[Figure] = &[
 
 #[derive(Parser, Debug)]
 pub struct Args {
-    /// Which input set's figures to draw, naming `outputs/<size>/`
-    #[arg(short, long, default_value = "toy")]
-    size: String,
-
     /// Where `parse` wrote its tables, and where the pdfs go. Defaults to
     /// figures/ beside the run
     #[arg(short, long, value_name = "dir")]
@@ -92,17 +88,16 @@ pub fn main(args: Args) -> anyhow::Result<()> {
 
     let dir = args
         .out
-        .unwrap_or_else(|| Inputs::new(&args.size).output_dir().join("figures"));
+        .unwrap_or_else(|| inputs::outputs().join("figures"));
 
     if !dir.is_dir() {
         bail!(
-            "no {}; run `pid parse recall --size {}` first",
-            dir.display(),
-            args.size
+            "no {}; run `pid parse recall` first",
+            dir.display()
         );
     }
 
-    let scripts = inputs::dir().join("scripts");
+    let scripts = inputs::root().join("scripts");
 
     // checked here rather than left to the pipeline, because a missing
     // matplotlib comes back as a python traceback in a stderr file rather than

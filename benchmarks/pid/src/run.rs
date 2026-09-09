@@ -17,15 +17,11 @@ use util::manifest;
 use util::split::Kind;
 use michi::{Cmd, OnError, Output, PipelineBuilder, Progress, Step, Table};
 
-use crate::inputs::Inputs;
+use crate::inputs;
 use crate::search::{self, Bins, Dirs, MODE, PRF, SEQ, Split};
 
 #[derive(Parser, Debug)]
 pub struct Args {
-    /// Which input set to search, naming `inputs/<size>/`
-    #[arg(short, long, default_value = "toy")]
-    pub size: String,
-
     /// nail's --mmseqs-s values to sweep
     #[arg(
         long,
@@ -68,22 +64,20 @@ pub fn main(args: Args) -> anyhow::Result<()> {
 
     let bins = Bins::find()?;
 
-    let set = Inputs::new(&args.size);
-    if !set.exists() {
+    if !inputs::exists() {
         bail!(
-            "{} does not exist; run `pid build --size {}` first",
-            set.dir().display(),
-            args.size
+            "{} does not exist; run `pid build` first",
+            inputs::dir().display()
         );
     }
 
-    let mut dirs = Dirs::new(&set);
+    let mut dirs = Dirs::new();
     if let Some(tmp) = args.tmp {
         dirs.tmp = tmp;
     }
 
-    let (query_hmm, query_fa) = (set.query_hmm(), set.query_fa());
-    let target_fa = set.target_fa();
+    let (query_hmm, query_fa) = (inputs::query_hmm(), inputs::query_fa());
+    let target_fa = inputs::target_fa();
 
     let mmseqs_dir = dirs.tmp.join("mmseqs");
     let target_db = mmseqs_dir.join("targetDB/targetDB");
@@ -123,7 +117,7 @@ pub fn main(args: Args) -> anyhow::Result<()> {
                 Cmd::new(&bins.mmseqs)
                     .name("convertmsa")
                     .sub("convertmsa")
-                    .path(set.query_sto())
+                    .path(inputs::query_sto())
                     .path(&msa_db)
                     .arg("--identifier-field", 0),
                 Cmd::new(&bins.mmseqs)
@@ -263,7 +257,7 @@ pub fn main(args: Args) -> anyhow::Result<()> {
     // invocation per family, output collected into a single table
     let blast_prf_tbl = dirs.table("blast.prf");
     pl = pl.step(
-        Step::serial(set.afa_files()?.iter().enumerate().map(|(i, msa)| {
+        Step::serial(inputs::afa_files()?.iter().enumerate().map(|(i, msa)| {
             let cmd = Cmd::new(&bins.psiblast)
                 .name(
                     msa.file_stem()

@@ -29,7 +29,7 @@ use anyhow::{Context, bail};
 use util::manifest::{self, Manifest, Wall};
 use clap::{Parser, Subcommand};
 
-use crate::inputs::Inputs;
+use crate::inputs;
 use crate::search::MODE;
 
 const PRECISION: usize = 4;
@@ -41,27 +41,19 @@ fn e_value_cmp(a: &Hit2, b: &Hit2) -> std::cmp::Ordering {
         .expect("NaN encountered in E-value cmp")
 }
 
-/// Which input set was searched, and so where everything is. Every analysis
-/// takes it, the way `build` and `run` do.
+/// Where an analysis writes. Every one of them takes it.
 #[derive(Parser)]
 pub struct Which {
-    #[arg(short, long, default_value = "toy")]
-    size: String,
-
     /// Where the tables go. Defaults to figures/ beside the run
     #[arg(short, long, value_name = "dir")]
     out: Option<PathBuf>,
 }
 
 impl Which {
-    fn set(&self) -> Inputs {
-        Inputs::new(&self.size)
-    }
-
     fn out_dir(&self) -> PathBuf {
         self.out
             .clone()
-            .unwrap_or_else(|| self.set().output_dir().join("figures"))
+            .unwrap_or_else(|| inputs::outputs().join("figures"))
     }
 }
 
@@ -137,8 +129,7 @@ pub fn main(cmd: Cmd) -> anyhow::Result<()> {
 }
 
 fn table(args: TableArgs) -> anyhow::Result<()> {
-    let set = args.which.set();
-    let bm = Benchmark::new(set.benchmark_tbl())?;
+    let bm = Benchmark::new(inputs::benchmark_tbl())?;
 
     let out_dir = args.which.out_dir();
     std::fs::create_dir_all(&out_dir)?;
@@ -146,7 +137,7 @@ fn table(args: TableArgs) -> anyhow::Result<()> {
 
     let mut tuples = vec![];
 
-    for run in runs(&set.output_dir())? {
+    for run in runs(&inputs::outputs())? {
         fn true_hit_filter(hit: &Hit) -> bool {
             if hit.target.starts_with("decoy") {
                 return false;
@@ -313,7 +304,7 @@ fn table(args: TableArgs) -> anyhow::Result<()> {
 }
 
 fn score(args: ScoreArgs) -> anyhow::Result<()> {
-    let results = args.which.set().output_dir().join("results");
+    let results = inputs::outputs().join("results");
 
     let read = |name: &str| -> anyhow::Result<HashMap<(String, String), f32>> {
         let path = manifest::table_path(&results, name, "");
@@ -349,8 +340,7 @@ fn score(args: ScoreArgs) -> anyhow::Result<()> {
 }
 
 fn cells(args: CellsArgs) -> anyhow::Result<()> {
-    let set = args.which.set();
-    let table = manifest::table_path(&set.output_dir().join("results"), &args.run, "");
+    let table = manifest::table_path(&inputs::outputs().join("results"), &args.run, "");
 
     let hits = util::nail::cell_fracs(&table)
         .with_context(|| format!("failed to read {}", table.display()))?;
@@ -358,15 +348,15 @@ fn cells(args: CellsArgs) -> anyhow::Result<()> {
     // read out of the files rather than shelled out to hmmstat and
     // esl-seqstat: neither is a dependency this benchmark declares, and both
     // were being found on PATH rather than through `tools`
-    let query_lens: HashMap<String, usize> = Hmm::open(set.query_hmm())
-        .with_context(|| format!("failed to parse {}", set.query_hmm().display()))?
+    let query_lens: HashMap<String, usize> = Hmm::open(inputs::query_hmm())
+        .with_context(|| format!("failed to parse {}", inputs::query_hmm().display()))?
         .iter()
         .map(|model| (model.header.name.clone(), model.header.leng))
         .collect();
 
     let mut target_lens: HashMap<String, usize> = HashMap::new();
-    let target_fa = IndexedFasta::open(set.target_fa())
-        .with_context(|| format!("failed to open {}", set.target_fa().display()))?;
+    let target_fa = IndexedFasta::open(inputs::target_fa())
+        .with_context(|| format!("failed to open {}", inputs::target_fa().display()))?;
     for rec in target_fa.iter() {
         target_lens.insert(rec.name_str()?.to_string(), rec.seq.len());
     }
@@ -408,9 +398,8 @@ fn cells(args: CellsArgs) -> anyhow::Result<()> {
 fn recall(args: RecallArgs) -> anyhow::Result<()> {
     let start = std::time::Instant::now();
 
-    let set = args.which.set();
-    let benchmark = Benchmark::new(set.benchmark_tbl())?;
-    let data = RecallData::new(&set.output_dir(), &benchmark)?;
+    let benchmark = Benchmark::new(inputs::benchmark_tbl())?;
+    let data = RecallData::new(&inputs::outputs(), &benchmark)?;
 
     let figures = args.which.out_dir();
     std::fs::create_dir_all(&figures)?;
