@@ -316,26 +316,25 @@ check:
 	fi; \
 	exit $$fail
 
-# check says a file is there; validate reads it. each file goes through the
-# tool that parses its format, and a pass means that tool ran to the end of the
-# file and said how many records it found. mgy-cutoffs.tbl has no such tool, so
-# its rows are counted directly. the counts are printed for a human to look at,
-# not compared against anything: nothing here knows how many records a file is
-# supposed to hold
+# check says a file is there; validate looks inside. each file goes to the tool
+# that reads its format, and the count that tool reports is printed. mgnify is
+# the exception: it is the one input that runs to hundreds of gigabytes, and a
+# fasta cannot be validated by reading anyway -- any prefix of one is a valid
+# fasta -- so it is measured instead. mgy-cutoffs.tbl has no reader, so its rows
+# are counted directly
+#
+# nothing here is compared against anything: no target knows how many records a
+# file holds. the numbers are printed so a wrong one is visible
 .PHONY: validate
 validate:
 	$(call need_tool,$(ESL_ALISTAT),hmmer)
 	$(call need_tool,$(ESL_SEQSTAT),hmmer)
 	$(call need_tool,$(HMMSTAT),hmmer)
-	@fail=0; \
-	ok() { printf '  ✔ %-24s %s\n' "$$1" "$$2"; }; \
-	bad() { printf '  ✘ %-24s %s\n' "$$1" "$$2"; fail=1; }; \
+	@fail=0; seen=0; \
+	ok() { printf '  ✔ %-20s %s\n' "$$1" "$$2"; seen=$$((seen + 1)); }; \
+	bad() { printf '  ✘ %-20s %s\n' "$$1" "$$2"; seen=$$((seen + 1)); fail=$$((fail + 1)); }; \
 	records() { printf '%s\n' "$$1" | awk '!/^#/ && NF { n++ } END { print n+0 }'; }; \
-	seqs() { \
-	  if out=$$($(ESL_SEQSTAT) "$$2" 2>&1); then \
-	    ok "$$1" "$$(printf '%s\n' "$$out" | awk '/^Number of sequences:/ { print $$4 }') sequences"; \
-	  else bad "$$1" "esl-seqstat did not finish"; fi; \
-	}; \
+	nseq() { printf '%s\n' "$$1" | awk '/^Number of sequences:/ { print $$4 }'; }; \
 	echo "data  $(DATA_DIR)"; \
 	if [ ! -e $(PFAM_STO) ]; then bad pfam.sto missing; \
 	elif out=$$($(ESL_ALISTAT) -1 --informat stockholm $(PFAM_STO) 2>&1); then \
@@ -346,24 +345,34 @@ validate:
 	  ok pfam.hmm "$$(records "$$out") models"; \
 	else bad pfam.hmm "hmmstat did not finish"; fi; \
 	if [ ! -e $(SWISSPROT_FA) ]; then bad swissprot.fa missing; \
-	else seqs swissprot.fa $(SWISSPROT_FA); fi; \
-	n=0; \
-	for f in $(MGY_DIR)/*.fa $(MGY_DIR)/*.fasta; do \
-	  [ -e "$$f" ] || continue; \
-	  n=$$((n + 1)); seqs "mgnify/$$(basename $$f)" "$$f"; \
-	done; \
-	if [ $$n = 0 ]; then bad mgnify "no .fa/.fasta in it"; fi; \
-	for f in $(DATA_DIR)/long-seqs/*/*.fa; do \
-	  [ -e "$$f" ] || continue; \
-	  seqs "long-seqs/$$(basename $$f)" "$$f"; \
-	done; \
+	elif out=$$($(ESL_SEQSTAT) $(SWISSPROT_FA) 2>&1); then \
+	  ok swissprot.fa "$$(nseq "$$out") sequences"; \
+	else bad swissprot.fa "esl-seqstat did not finish"; fi; \
+	if [ ! -d $(MGY_DIR) ]; then bad mgnify missing; \
+	else \
+	  n=$$(ls $(MGY_DIR) | wc -l | tr -d ' '); \
+	  if [ "$$n" = 0 ]; then bad mgnify empty; \
+	  else ok mgnify "$$(du -sh $(MGY_DIR) | cut -f1) in $$n files"; fi; \
+	fi; \
+	if [ ! -d $(DATA_DIR)/long-seqs ]; then bad long-seqs missing; \
+	else \
+	  n=0; total=0; broke=; \
+	  for f in $(DATA_DIR)/long-seqs/*/*.fa; do \
+	    [ -e "$$f" ] || continue; \
+	    n=$$((n + 1)); \
+	    if out=$$($(ESL_SEQSTAT) "$$f" 2>&1); then total=$$((total + $$(nseq "$$out"))); \
+	    else broke=$$(basename "$$f"); fi; \
+	  done; \
+	  if [ -n "$$broke" ]; then bad long-seqs "esl-seqstat did not finish on $$broke"; \
+	  elif [ $$n = 0 ]; then bad long-seqs "no .fa in it"; \
+	  else ok long-seqs "$$total sequences in $$n files"; fi; \
+	fi; \
 	if [ ! -e $(DATA_DIR)/mgy-cutoffs.tbl ]; then bad mgy-cutoffs.tbl missing; \
 	else ok mgy-cutoffs.tbl \
 	  "$$(awk '!/^#/ && NF { n++ } END { print n+0 }' $(DATA_DIR)/mgy-cutoffs.tbl) rows"; fi; \
 	echo; \
-	if [ $$fail = 0 ]; then echo "every reader finished"; \
-	else echo "a reader did not finish"; fi; \
-	exit $$fail
+	if [ $$fail = 0 ]; then echo "$$seen checks, no problems"; \
+	else echo "$$seen checks, $$fail with problems"; exit 1; fi
 
 .PHONY: clean
 clean:
