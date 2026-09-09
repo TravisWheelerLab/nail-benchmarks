@@ -24,6 +24,7 @@ use michi::{Cmd, PipelineBuilder, Progress, Step, Table};
 
 use crate::inputs;
 use crate::search::{self, Bins, Dirs, Split};
+use util::ledger;
 use util::manifest;
 
 /// The seeding settings this benchmark searches with, matching cloud-search's
@@ -144,5 +145,9 @@ pub fn main(args: Args) -> anyhow::Result<()> {
         return Ok(());
     }
 
-    pipeline.run()
+    // the ledger describes the results this run is about to replace, so it
+    // goes before the run rather than after the failure of one
+    ledger::clear(&dirs.root);
+    pipeline.run()?;
+    ledger::record(&dirs.root)
 }

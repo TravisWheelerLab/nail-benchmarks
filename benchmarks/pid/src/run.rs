@@ -13,9 +13,10 @@ use std::path::PathBuf;
 use anyhow::{Context, bail, ensure};
 use clap::Parser;
 
+use michi::{Cmd, OnError, Output, PipelineBuilder, Progress, Step, Table};
+use util::ledger;
 use util::manifest;
 use util::split::Kind;
-use michi::{Cmd, OnError, Output, PipelineBuilder, Progress, Step, Table};
 
 use crate::inputs;
 use crate::search::{self, Bins, Dirs, MODE, PRF, SEQ, Split};
@@ -341,5 +342,9 @@ pub fn main(args: Args) -> anyhow::Result<()> {
         return Ok(());
     }
 
-    pipeline.run()
+    // the ledger describes the results this run is about to replace, so it
+    // goes before the run rather than after the failure of one
+    ledger::clear(&dirs.root);
+    pipeline.run()?;
+    ledger::record(&dirs.root)
 }

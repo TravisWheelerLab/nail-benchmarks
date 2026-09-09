@@ -51,16 +51,19 @@ to read that column's table, its `shard` names the target it searched, and
 every other column is a setting that tells one run from another. Adding a run
 to a sweep adds a column without touching the reader.
 
-A pipeline run here leaves `michi`'s `manifest.tbl` behind, and the ledger is
-distilled out of that. Distilling is where a batched step folds to its longest
-command and a command that failed is left out, once rather than in every
-analysis.
+A pipeline writes its own ledger when it finishes, distilled out of the
+`manifest.tbl` `michi` left beside it. That is where a batched step folds to
+its longest command and a command that failed is left out, once rather than in
+every analysis. A pipeline also clears the ledger before it starts, so a run
+that dies partway leaves none. The analyses then fall back to distilling the
+manifest of the run that just failed and say what did not finish, rather than
+reading the ledger of the run before it and reporting numbers for results that
+have since been overwritten.
 
 Results that came back from a cluster have no manifest and cannot have one,
 since nothing here ran those commands and an exit code or an argv would have to
 be invented. They arrive with `.time` files beside the tables, and `mgy import`
-reads those, writing the ledger for a directory that has no manifest to
-distil.
+reads those. It is the only command that writes a ledger by hand.
 
 ## benchmarks/util
 
