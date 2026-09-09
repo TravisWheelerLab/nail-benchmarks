@@ -2,9 +2,9 @@
 //!
 //! Each benchmark asks its own question and keeps its own analyses. Two things
 //! are the same for all of them. The first is the shape of the record a run
-//! leaves behind: a `michi::Table` sink writes `manifest.tbl`, `parse` reads it
-//! back through [`manifest`], and whatever it works out gets written through
-//! [`tbl`]. The second is where the programs being benchmarked and the sequence
+//! leaves behind: a `michi::Table` sink writes `manifest.tbl`, [`ledger`]
+//! distills the part an analysis needs out of it, and whatever the analysis
+//! works out gets written through [`tbl`]. The second is where the programs being benchmarked and the sequence
 //! data they run on were put, which is [`tools`].
 //!
 //! Two smaller things are shared for want of a second home: [`split`], which
@@ -16,6 +16,7 @@
 //! Nothing here decides what counts as a *true* hit. That is the part every
 //! benchmark answers differently, and it stays with the benchmark.
 
+pub mod ledger;
 pub mod manifest;
 pub mod nail;
 pub mod split;

@@ -14,8 +14,8 @@ mod cloud_search;
 mod cut;
 mod cutoffs;
 mod hit_loss;
+mod import;
 mod inputs;
-mod install;
 mod parse;
 mod plot;
 mod recall;
@@ -54,8 +54,9 @@ enum Command {
     HitLoss(hit_loss::Args),
     /// Time every tool over every rung of the query and target ladders.
     SearchSize(search_size::Args),
-    /// Write the manifest for result tables produced somewhere other than here.
-    Install(install::Args),
+    /// Bring in result tables produced somewhere other than here, timed by
+    /// the `.time` files that came back with them.
+    Import(import::Args),
     /// Turn any finished pipeline into its scores table, and that into
     /// numbers.
     #[command(subcommand)]
@@ -72,7 +73,7 @@ fn main() -> anyhow::Result<()> {
         Command::CloudSearch(args) => cloud_search::main(args),
         Command::HitLoss(args) => hit_loss::main(args),
         Command::SearchSize(args) => search_size::main(args),
-        Command::Install(args) => install::main(args),
+        Command::Import(args) => import::main(args),
         Command::Parse(cmd) => parse::main(cmd),
         Command::Plot(args) => plot::main(args),
     }

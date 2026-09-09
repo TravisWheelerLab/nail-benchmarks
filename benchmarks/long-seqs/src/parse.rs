@@ -1,6 +1,6 @@
 //! Turning a finished run into the file the cell-fraction figure overlays.
 //!
-//! What ran comes out of `manifest.tbl` -- which pair each search covered and
+//! What ran comes out of `ledger.tbl` -- which pair each search covered and
 //! where it put its table -- rather than out of a count of the pairs that are
 //! checked in. A pair whose search failed is left out with a warning instead of
 //! coming back as a missing file.
@@ -14,7 +14,8 @@ use clap::{Parser, Subcommand};
 use libsail::collection::Indexable;
 use libsail::seq::fasta::Fasta;
 
-use util::manifest::{self, Manifest};
+use util::ledger::{self, Ledger};
+use util::manifest;
 
 use crate::inputs;
 use crate::run::RUN_NAME;
@@ -82,48 +83,34 @@ fn cells(args: CellsArgs) -> anyhow::Result<()> {
 /// pipeline declared them.
 ///
 /// Only nail reports a cell fraction, so a row filed under another tool is an
-/// error rather than something to skip: it would mean the manifest and this
+/// error rather than something to skip: it would mean the record and this
 /// analysis disagree about what was measured.
 fn searches(out: &Path, run: &str) -> anyhow::Result<Vec<(String, PathBuf)>> {
-    let manifest = Manifest::read(&out.join("manifest.tbl"))?;
+    let ran = Ledger::load(out)?;
+    ledger::warn(ran.failed(), "pair(s)");
+
     let results = out.join("results");
-
-    let failed: Vec<&str> = manifest
-        .failed()
-        .filter_map(|row| row.get(manifest::SHARD))
-        .collect();
-    if !failed.is_empty() {
-        eprintln!(
-            "warning: leaving out {} pair(s) that did not finish: {}",
-            failed.len(),
-            failed.join(", ")
-        );
-    }
-
     let mut searches = Vec::new();
 
-    for row in manifest.runs() {
-        if row.get(manifest::NAME) != Some(run) {
-            continue;
-        }
-
-        let tool = row
-            .get(manifest::TOOL)
-            .with_context(|| format!("run {run:?} has no tool"))?;
+    for row in ran.runs().filter(|row| row.name == run) {
         ensure!(
-            tool == "nail",
-            "run {run:?} was produced by {tool}, which reports no cell fractions"
+            row.tool == "nail",
+            "run {run:?} was produced by {}, which reports no cell fractions",
+            row.tool
+        );
+        ensure!(
+            !row.shard.is_empty(),
+            "run {run:?} has no shard saying which pair it was"
         );
 
-        let pair = row
-            .get(manifest::SHARD)
-            .with_context(|| format!("run {run:?} has no shard saying which pair it was"))?;
-
-        searches.push((pair.to_string(), manifest::table_path(&results, run, pair)));
+        searches.push((
+            row.shard.clone(),
+            manifest::table_path(&results, run, &row.shard),
+        ));
     }
 
     if searches.is_empty() {
-        bail!("no finished {run:?} rows in {}/manifest.tbl", out.display());
+        bail!("no finished {run:?} runs in {}", out.display());
     }
 
     Ok(searches)
@@ -140,8 +127,7 @@ fn last_cell_frac(path: &Path) -> anyhow::Result<f64> {
 
 /// Residue count of a fasta holding exactly one sequence.
 fn residue_len(path: &Path) -> anyhow::Result<usize> {
-    let fa =
-        Fasta::open(path).with_context(|| format!("failed to parse {}", path.display()))?;
+    let fa = Fasta::open(path).with_context(|| format!("failed to parse {}", path.display()))?;
 
     ensure!(
         fa.len() == 1,

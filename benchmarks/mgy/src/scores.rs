@@ -6,7 +6,7 @@
 //! split by whether a pair was seeded, a sensitivity surface is a count per
 //! column, a recall number is the same count per tool.
 //!
-//! What the columns are is read out of `manifest.tbl` rather than known here, so
+//! What the columns are is read out of `ledger.tbl` rather than known here, so
 //! nothing in this file can tell which pipeline it is reading.
 //!
 //! A run that never reported a pair holds `-` rather than a zero or a NaN.
@@ -28,7 +28,8 @@ use libsail::tbl::hmmer::HmmerTable;
 use libsail::tbl::nail::NailTable;
 use libsail::tbl::{HitColumns, HmmerDomHits, Table};
 
-use util::manifest::{self, Manifest, Wall};
+use util::ledger::{self, Ledger};
+use util::manifest;
 use util::tbl;
 
 type Pair = (String, String);
@@ -48,7 +49,7 @@ impl Tool {
             "nail" => Ok(Tool::Nail),
             "mmseqs" => Ok(Tool::Mmseqs),
             "hmmer" => Ok(Tool::Hmmer),
-            other => bail!("unknown tool {other:?} in manifest.tbl"),
+            other => bail!("unknown tool {other:?} in ledger.tbl"),
         }
     }
 
@@ -67,8 +68,8 @@ impl Tool {
 
 /// The best score each pair got in one table read as layout `C`.
 fn best_scores<C: HitColumns>(path: &Path) -> anyhow::Result<HashMap<Pair, f32>> {
-    let tbl = Table::<C>::open(path)
-        .with_context(|| format!("failed to read {}", path.display()))?;
+    let tbl =
+        Table::<C>::open(path).with_context(|| format!("failed to read {}", path.display()))?;
 
     let mut best: HashMap<Pair, f32> = HashMap::new();
     for hit in tbl.iter() {
@@ -169,30 +170,18 @@ impl Scores {
         let cutoffs = cutoffs(cutoffs_path, c)
             .with_context(|| format!("failed to read {}", cutoffs_path.display()))?;
 
-        let manifest = Manifest::read(&dir.join("manifest.tbl"))?;
+        let ran = Ledger::load(dir)?;
+        ledger::warn(ran.failed(), "command(s)");
 
-        let failed: Vec<&str> = manifest
-            .failed()
-            .filter_map(|row| row.get(manifest::NAME))
+        let columns = runs(&ran)?;
+        ensure!(!columns.is_empty(), "no finished runs in {}", dir.display());
+
+        let seed_wall_s: Vec<(String, f64)> = ran
+            .stage("seed")
+            .map(|row| (row.shard.clone(), row.wall_s.unwrap_or(0.0)))
             .collect();
-        if !failed.is_empty() {
-            eprintln!(
-                "warning: leaving out {} run(s) that did not finish: {}",
-                failed.len(),
-                failed.join(", ")
-            );
-        }
 
-        let columns = runs(&manifest)?;
-        ensure!(
-            !columns.is_empty(),
-            "no finished runs in {}/manifest.tbl",
-            dir.display()
-        );
-
-        let seed_wall_s = walls(&manifest, "seed");
-
-        let shards = shards(&columns);
+        let shards = ran.shards();
 
         let results = dir.join("results");
         let seeded = seeds(&results, &shards)?;
@@ -637,80 +626,28 @@ fn run(fields: &[&str]) -> anyhow::Result<Run> {
     })
 }
 
-// ----------------------------------------------------------------- manifest.tbl
+// ------------------------------------------------------------------- ledger.tbl
 
 /// The columns a pipeline ran, in the order it declared them.
 ///
-/// A run is one `name`; a name that turns up against several shards is one
-/// column covering all of them, since what changed between those commands is
-/// the target rather than the parameterization.
-fn runs(manifest: &Manifest) -> anyhow::Result<Vec<Column>> {
-    let mut out: Vec<Column> = Vec::new();
-    let mut at: HashMap<String, usize> = HashMap::new();
-    let mut walls: Vec<Wall> = Vec::new();
-
-    for row in manifest.runs() {
-        let name = row.get(manifest::NAME).expect("runs() filters on name");
-        let shard = row.get(manifest::SHARD).unwrap_or_default().to_string();
-
-        let i = match at.get(name) {
-            Some(&i) => i,
-            None => {
-                let tool = row
-                    .get(manifest::TOOL)
-                    .with_context(|| format!("run {name:?} has no tool"))?;
-
-                at.insert(name.to_string(), out.len());
-                walls.push(Wall::default());
-                out.push(Column {
-                    run: Run {
-                        name: name.to_string(),
-                        tool: Tool::parse(tool)?,
-                        wall_s: 0.0,
-                        params: row.params(),
-                    },
-                    shards: Vec::new(),
-                });
-                out.len() - 1
-            }
-        };
-
-        if !out[i].shards.contains(&shard) {
-            out[i].shards.push(shard.clone());
-        }
-        walls[i].add(&shard, row);
-    }
-
-    for (column, wall) in out.iter_mut().zip(&walls) {
-        column.run.wall_s = wall.total();
-    }
-
-    Ok(out)
-}
-
-/// Every shard any run covered, in the order the runs named them.
-fn shards(columns: &[Column]) -> Vec<String> {
-    let mut out: Vec<String> = Vec::new();
-    for column in columns {
-        for shard in &column.shards {
-            if !out.contains(shard) {
-                out.push(shard.clone());
-            }
-        }
-    }
-    out
-}
-
-/// What one stage of the pipeline cost, per shard.
-fn walls(manifest: &Manifest, stage: &str) -> Vec<(String, f64)> {
-    let mut wall = Wall::default();
-
-    for row in manifest.stage(stage) {
-        let shard = row.get(manifest::SHARD).unwrap_or_default();
-        wall.add(shard, row);
-    }
-
-    wall.per_bucket()
+/// The grouping and the wall clock are [`util::ledger`]' work; what is left here
+/// is which tool a column's name belongs to, since that is what says how to
+/// read its table.
+fn runs(ran: &Ledger) -> anyhow::Result<Vec<Column>> {
+    ran.columns()?
+        .into_iter()
+        .map(|column| {
+            Ok(Column {
+                run: Run {
+                    name: column.name,
+                    tool: Tool::parse(&column.tool)?,
+                    wall_s: column.wall_s,
+                    params: column.params,
+                },
+                shards: column.shards,
+            })
+        })
+        .collect()
 }
 
 fn shard_path(targets: &Path, shard: &str) -> std::path::PathBuf {
@@ -811,8 +748,8 @@ impl Cutoffs {
 /// column to read is found by name rather than by counting -- which is what
 /// lets the calibration add a tool without moving anything here.
 fn cutoffs(path: &Path, c: usize) -> anyhow::Result<Cutoffs> {
-    let text =
-        std::fs::read_to_string(path).with_context(|| format!("failed to read {}", path.display()))?;
+    let text = std::fs::read_to_string(path)
+        .with_context(|| format!("failed to read {}", path.display()))?;
 
     let headers: Vec<&str> = text
         .lines()
@@ -843,7 +780,9 @@ fn cutoffs(path: &Path, c: usize) -> anyhow::Result<Cutoffs> {
         }
 
         let cells: Vec<&str> = line.split_whitespace().collect();
-        let Some(family) = cells.first() else { continue };
+        let Some(family) = cells.first() else {
+            continue;
+        };
 
         let score = |at: usize| cells.get(at).and_then(|x| x.parse::<f32>().ok());
 

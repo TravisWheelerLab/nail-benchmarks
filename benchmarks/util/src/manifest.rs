@@ -1,9 +1,11 @@
 //! Reading back the table a `michi::Table` sink wrote.
 //!
-//! A run records what it did in `manifest.tbl`, and `parse` learns the shape
-//! of a pipeline from that rather than from filenames or from knowing which
-//! pipeline it is looking at. What makes a row a column of the scores table is
-//! a `name` field on it -- see [`Manifest::runs`].
+//! A run records what it did in `manifest.tbl`, which is the fullest record
+//! there is of a pipeline run here: every command, its argv, its exit code.
+//! The analyses do not read it. They read the smaller thing [`crate::runs`]
+//! distills out of it, which a directory of results from somewhere else can
+//! also be written as. What marks a row out as a run is a `name` field on it
+//! -- see [`Manifest::runs`].
 //!
 //! The format is whitespace-separated with a `#` header. Two kinds of row never
 //! carry fields and so are never runs: a step's own summary line, and the
@@ -81,14 +83,20 @@ impl Row {
         }
     }
 
-    pub fn wall_s(&self) -> Option<f64> {
+    pub(crate) fn wall_s(&self) -> Option<f64> {
         self.get(WALL)?.parse().ok()
     }
 
     /// Whether the command finished successfully. A row with no exit code
     /// never ran, which is not success.
-    pub fn ok(&self) -> bool {
+    pub(crate) fn ok(&self) -> bool {
         self.get(EXIT) == Some("0")
+    }
+
+    /// The step cell: a label on a step's own summary row, `|` or `||` on the
+    /// commands under it.
+    pub(crate) fn step(&self) -> Option<&str> {
+        self.cells.get("step").map(String::as_str)
     }
 
     /// Whether this command ran alongside the others in its step rather than
@@ -96,13 +104,13 @@ impl Row {
     //
     // a step holding one command collapses to a single row and reads as
     // serial, which for one command comes to the same thing either way
-    pub fn batched(&self) -> bool {
+    pub(crate) fn batched(&self) -> bool {
         self.cells.get("step").map(String::as_str) == Some(BATCH)
     }
 
     /// Everything this row set that isn't part of the contract: the parameters
     /// that tell one run of a tool apart from another.
-    pub fn params(&self) -> BTreeMap<String, String> {
+    pub(crate) fn params(&self) -> BTreeMap<String, String> {
         self.cells
             .iter()
             .filter(|(key, _)| {
@@ -133,43 +141,6 @@ fn is_metric(key: &str) -> bool {
     )
 }
 
-/// What a set of commands cost, totalled per bucket so overlapping work is not
-/// counted twice.
-///
-/// What a bucket is belongs to the caller: a target shard for a pipeline with
-/// several, one bucket for a pipeline with one.
-#[derive(Default)]
-pub struct Wall {
-    by_bucket: BTreeMap<String, (f64, f64)>,
-}
-
-impl Wall {
-    pub fn add(&mut self, bucket: &str, row: &Row) {
-        let wall = row.wall_s().unwrap_or(0.0);
-        let at = self.by_bucket.entry(bucket.to_string()).or_default();
-
-        // a batched step's commands overlap, so the longest of them is what
-        // the step took; adding them up would report the work rather than the
-        // time. everything else ran one after another and adds
-        match row.batched() {
-            true => at.1 = at.1.max(wall),
-            false => at.0 += wall,
-        }
-    }
-
-    pub fn total(&self) -> f64 {
-        self.by_bucket.values().map(|(s, b)| s + b).sum()
-    }
-
-    /// The same totals, bucket by bucket, in bucket order.
-    pub fn per_bucket(&self) -> Vec<(String, f64)> {
-        self.by_bucket
-            .iter()
-            .map(|(bucket, (s, b))| (bucket.clone(), s + b))
-            .collect()
-    }
-}
-
 pub struct Manifest {
     rows: Vec<Row>,
 }
@@ -193,6 +164,11 @@ impl Manifest {
         })
     }
 
+    /// Every command line of the table, in the order it was declared.
+    pub(crate) fn rows(&self) -> impl Iterator<Item = &Row> {
+        self.rows.iter()
+    }
+
     /// The rows that name a run and finished, in the order they were declared.
     ///
     /// A step summary carries no fields and a batch continuation carries the
@@ -214,12 +190,5 @@ impl Manifest {
         self.rows
             .iter()
             .filter(|row| row.get(NAME).is_some() && !row.ok())
-    }
-
-    /// Command rows belonging to one stage of the pipeline, such as `seed`.
-    pub fn stage(&self, stage: &str) -> impl Iterator<Item = &Row> {
-        self.rows
-            .iter()
-            .filter(move |row| row.get(STAGE) == Some(stage))
     }
 }

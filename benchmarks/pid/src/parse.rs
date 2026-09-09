@@ -26,8 +26,9 @@ use libsail::tbl::nail::NailTable;
 use libsail::tbl::{Hit, HitColumns, Table};
 
 use anyhow::{Context, bail};
-use util::manifest::{self, Manifest, Wall};
 use clap::{Parser, Subcommand};
+use util::ledger::{self, Ledger};
+use util::manifest;
 
 use crate::inputs;
 use crate::search::MODE;
@@ -532,7 +533,7 @@ impl SearchType {
             "prf" => Ok(SearchType::Profile),
             "cons" => Ok(SearchType::Consensus),
             "seq" => Ok(SearchType::Sequence),
-            other => bail!("unknown search mode {other:?} in manifest.tbl"),
+            other => bail!("unknown search mode {other:?} in ledger.tbl"),
         }
     }
 }
@@ -568,72 +569,39 @@ fn read_hits<C: HitColumns>(path: &Path) -> libsail::Result<Vec<Hit>> {
 
 /// The runs a pipeline finished, in the order it declared them.
 ///
-/// Read out of `manifest.tbl` rather than by globbing the results directory,
-/// which is what keeps the runs table itself from looking like a hit table and
+/// Read out of `ledger.tbl` rather than by globbing the results directory,
+/// which
+/// is what keeps the runs table itself from looking like a hit table and
 /// what makes a run's tool and mode facts rather than guesses.
 ///
-/// Several rows can share a name: mmseqs' search and its conversion are one
-/// run, and psiblast's per-family calls are one run, done a family at a time.
-/// [`Wall`] adds those up, and takes the longest rather than the sum of the
-/// hmmer parts, which overlap.
+/// Several commands can share a name -- mmseqs' search and its conversion are
+/// one run, and psiblast's per-family calls are one run done a family at a
+/// time -- and they arrive here already folded into one row.
 fn runs(dir: &Path) -> anyhow::Result<Vec<Run>> {
-    let manifest = Manifest::read(&dir.join("manifest.tbl"))?;
+    let ran = Ledger::load(dir)?;
+    ledger::warn(ran.failed(), "command(s)");
+
     let results = dir.join("results");
+    let out: Vec<Run> = ran
+        .columns()?
+        .into_iter()
+        .map(|column| {
+            let mode = column
+                .params
+                .get(MODE)
+                .with_context(|| format!("run {:?} has no mode", column.name))?;
 
-    let failed: Vec<&str> = manifest
-        .failed()
-        .filter_map(|row| row.get(manifest::NAME))
-        .collect();
-    if !failed.is_empty() {
-        eprintln!(
-            "warning: leaving out {} command(s) that did not finish: {}",
-            failed.len(),
-            failed.join(", ")
-        );
-    }
+            Ok(Run {
+                table: manifest::table_path(&results, &column.name, ""),
+                mode: SearchType::parse(mode)?,
+                name: column.name,
+                tool: column.tool,
+                wall_s: column.wall_s as f32,
+            })
+        })
+        .collect::<anyhow::Result<_>>()?;
 
-    let mut out: Vec<Run> = Vec::new();
-    let mut walls: Vec<Wall> = Vec::new();
-    let mut at: HashMap<String, usize> = HashMap::new();
-
-    for row in manifest.runs() {
-        let name = row.get(manifest::NAME).expect("runs() filters on name");
-
-        let i = match at.get(name) {
-            Some(&i) => i,
-            None => {
-                let tool = row
-                    .get(manifest::TOOL)
-                    .with_context(|| format!("run {name:?} has no tool"))?;
-                let mode = row
-                    .get(MODE)
-                    .with_context(|| format!("run {name:?} has no mode"))?;
-
-                at.insert(name.to_string(), out.len());
-                walls.push(Wall::default());
-                out.push(Run {
-                    name: name.to_string(),
-                    tool: tool.to_string(),
-                    mode: SearchType::parse(mode)?,
-                    wall_s: 0.0,
-                    table: manifest::table_path(&results, name, ""),
-                });
-                out.len() - 1
-            }
-        };
-
-        walls[i].add("", row);
-    }
-
-    for (run, wall) in out.iter_mut().zip(&walls) {
-        run.wall_s = wall.total() as f32;
-    }
-
-    anyhow::ensure!(
-        !out.is_empty(),
-        "no finished runs in {}/manifest.tbl",
-        dir.display()
-    );
+    anyhow::ensure!(!out.is_empty(), "no finished runs in {}", dir.display());
 
     Ok(out)
 }

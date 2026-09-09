@@ -39,20 +39,36 @@ An input set under `inputs/`, and one directory per pipeline under `outputs/`:
 inputs/<set>/                    what a run reads
 outputs/<pipeline>/
 ├── manifest.tbl                 every command, its wall clock, its exit code
+├── ledger.tbl                   one row per run per shard, and what it cost
 ├── results/<run>.<shard>.tbl    one hit table per run, per target shard
 └── tmp/                         scratch
 ```
 
-`manifest.tbl` is the record of what ran, and `parse` reads it instead of the
-filenames. That is what keeps the analyses free of any one pipeline: a row
-carrying a `name` field becomes a column, its `tool` field says how to read its
-table, and its `shard` field names the target it searched. Adding a run to a
-sweep adds a column without touching the reader.
+`ledger.tbl` is what the analyses read, and `parse` reads a pipeline's shape
+out of it rather than out of the filenames. That is what keeps the analyses
+free of any one pipeline: a row's `name` becomes a column, its `tool` says how
+to read that column's table, its `shard` names the target it searched, and
+every other column is a setting that tells one run from another. Adding a run
+to a sweep adds a column without touching the reader.
+
+A pipeline run here leaves `michi`'s `manifest.tbl` behind, and the ledger is
+distilled out of that. Distilling is where a batched step folds to its longest
+command and a command that failed is left out, once rather than in every
+analysis.
+
+Results that came back from a cluster have no manifest and cannot have one,
+since nothing here ran those commands and an exit code or an argv would have to
+be invented. They arrive with `.time` files beside the tables, and `mgy import`
+reads those, writing the ledger for a directory that has no manifest to
+distil.
 
 ## benchmarks/util
 
 - `manifest` reads back the table `michi`'s sink wrote, and builds the
   `results/` paths from it.
+- `ledger` holds the shape the analyses read: one row per run per shard, with
+  each run's seconds already totalled. It distills a manifest into that shape,
+  and reads and writes `ledger.tbl`.
 - `tbl` writes the padded, `#`-headed table every analysis produces.
 - `tools` holds where the binaries and the downloads are.
 - `split` cuts a query set into balanced parts for a batch of jobs.
@@ -83,10 +99,11 @@ than a benchmark: five stages that reverse the targets, recruit decoys per
 family, search each family against its own decoys forward and reversed, and
 learn the per-family score cutoffs every hit is then held against. It keeps its
 own directory tree, and produces `data/mgy-cutoffs.tbl`, which is committed and
-promoted by hand. `mgy install` writes a `manifest.tbl` for result tables
-produced elsewhere, which turns a search run on a cluster into an ordinary
-pipeline directory. `benchmarks/mgy/scripts/rename-old-results.sh` renames the
-older harness's files into the names it expects.
+promoted by hand. `mgy import` writes a `ledger.tbl` for result tables produced
+elsewhere, out of the `.time` files that came back with them, which turns a
+search run on a cluster into an ordinary pipeline directory.
+`benchmarks/mgy/scripts/rename-old-results.sh` renames the older harness's
+files into the names it expects.
 
 ## benchmarks/pid
 

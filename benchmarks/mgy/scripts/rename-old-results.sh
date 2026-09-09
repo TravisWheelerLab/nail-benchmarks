@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 #
-# Rename the old shell harness's result tables to the names `mgy install`
+# Rename the old shell harness's result tables to the names `mgy import`
 # reads, and move them into a pipeline's results directory.
 #
 # The old harness named a table for the tool and the shard and nothing else --

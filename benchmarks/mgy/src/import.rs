@@ -1,16 +1,17 @@
-//! Turning a directory of externally-run result tables into a pipeline.
+//! Bringing in result tables that were produced somewhere other than here.
 //!
 //! Not every search is run by the harness, and that is deliberate: a full
 //! hmmsearch over every MGnify shard belongs on a cluster, not on the machine
 //! doing the analysis. What comes back is the same tables a pipeline here
 //! would have written, timed by whatever `time` that cluster had instead of by
-//! `michi`. This turns those into a `manifest.tbl`, after which `parse` cannot
-//! tell the difference.
+//! `michi`.
 //!
 //! Nothing is copied. The tables are found where they already are, under
-//! `outputs/<pipeline>/results/`, and the only thing written is the manifest
-//! beside them -- a result set large enough to be worth running elsewhere is
-//! too large to keep a second copy of.
+//! `outputs/<pipeline>/results/`, and the only thing written is the
+//! `ledger.tbl` beside them -- a result set large enough to be worth running
+//! elsewhere is too large to keep a second copy of. A pipeline run here writes
+//! its own ledger when it finishes, so this is the one case that needs a
+//! command of its own.
 //!
 //! What a run was is read out of its filename, since that is already the one
 //! place every pipeline in this crate records it. See [`Run::parse`] for the
@@ -23,8 +24,8 @@ use std::path::{Path, PathBuf};
 use anyhow::{Context, bail, ensure};
 use clap::Parser;
 
+use util::ledger;
 use util::manifest;
-use util::tbl;
 use util::time::{self, Timing};
 
 use crate::inputs;
@@ -43,77 +44,86 @@ pub struct Args {
     #[arg(long, value_name = "nail|mmseqs|hmmer")]
     tool: Option<String>,
 
-    /// Charge one .time file to every shard, for a search too long to have
-    /// timed where it ran. Names a run, or every run without the run=
+    /// Cover a whole run with one .time file, for a search too long to have
+    /// been timed shard by shard. Names a run, or every run without the run=
     #[arg(long, value_name = "[run=]one.time")]
     time: Vec<String>,
 
-    /// Replace an existing manifest.tbl
+    /// Replace an existing ledger.tbl
     #[arg(long)]
     force: bool,
 }
 
 pub fn main(args: Args) -> anyhow::Result<()> {
     let dir = crate::parse::pipeline(&args.pipeline)?;
-    let results = dir.join("results");
-    let out = dir.join("manifest.tbl");
+    let out = ledger::path(&dir);
 
-    ensure!(
-        results.is_dir(),
-        "no results directory at {}; the tables go there",
-        results.display()
-    );
-
-    // a pipeline that ran here wrote its own manifest, and overwriting it
-    // would throw away the timings and the argv of a real run
+    // a pipeline that ran here writes its own ledger, and overwriting it would
+    // throw away timings michi measured in favour of ones a shell reported
     ensure!(
         args.force || !out.exists(),
         "{} already exists; pass --force to replace it",
         out.display()
     );
 
-    if let Some(tool) = &args.tool {
+    let ledger = ledger::Ledger::from_rows(rows(
+        &dir.join("results"),
+        args.tool.as_deref(),
+        &args.time,
+    )?);
+    ledger.write(&out)?;
+
+    println!("wrote {}", out.display());
+    for column in ledger.columns()? {
+        println!(
+            "  {:<24} {:<7} {:>3} shard(s) {:>10.2}s",
+            column.name,
+            column.tool,
+            column.shards.len(),
+            column.wall_s
+        );
+    }
+
+    Ok(())
+}
+
+/// Every row the result tables under `results/` and their `.time` files add
+/// up to.
+///
+/// `tool` names the tool behind runs whose own name does not, as
+/// cloud-search's cells do not. `time` charges one measurement to a whole run,
+/// as `[run=]file`, for a search too long to have been timed shard by shard.
+fn rows(results: &Path, tool: Option<&str>, time: &[String]) -> anyhow::Result<Vec<ledger::Row>> {
+    ensure!(
+        results.is_dir(),
+        "no results directory at {}; the tables go there",
+        results.display()
+    );
+
+    if let Some(tool) = tool {
         ensure!(
-            TOOLS.contains(&tool.as_str()),
+            TOOLS.contains(&tool),
             "--tool {tool:?} is not one of {}",
             TOOLS.join(", ")
         );
     }
 
-    let extrapolate = Extrapolate::parse(&args.time)?;
+    let extrapolate = Extrapolate::parse(time)?;
 
-    let mut runs = collect(&results, args.tool.as_deref())?;
+    let mut found = collect(results, tool)?;
     ensure!(
-        !runs.is_empty(),
+        !found.is_empty(),
         "no result tables in {}; expected <name>.<shard>.tbl",
         results.display()
     );
 
-    for run in &mut runs {
-        run.check_domains(&results)?;
+    for run in &mut found {
+        run.check_domains(results)?;
         run.check_targets()?;
-        run.read_timings(&results, extrapolate.get(&run.name))?;
+        run.read_timings(results, extrapolate.get(&run.name))?;
     }
 
-    write(&out, &runs)?;
-
-    println!("wrote {}", out.display());
-    for run in &runs {
-        let wall: f64 = run
-            .shards
-            .iter()
-            .filter_map(|s| s.timing.as_ref())
-            .map(|t| t.wall_s)
-            .sum();
-        println!(
-            "  {:<24} {:<7} {:>5} shard(s) {wall:>10.2}s",
-            run.name,
-            run.tool,
-            run.shards.len()
-        );
-    }
-
-    Ok(())
+    Ok(found.iter().flat_map(Run::rows).collect())
 }
 
 /// One run's results: what it was, and one entry per shard it covered.
@@ -126,6 +136,10 @@ struct Run {
     params: Vec<(String, String)>,
 
     shards: Vec<Shard>,
+
+    /// One measurement covering every shard at once, for a search timed as a
+    /// whole rather than shard by shard.
+    whole: Option<Timing>,
 }
 
 struct Shard {
@@ -179,9 +193,11 @@ impl Run {
             }
         }
 
-        let tool = tool.or_else(|| fallback.map(str::to_string)).with_context(|| {
-            format!("{name:?} names no tool; pass --tool to say what produced it")
-        })?;
+        let tool = tool
+            .or_else(|| fallback.map(str::to_string))
+            .with_context(|| {
+                format!("{name:?} names no tool; pass --tool to say what produced it")
+            })?;
 
         Ok((
             Run {
@@ -189,6 +205,7 @@ impl Run {
                 tool,
                 params,
                 shards: Vec::new(),
+                whole: None,
             },
             shard.to_string(),
         ))
@@ -257,24 +274,16 @@ impl Run {
         Ok(())
     }
 
-    /// Reads each shard's `.time`, or charges every shard the one `extrapolate`
-    /// names.
+    /// Reads each shard's `.time`, or the one `extrapolate` names.
     ///
     /// Extrapolating is for a search whose whole point is that it was too
-    /// expensive to run here: one shard is timed on a quiet machine and the
-    /// rest are taken to have cost the same.
-    fn read_timings(
-        &mut self,
-        results: &Path,
-        extrapolate: Option<&Path>,
-    ) -> anyhow::Result<()> {
+    /// expensive to run here: one measurement covers the lot. It is recorded
+    /// as one row against every shard rather than copied onto each of them,
+    /// so nothing downstream can add it up as though each shard had been
+    /// timed.
+    fn read_timings(&mut self, results: &Path, extrapolate: Option<&Path>) -> anyhow::Result<()> {
         if let Some(path) = extrapolate {
-            let shared = time::read(path)?;
-
-            for shard in &mut self.shards {
-                shard.timing = Some(Timing { ..shared });
-            }
-
+            self.whole = Some(read_timing(path)?);
             return Ok(());
         }
 
@@ -285,16 +294,59 @@ impl Run {
                 path.is_file(),
                 "no {}\n\n\
                  every table wants a .time beside it, or --time {}=<file> to \
-                 charge one to every shard",
+                 cover every shard with one",
                 path.display(),
                 self.name
             );
 
-            shard.timing = Some(time::read(&path)?);
+            shard.timing = Some(read_timing(&path)?);
         }
 
         Ok(())
     }
+
+    /// One row per shard, plus the whole-run row where there is one.
+    fn rows(&self) -> Vec<ledger::Row> {
+        let params: BTreeMap<String, String> = self.params.iter().cloned().collect();
+        let row = |shard: &str, wall_s: Option<f64>| ledger::Row {
+            name: self.name.clone(),
+            tool: self.tool.clone(),
+            shard: shard.to_string(),
+            stage: String::new(),
+            params: params.clone(),
+            wall_s,
+        };
+
+        let mut out: Vec<ledger::Row> = self
+            .shards
+            .iter()
+            .map(|shard| row(&shard.name, shard.timing.as_ref().map(|t| t.wall_s)))
+            .collect();
+
+        if let Some(whole) = &self.whole {
+            out.push(row(ledger::EVERY_SHARD, Some(whole.wall_s)));
+        }
+
+        out
+    }
+}
+
+/// One `.time` file, refusing one that recorded a failure.
+//
+// only GNU `time -v` records a status at all. where there is one, a search
+// that failed is not a search to record: its table is half-written, and a
+// half-written one reads as a run that simply found less
+fn read_timing(path: &Path) -> anyhow::Result<Timing> {
+    let timing = time::read(path)?;
+
+    if let Some(exit) = timing.exit.filter(|exit| *exit != 0) {
+        bail!(
+            "{} recorded exit status {exit}; that search did not finish",
+            path.display()
+        );
+    }
+
+    Ok(timing)
 }
 
 /// One `-`-separated segment read as a setting: a name, then a value that has
@@ -439,93 +491,5 @@ impl Extrapolate {
             .get(run)
             .map(PathBuf::as_path)
             .or(self.every.as_deref())
-    }
-}
-
-/// Writes the manifest, in the shape `parse` reads back.
-///
-/// Assembled by hand rather than by a [`michi::Table`] sink, since no pipeline
-/// ran: the commands happened somewhere else and all that came back is what
-/// they produced and what they cost. Only the columns a reader uses are here.
-fn write(path: &Path, runs: &[Run]) -> anyhow::Result<()> {
-    // every setting any run recorded, so a pipeline that swept two knobs gets
-    // two columns and one that swept none gets none
-    let mut keys: Vec<&str> = runs
-        .iter()
-        .flat_map(|run| run.params.iter().map(|(key, _)| key.as_str()))
-        .collect();
-    keys.sort_unstable();
-    keys.dedup();
-
-    let mut headers = vec![
-        manifest::NAME.to_string(),
-        manifest::TOOL.to_string(),
-        manifest::SHARD.to_string(),
-    ];
-    headers.extend(keys.iter().map(|key| key.to_string()));
-    headers.extend(
-        ["wall(s)", "user(s)", "sys(s)", "cpu(%)", "max_rss", "exit"].map(str::to_string),
-    );
-
-    let mut rows: Vec<Vec<String>> = Vec::new();
-
-    for run in runs {
-        for shard in &run.shards {
-            let timing = shard
-                .timing
-                .as_ref()
-                .expect("read_timings fills every shard");
-
-            let mut row = vec![run.name.clone(), run.tool.clone(), shard.name.clone()];
-
-            row.extend(keys.iter().map(|key| {
-                run.params
-                    .iter()
-                    .find(|(k, _)| k == key)
-                    .map(|(_, value)| value.clone())
-                    .unwrap_or_else(|| "-".to_string())
-            }));
-
-            row.push(format!("{:.2}", timing.wall_s));
-            row.push(seconds(timing.user_s));
-            row.push(seconds(timing.sys_s));
-            row.push(timing.cpu_pct.map_or_else(dash, |p| format!("{p:.0}%")));
-            row.push(timing.max_rss_kb.map_or_else(dash, rss));
-
-            // a table that exists is a search that produced output, so a
-            // format with nothing to say about the status is taken at that
-            row.push(timing.exit.unwrap_or(0).to_string());
-
-            rows.push(row);
-        }
-    }
-
-    tbl::write(
-        path,
-        tbl::Table {
-            meta: "",
-            headers: &headers,
-            rows: &rows,
-            ragged_last: false,
-        },
-    )
-}
-
-fn dash() -> String {
-    "-".to_string()
-}
-
-fn seconds(value: Option<f64>) -> String {
-    value.map_or_else(dash, |s| format!("{s:.2}"))
-}
-
-/// Kilobytes as the units `michi` writes them in, so a manifest reads the same
-/// however it was made.
-fn rss(kb: u64) -> String {
-    const MIB: f64 = 1024.0;
-
-    match kb as f64 / MIB {
-        mib if mib >= MIB => format!("{:.2}GiB", mib / MIB),
-        mib => format!("{mib:.3}MiB"),
     }
 }
