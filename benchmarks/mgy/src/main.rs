@@ -92,3 +92,13 @@ pub fn dir() -> PathBuf {
 pub fn outputs() -> PathBuf {
     dir().join("outputs")
 }
+
+/// Where every pipeline puts its scratch, one directory each.
+///
+/// Beside `outputs/` rather than inside it, so what a pipeline produced and
+/// what it merely needed on the way are not the same tree: `outputs/<name>/`
+/// is the record, and everything under here can be deleted without losing
+/// any of it.
+pub fn tmp() -> PathBuf {
+    dir().join("tmp")
+}

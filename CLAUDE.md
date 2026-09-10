@@ -33,16 +33,26 @@ whichever `hmmsearch` was built for this repo.
 
 ## The shape a benchmark has
 
-An input set under `inputs/`, and one directory per pipeline under `outputs/`:
+An input set under `inputs/`, one directory per pipeline under `outputs/`, and
+the scratch off to one side:
 
 ```
 inputs/<set>/                    what a run reads
 outputs/<pipeline>/
 ├── manifest.tbl                 every command, its wall clock, its exit code
 ├── ledger.tbl                   one row per run per shard, and what it cost
-├── results/<run>.<shard>.tbl    one hit table per run, per target shard
-└── tmp/                         scratch
+└── results/<run>.<shard>.tbl    one hit table per run, per target shard
+tmp/<pipeline>/                  scratch, and nothing worth keeping
 ```
+
+The scratch sits at the crate root rather than inside the pipeline's output
+directory, one subdirectory per pipeline: `mgy/tmp/recall`,
+`mgy/tmp/cloud-search`, `mgy/tmp/cutoffs/<calibration>/<stage>`, and
+`mgy/tmp/build` for what `build` writes on the way. So `outputs/<pipeline>/`
+holds the record and only the record, and the whole of `tmp/` can go at any
+time without touching it. The six search pipelines still take `--tmp` to put
+their own scratch somewhere else, a scratch disk being the usual reason;
+`build` and `cutoffs` have no such flag and never had one.
 
 `ledger.tbl` is what the analyses read, and `parse` reads a pipeline's shape
 out of it rather than out of the filenames. That is what keeps the analyses

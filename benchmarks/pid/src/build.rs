@@ -171,7 +171,7 @@ pub fn main(args: Args) -> anyhow::Result<()> {
                 .stdout_to(inputs::query_cons())])
             .name("consensus"),
         )
-        .stderr_dir(inputs::outputs().join("tmp/stderr"))
+        .stderr_dir(inputs::tmp().join("build/stderr"))
         .sink(Progress::new())
         .build()
         .context("failed to build the assembly")?;
@@ -216,8 +216,8 @@ fn assemble(
     seed: u64,
 ) -> anyhow::Result<()> {
     println!("loading alignments...");
-    let mut query_sto = families(&inputs::profmark_query())
-        .context("failed to parse the profmark query split")?;
+    let mut query_sto =
+        families(&inputs::profmark_query()).context("failed to parse the profmark query split")?;
     let mut target_sto = families(&inputs::profmark_target())
         .context("failed to parse the profmark target split")?;
     let src_sto = families(src_sto_path).context("failed to parse source sto")?;
@@ -373,8 +373,9 @@ fn assemble(
 
     println!("{} benchmark pairs", pairs.len());
 
-    let mut tbl_writer =
-        BufWriter::new(File::create(inputs::benchmark_tbl()).context("failed to open benchmark.tbl")?);
+    let mut tbl_writer = BufWriter::new(
+        File::create(inputs::benchmark_tbl()).context("failed to open benchmark.tbl")?,
+    );
     writeln!(tbl_writer, "#identity family target query")?;
 
     let mut targets: Vec<FastaRecord> = Vec::new();
@@ -592,14 +593,12 @@ fn compute_pid(s1: &[u8], s2: &[u8]) -> f32 {
     let mut match_cnt = 0usize;
     let mut pos_cnt = 0usize;
 
-    s1.iter()
-        .zip(s2.iter())
-        .for_each(|(&a, &b)| {
-            if AMINO[a as usize] || AMINO[b as usize] {
-                pos_cnt += 1;
-                match_cnt += (a == b) as usize
-            }
-        });
+    s1.iter().zip(s2.iter()).for_each(|(&a, &b)| {
+        if AMINO[a as usize] || AMINO[b as usize] {
+            pos_cnt += 1;
+            match_cnt += (a == b) as usize
+        }
+    });
 
     if pos_cnt == 0 {
         return 0.0;

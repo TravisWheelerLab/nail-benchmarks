@@ -37,8 +37,9 @@ const CONVERT: &str = "convert";
 /// Where one pipeline's output lives.
 ///
 /// Everything a run produces -- hit tables, domain tables, the seed list --
-/// lands in `results/`, told apart by name rather than by directory. `tmp/`
-/// holds the scratch that gets thrown away.
+/// lands in `results/`, told apart by name rather than by directory. The
+/// scratch it wanted on the way is nowhere near it, under the crate's own
+/// `tmp/<pipeline>/`.
 pub struct Dirs {
     pub root: PathBuf,
     pub results: PathBuf,
@@ -50,7 +51,7 @@ impl Dirs {
         let root = crate::outputs().join(name);
         Dirs {
             results: root.join("results"),
-            tmp: root.join("tmp"),
+            tmp: crate::tmp().join(name),
             root,
         }
     }

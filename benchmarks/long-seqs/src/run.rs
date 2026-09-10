@@ -36,7 +36,7 @@ impl Dirs {
         let root = root.into();
         Dirs {
             results: root.join("results"),
-            tmp: root.join("tmp"),
+            tmp: inputs::tmp().join("run"),
             root,
         }
     }

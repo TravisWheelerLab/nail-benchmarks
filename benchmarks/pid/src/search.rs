@@ -12,9 +12,9 @@ use std::path::{Path, PathBuf};
 
 use anyhow::Context;
 
+use michi::{Closure, Cmd, Step};
 use util::manifest;
 use util::split::{self, Kind};
-use michi::{Closure, Cmd, Step};
 
 use crate::inputs;
 
@@ -45,7 +45,7 @@ impl Dirs {
         let root = inputs::outputs();
         Dirs {
             results: root.join("results"),
-            tmp: root.join("tmp"),
+            tmp: inputs::tmp().join("run"),
             root,
         }
     }

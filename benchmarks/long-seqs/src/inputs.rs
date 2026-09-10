@@ -33,6 +33,14 @@ pub fn outputs() -> PathBuf {
     dir().join("outputs")
 }
 
+/// Where the scratch goes, one directory per thing that makes any.
+///
+/// Beside `outputs/` rather than inside it, so what a run produced and what it
+/// merely needed on the way are not the same tree.
+pub fn tmp() -> PathBuf {
+    dir().join("tmp")
+}
+
 pub fn query(pair: &str) -> PathBuf {
     inputs().join(format!("query/{pair}.query.fa"))
 }
@@ -55,7 +63,13 @@ pub fn pairs() -> anyhow::Result<Vec<String>> {
     // rather than out of the stem
     let mut out: Vec<usize> = entries
         .filter_map(|e| e.ok())
-        .filter_map(|e| e.file_name().to_str()?.strip_suffix(".query.fa")?.parse().ok())
+        .filter_map(|e| {
+            e.file_name()
+                .to_str()?
+                .strip_suffix(".query.fa")?
+                .parse()
+                .ok()
+        })
         .collect();
 
     out.sort_unstable();

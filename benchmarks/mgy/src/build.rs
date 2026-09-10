@@ -124,7 +124,7 @@ fn fixed(args: FixedArgs) -> anyhow::Result<()> {
             .name("draw"),
         )
         .step(profile_db(&src.mmseqs, &queries).name("profile db"))
-        .stderr_dir(crate::dir().join("tmp/stderr"))
+        .stderr_dir(crate::tmp().join("build/stderr"))
         .sink(Progress::new())
         .build()?
         .run()?;
@@ -248,7 +248,7 @@ fn ladder(args: LadderArgs) -> anyhow::Result<()> {
     write_sizes(&inputs::ladder::sizes(&queries), &sizes)?;
 
     println!("building the mmseqs profile dbs...");
-    pl.stderr_dir(crate::dir().join("tmp/stderr"))
+    pl.stderr_dir(crate::tmp().join("build/stderr"))
         .sink(Progress::new())
         .build()?
         .run()?;

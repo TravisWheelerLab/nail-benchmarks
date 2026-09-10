@@ -42,6 +42,14 @@ pub fn outputs() -> PathBuf {
     root().join("outputs")
 }
 
+/// Where the scratch goes, one directory per thing that makes any.
+///
+/// Beside `outputs/` rather than inside it, so what a run produced and what it
+/// merely needed on the way are not the same tree.
+pub fn tmp() -> PathBuf {
+    root().join("tmp")
+}
+
 pub fn exists() -> bool {
     dir().is_dir()
 }

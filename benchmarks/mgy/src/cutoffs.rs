@@ -117,6 +117,9 @@ fn run_name(tool: &str, direction: &str) -> String {
 /// The inputs it starts from are the fixed set every recall pipeline reads.
 struct Layout {
     root: PathBuf,
+    /// The calibration this is, which is what tells two of them apart under
+    /// the crate's `tmp/cutoffs/`.
+    name: String,
 }
 
 impl Layout {
@@ -141,6 +144,7 @@ impl Layout {
 
         Ok(Layout {
             root: crate::dir().join("cutoffs").join(name),
+            name: name.to_string(),
         })
     }
 
@@ -190,14 +194,17 @@ impl Layout {
     }
 
     fn recruit(&self) -> Stage {
-        Stage {
-            root: self.outputs().join("recruit"),
-        }
+        self.stage("recruit")
     }
 
     fn search(&self) -> Stage {
+        self.stage("search")
+    }
+
+    fn stage(&self, stage: &str) -> Stage {
         Stage {
-            root: self.outputs().join("search"),
+            root: self.outputs().join(stage),
+            tmp: crate::tmp().join("cutoffs").join(&self.name).join(stage),
         }
     }
 
@@ -210,6 +217,7 @@ impl Layout {
 /// writes: what ran, what it produced, and the scratch it wanted.
 struct Stage {
     root: PathBuf,
+    tmp: PathBuf,
 }
 
 impl Stage {
@@ -218,7 +226,7 @@ impl Stage {
     }
 
     fn tmp(&self) -> PathBuf {
-        self.root.join("tmp")
+        self.tmp.clone()
     }
 
     fn manifest(&self) -> PathBuf {
@@ -350,8 +358,8 @@ fn write_reversed(src: &Path, dst: &Path) -> anyhow::Result<()> {
         std::fs::create_dir_all(dir)?;
     }
 
-    let fa = IndexedFasta::open(src)
-        .with_context(|| format!("failed to open {}", src.display()))?;
+    let fa =
+        IndexedFasta::open(src).with_context(|| format!("failed to open {}", src.display()))?;
     let mut out = BufWriter::new(
         std::fs::File::create(dst)
             .with_context(|| format!("failed to create {}", dst.display()))?,
@@ -1001,7 +1009,8 @@ fn learn(args: LearnArgs) -> anyhow::Result<()> {
         families
             .par_iter()
             .map(|family| -> anyhow::Result<Option<Vec<String>>> {
-                let nail = decoy_scores::<NailTable>(&results, NAIL, family, args.reverse_e_cutoff)?;
+                let nail =
+                    decoy_scores::<NailTable>(&results, NAIL, family, args.reverse_e_cutoff)?;
                 let mmseqs =
                     decoy_scores::<BlastTable>(&results, MMSEQS, family, args.reverse_e_cutoff)?;
                 let hmmer =
@@ -1080,9 +1089,7 @@ fn decoy_scores<T>(
 where
     T: HitColumns,
 {
-    let table = |direction| {
-        manifest::table_path(results, &run_name(tool, direction), family)
-    };
+    let table = |direction| manifest::table_path(results, &run_name(tool, direction), family);
 
     let (fwd_path, rev_path) = (table(FORWARD), table(REVERSE));
 
