@@ -27,6 +27,11 @@ pub enum Kind {
     Ladder,
 }
 
+/// Where every input set lives, whatever its shape.
+pub fn root() -> PathBuf {
+    crate::dir().join("inputs")
+}
+
 impl Kind {
     fn name(self) -> &'static str {
         match self {
@@ -41,7 +46,7 @@ impl Kind {
     /// only comparable to each other -- so it is one directory to remove, to
     /// refuse to build over, and to name in an error.
     pub fn dir(self) -> PathBuf {
-        crate::dir().join("inputs").join(self.name())
+        root().join(self.name())
     }
 
     pub fn queries(self) -> PathBuf {

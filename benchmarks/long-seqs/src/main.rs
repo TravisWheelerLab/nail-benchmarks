@@ -5,6 +5,7 @@
 //! checked into git, so this benchmark has no build step -- [`inputs`] is where
 //! they are, not how they were made.
 
+mod clean;
 mod inputs;
 mod parse;
 mod run;
@@ -25,11 +26,14 @@ enum Command {
     /// Turn results into the tables the plot scripts consume.
     #[command(subcommand)]
     Parse(parse::Cmd),
+    /// Remove the run's outputs and the scratch. The inputs are checked in.
+    Clean,
 }
 
 fn main() -> anyhow::Result<()> {
     match Cli::parse().command {
         Command::Run(args) => run::main(args),
         Command::Parse(cmd) => parse::main(cmd),
+        Command::Clean => clean::main(),
     }
 }

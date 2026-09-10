@@ -16,6 +16,7 @@
 //! Nothing here decides what counts as a *true* hit. That is the part every
 //! benchmark answers differently, and it stays with the benchmark.
 
+pub mod clean;
 pub mod ledger;
 pub mod manifest;
 pub mod nail;

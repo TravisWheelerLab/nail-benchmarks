@@ -80,6 +80,13 @@ time without touching it. The six search pipelines still take `--tmp` to put
 their own scratch somewhere else, a scratch disk being the usual reason;
 `build` and `cutoffs` have no such flag and never had one.
 
+`<benchmark> clean` removes `inputs/`, `outputs/` and `tmp/`, after printing
+how many files and how many bytes are about to go and waiting for a `y`. The
+two expensive trees outside those names, mgy's `cutoffs/` and pid's
+`profmark/`, go only with `--all`. long-seqs' `inputs/` are symlinks to what
+is checked in under `data/long-seqs/`, so its clean leaves them where they
+are.
+
 `ledger.tbl` is what the analyses read, and `parse` reads a pipeline's shape
 out of it rather than out of the filenames. That is what keeps the analyses
 free of any one pipeline: a row's `name` becomes a column, its `tool` says how

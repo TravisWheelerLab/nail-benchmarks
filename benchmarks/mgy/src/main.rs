@@ -10,6 +10,7 @@
 
 mod analyze;
 mod build;
+mod clean;
 mod cloud_search;
 mod cut;
 mod cutoffs;
@@ -57,6 +58,8 @@ enum Command {
     /// Bring in result tables produced somewhere other than here, timed by
     /// the `.time` files that came back with them.
     Import(import::Args),
+    /// Remove the input sets, the pipeline outputs and the scratch.
+    Clean(clean::Args),
     /// Turn any finished pipeline into its scores table, and that into
     /// numbers.
     #[command(subcommand)]
@@ -74,6 +77,7 @@ fn main() -> anyhow::Result<()> {
         Command::HitLoss(args) => hit_loss::main(args),
         Command::SearchSize(args) => search_size::main(args),
         Command::Import(args) => import::main(args),
+        Command::Clean(args) => clean::main(args),
         Command::Parse(cmd) => parse::main(cmd),
         Command::Plot(args) => plot::main(args),
     }

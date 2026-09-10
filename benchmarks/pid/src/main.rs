@@ -2,6 +2,7 @@
 //! in a Swissprot decoy background.
 
 mod build;
+mod clean;
 mod inputs;
 mod parse;
 mod plot;
@@ -28,6 +29,8 @@ enum Command {
     Parse(parse::Cmd),
     /// Draw the figures from what parse wrote.
     Plot(plot::Args),
+    /// Remove the benchmark, the run's outputs and the scratch.
+    Clean(clean::Args),
 }
 
 fn main() -> anyhow::Result<()> {
@@ -36,5 +39,6 @@ fn main() -> anyhow::Result<()> {
         Command::Run(args) => run::main(args),
         Command::Parse(cmd) => parse::main(cmd),
         Command::Plot(args) => plot::main(args),
+        Command::Clean(args) => clean::main(args),
     }
 }

@@ -115,6 +115,11 @@ fn run_name(tool: &str, direction: &str) -> String {
 /// ```
 ///
 /// The inputs it starts from are the fixed set every recall pipeline reads.
+/// Where every calibration lives, one directory each.
+pub fn root() -> PathBuf {
+    crate::dir().join("cutoffs")
+}
+
 struct Layout {
     root: PathBuf,
     /// The calibration this is, which is what tells two of them apart under
@@ -143,7 +148,7 @@ impl Layout {
         }
 
         Ok(Layout {
-            root: crate::dir().join("cutoffs").join(name),
+            root: root().join(name),
             name: name.to_string(),
         })
     }
