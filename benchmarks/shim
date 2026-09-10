@@ -1,0 +1,132 @@
+#!/usr/bin/env bash
+#
+# Build the benchmark this was invoked as, then run it.
+#
+# One script for all three. `benchmarks/mgy/mgy` and its two siblings are
+# symlinks to this file, and the name on the link is what says which crate to
+# build: nothing else here is per-benchmark.
+#
+# Cargo decides what needs rebuilding, because nothing here can: comparing
+# mtimes would get the util dependency, Cargo.lock, the profile and the rustc
+# version wrong, and would get them wrong by running a stale binary rather
+# than by failing. Nor is there a way to ask cargo whether it would rebuild
+# without letting it rebuild, so this does not ask. It starts the build and
+# draws a spinner once the build has gone on long enough to be worth a word.
+#
+# exec, so the tool replaces this shell instead of running underneath it: one
+# process, and the exit code and any signal land where they would have anyway.
+#
+# usage: benchmarks/<name>/<name> <the arguments that binary takes>
+
+set -euo pipefail
+
+# two questions with two different answers. which crate is the name this was
+# invoked as, so the link has to keep its name; where the crates are is where
+# this file really lives, which is what realpath is for. resolving first would
+# lose the name, since all three links resolve here
+name=$(basename "${BASH_SOURCE[0]}")
+crates=$(dirname "$(realpath "${BASH_SOURCE[0]}")")
+root=$(dirname "$crates")
+
+crate=$crates/$name
+target=${CARGO_TARGET_DIR:-$root/target}
+bin=$target/release/$name
+
+if [[ ! -f $crate/Cargo.toml ]]; then
+    echo "no crate at $crate" >&2
+    echo "this runs as one of the per-benchmark links, and the name on the" >&2
+    echo "link is the crate it builds: benchmarks/mgy/mgy, and so on" >&2
+    exit 2
+fi
+
+# cargo's stderr is held back rather than shown as it arrives: a warning
+# printed mid-frame would land beside the spinner and then be erased with it.
+# it goes out whole once the build is over, in colour if a terminal will read
+# it
+if [[ -t 2 ]]; then color=always; else color=never; fi
+
+log=$(mktemp "${TMPDIR:-/tmp}/$name-build.XXXXXX")
+trap 'rm -f "$log"' EXIT INT TERM
+
+# the spinner runs beside the build rather than the build being polled for.
+# polling cost a whole interval on every run, since cargo is always still
+# alive at the first check; this way a build with nothing to do costs what
+# cargo costs
+spin=
+stop_spinner() {
+    [[ -n $spin ]] || return 0
+
+    kill "$spin" 2>/dev/null || true
+    wait "$spin" 2>/dev/null || true
+    spin=
+}
+
+# only against a terminal: into a pipe or a log file this is line noise
+if [[ -t 2 ]]; then
+    (
+        # say nothing for the first stretch. an up-to-date check takes about
+        # half a second, and a build that short is not worth a message
+        sleep 0.6
+
+        # past here there is something on the line, so clear it and put the
+        # cursor back however this ends. before here there is not, which is
+        # why a build with nothing to do leaves no trace at all
+        trap exit INT TERM
+        trap 'printf "\r\033[K\033[?25h" >&2' EXIT
+
+        printf '\033[?25l' >&2
+
+        frames=(⠋ ⠙ ⠹ ⠸ ⠼ ⠴ ⠦ ⠧ ⠇ ⠏)
+        i=0
+        start=$SECONDS
+
+        # "building" rather than "compiling": --quiet also hides the line
+        # cargo prints while it waits for another cargo's lock, and from here
+        # the two look the same
+        while :; do
+            printf '\r\033[K  %s building %s (%ds)' \
+                "${frames[i++ % ${#frames[@]}]}" "$name" "$((SECONDS - start))" >&2
+            sleep 0.1
+        done
+    ) &
+    spin=$!
+    trap 'stop_spinner; rm -f "$log"' EXIT INT TERM
+fi
+
+code=0
+cargo build --release --quiet --color "$color" \
+    --manifest-path "$crate/Cargo.toml" 2>"$log" || code=$?
+
+stop_spinner
+
+cat "$log" >&2
+rm -f "$log"
+trap - EXIT INT TERM
+
+[[ $code -eq 0 ]] || exit "$code"
+
+# macOS spends about a fifth of a second validating the code signature of an
+# executable whose inode it has not seen before, and cargo gives
+# target/release/<name> a new inode on every build, including one that
+# compiled nothing. so run a copy whose inode survives such a build, and
+# refresh it only when cargo really did produce different bytes. comparing
+# 3M costs a hundredth of a second against the fifth of a second it saves
+#
+# only here: everywhere else that churn costs a page cache miss, which is
+# cheaper than the comparison would be
+if [[ $OSTYPE == darwin* ]]; then
+    cache=$target/shim/$name
+
+    if ! cmp -s "$bin" "$cache"; then
+        mkdir -p "$target/shim"
+
+        # write beside it and rename, so a second shim running at the same
+        # time never execs a half-copied binary
+        cp "$bin" "$cache.$$"
+        mv "$cache.$$" "$cache"
+    fi
+
+    bin=$cache
+fi
+
+exec "$bin" "$@"

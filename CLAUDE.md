@@ -7,12 +7,38 @@ and DIAMOND.
 A Cargo workspace at the repo root. Binaries are the interface. There is one
 per benchmark, and each owns its own inputs, runs and analyses.
 
+Each binary has a shim beside its `Cargo.toml`, named after it, so the
+`mgy build` and `pid run` spellings used throughout this file are what you
+type:
+
+```
+benchmarks/mgy/mgy recall --shards 2
+benchmarks/pid/pid parse recall
+benchmarks/long-seqs/long-seqs parse cells
+```
+
+All three are symlinks to `benchmarks/shim`; the crate it builds is the name
+on the link. It builds that crate and runs it only if the build succeeded, so
+a broken build never falls through to the last binary that worked. Nothing can
+ask cargo whether it would rebuild without letting it rebuild, so the shim
+does not try: it runs `cargo build` every time, which costs about a twentieth
+of a second when there is nothing to do. A build still going after that gets a
+spinner on a terminal, and nothing at all into a pipe or a log file.
+
+On macOS the shim runs a copy of the binary kept under `target/shim/`,
+refreshed only when cargo produced different bytes. cargo replaces
+`target/release/<name>` on every build, no-op builds included, and macOS
+spends a fifth of a second checking the signature of an executable whose
+inode is new to it. Without the copy the shim would cost a quarter of a
+second rather than a twentieth.
+
 ## Layout
 
 ```
 Makefile               downloads data, builds tools, nothing else
 data/                  what the Makefile downloaded
 tools/bin/             what the Makefile built
+benchmarks/shim        the build-and-run shim every benchmark links to
 benchmarks/util/       what the benchmarks share
 benchmarks/mgy/        Pfam against MGnify
 benchmarks/pid/        recall against percent identity, over a profmark split
@@ -168,12 +194,13 @@ touching the sandbox's own `outputs/`, `target/` or links, since rsync leaves
 excluded paths on the receiving side alone. The three link paths are excluded
 without a trailing slash on purpose: a pattern ending in `/` matches only a
 directory, and on the receiving side these are symlinks, so `--delete` removes
-them. It copies uncommitted edits, which
-is the point: what wants testing is usually not committed yet.
+them. It copies uncommitted edits, which is the point: what wants testing is
+usually not committed yet.
 
-Then build and run inside `$SB`. Every path these crates resolve comes from
-their own `CARGO_MANIFEST_DIR` (`util/src/tools.rs:18`, `mgy/src/main.rs:84`,
-and the same in pid and long-seqs), so a build there reads the sandbox's
+Then run inside `$SB`, through its own shims, which build there and run what
+they built. Every path these crates resolve comes from their own
+`CARGO_MANIFEST_DIR` (`util/src/tools.rs:18`, `mgy/src/main.rs:84`, and the
+same in pid and long-seqs), so a build in the sandbox reads the sandbox's
 `data/` and `tools/` links and writes the sandbox's `outputs/`. Re-syncing an
 existing copy is near instant, and the build from cold takes about fifteen
 seconds.
