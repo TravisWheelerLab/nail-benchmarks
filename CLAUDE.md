@@ -142,8 +142,8 @@ SB=$ROOT/tmp-claude/sandbox
 
 rsync -a --delete \
   --exclude '.git/' --exclude 'target/' --exclude 'tmp-claude/' \
-  --exclude '/data/' --exclude '/tools/' \
-  --exclude 'outputs/' --exclude 'profmark/' --exclude 'tmp/' \
+  --exclude '/data' --exclude '/tools' --exclude '/benchmarks/pid/profmark' \
+  --exclude 'outputs/' --exclude 'tmp/' \
   "$ROOT/" "$SB/"
 
 ln -sfn "$ROOT/data" "$SB/data"
@@ -155,7 +155,10 @@ Run that before testing anything, and again after every edit: a copy goes
 stale, and a result from stale source is worth nothing. `--delete` is what
 keeps it current, and it drops what was deleted from the source without
 touching the sandbox's own `outputs/`, `target/` or links, since rsync leaves
-excluded paths on the receiving side alone. It copies uncommitted edits, which
+excluded paths on the receiving side alone. The three link paths are excluded
+without a trailing slash on purpose: a pattern ending in `/` matches only a
+directory, and on the receiving side these are symlinks, so `--delete` removes
+them. It copies uncommitted edits, which
 is the point: what wants testing is usually not committed yet.
 
 Then build and run inside `$SB`. Every path these crates resolve comes from
