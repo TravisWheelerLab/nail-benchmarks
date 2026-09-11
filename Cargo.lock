@@ -265,9 +265,11 @@ dependencies = [
  "anyhow",
  "clap",
  "libsail",
+ "memchr",
  "michi",
  "rand",
  "rayon",
+ "tabl",
  "util",
 ]
 
@@ -437,6 +439,10 @@ dependencies = [
  "quote",
  "unicode-ident",
 ]
+
+[[package]]
+name = "tabl"
+version = "0.1.0"
 
 [[package]]
 name = "unicode-ident"

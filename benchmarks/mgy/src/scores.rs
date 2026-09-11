@@ -1,42 +1,96 @@
-//! Every score every run gave every pair, in one table.
+//! One row per query/target pair, and what the runs made of it.
 //!
-//! One row per query/target pair, one column per run, plus what hmmer scored
-//! the pair and what its family's cutoffs are. This is the only thing `parse`
-//! produces, and every analysis is a grouping over it: a funnel is a count
-//! split by whether a pair was seeded, a sensitivity surface is a count per
-//! column, a recall number is the same count per tool.
+//! This is recall's table alone. `hit-loss` and `cloud-search` render their
+//! own shapes over the same collector, so no column here has to mean
+//! something for a pipeline that does not have it.
 //!
-//! What the columns are is read out of `ledger.tbl` rather than known here, so
-//! nothing in this file can tell which pipeline it is reading.
+//! ```text
+//! #= format scores 2
+//! #= query <count> <residues> <bytes>
+//! #= target <shard> <count> <residues> <bytes>
+//! #= cutoffs <path> c=<n>
+//! #= run <name> <tool> <wall_s> [k=v ...]
+//! #= pass <run name> ...
+//! # query target           pass   nail   mmseqs hmmer  inc dom
+//! # ----- ---------------- ------ ------ ------ ------ --- ---
+//! #= shard 1
+//! 2-Hacid_dh_C MGYP000522683479 NNNMMH 98.8   94.0   98.7   1   98.1
+//! 2-Hacid_dh_C MGYP000715666710 nnnmmh -      -      13.7   0   9.3,2.8
+//! 2-oxoacid_dh MGYP000987338150 NNNMMH 145.6  140.0  145.5  1   145.2
+//! #= shard 2
+//! ...
+//! #= end <rows>
+//! ```
 //!
-//! A run that never reported a pair holds `-` rather than a zero or a NaN.
-//! Absent is not a score, and a NaN would compare false against every
-//! threshold and quietly look like a real answer that missed.
+//! One `#= target` line per shard and one `#= run` line per run, both in
+//! ledger order; `#= cutoffs` records the file and the column the pass letters
+//! were judged by; `#= pass` names the run behind each character of the `pass`
+//! column. A reader refuses a file that does not open `#= format scores 2`.
+//!
+//! Rows sit in a block per shard, sorted by (query, target) within the block.
+//! A sequence lives in exactly one shard, so the blocks partition the pairs
+//! and nothing has to sort the whole file at once.
+//!
+//! `pass` holds one character per run: `n`, `m` or `h` for the tool, uppercase
+//! where that run reported the pair at or above its family's cutoff and
+//! lowercase otherwise, so a pair no run passed reads `nnnmmh`. hmmer is held
+//! to nail's cutoff, as it is in the calibration.
+//!
+//! The scores are one column per tool rather than one per run. A tool gives a
+//! pair the same score wherever it reports it; what its parameterization
+//! changes is which pairs it reports, and `pass` is where that is recorded.
+//! `-` means no run of that tool reported the pair: absent is not a score, and
+//! a zero or a NaN would compare against a threshold and look like one.
+//!
+//! `inc` is hmmer's tblout inclusion count and `dom` its per-domain scores in
+//! domtbl order, so the k-th score is the k-th row of
+//! `results/<run>.<shard>.domtbl` and the coordinates stay there.
+//!
+//! A pair earns a row by clearing some run's cutoff, or by hmmer having
+//! reported it at all. hmmer's whole reported set is kept because it is what
+//! the other tools are measured against: a pair it found weakly is still a
+//! pair they can be asked about.
+//!
+//! Every column is padded to its width except `query`, which is unpadded
+//! because a query's rows are adjacent and so line up without it, and `dom`,
+//! which is as wide as the pair has domains.
 
-use std::collections::{BTreeMap, HashMap, HashSet};
+pub mod read;
+mod scan;
+pub mod shard;
+pub mod sizes;
+pub mod v1;
+pub mod write;
+
+use std::collections::{BTreeMap, HashMap};
 use std::fmt;
-use std::fs::File;
-use std::io::{BufRead, BufReader, Read};
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use anyhow::{Context, bail, ensure};
 
 use libsail::collection::{Indexable, Iterable};
 use libsail::seq::p7hmm::IndexedHmm;
-use libsail::tbl::blast::BlastTable;
-use libsail::tbl::hmmer::HmmerTable;
-use libsail::tbl::nail::NailTable;
-use libsail::tbl::{HitColumns, HmmerDomHits, Table};
 
 use util::ledger::{self, Ledger};
-use util::manifest;
-use util::tbl;
 
-type Pair = (String, String);
+pub use v1::Scores;
+
+/// What the file opens with, and what a reader will not read past.
+pub const FORMAT: &str = "#= format scores 2";
+
+/// A tenth of the best domain, which is mgnify's threshold for a domain
+/// carrying enough of a hit to count as its own.
+pub const SIGNIFICANT: f32 = 0.1;
+
+/// How many runs a pass string can hold. cloud-search's grid is the widest
+/// pipeline here at 83.
+pub const MAX_RUNS: usize = 128;
+
+// ---
 
 /// Which program produced a results table, which settles both how to read it
 /// and which cutoff its scores are held against.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
 pub enum Tool {
     Nail,
     Mmseqs,
@@ -44,7 +98,10 @@ pub enum Tool {
 }
 
 impl Tool {
-    fn parse(name: &str) -> anyhow::Result<Tool> {
+    /// Every tool, in the order their score columns are written.
+    pub const ALL: [Tool; 3] = [Tool::Nail, Tool::Mmseqs, Tool::Hmmer];
+
+    pub fn parse(name: &str) -> anyhow::Result<Tool> {
         match name {
             "nail" => Ok(Tool::Nail),
             "mmseqs" => Ok(Tool::Mmseqs),
@@ -53,34 +110,33 @@ impl Tool {
         }
     }
 
-    /// The best score this tool gave each pair in one results table.
-    ///
-    /// mmseqs is read as blast: `convertalis --format-mode 0` is blast's
-    /// tabular format, whatever wrote it.
-    fn read(self, path: &Path) -> anyhow::Result<HashMap<Pair, f32>> {
+    /// This tool's character in a `pass` string, lowercase.
+    pub fn letter(self) -> u8 {
         match self {
-            Tool::Nail => best_scores::<NailTable>(path),
-            Tool::Mmseqs => best_scores::<BlastTable>(path),
-            Tool::Hmmer => best_scores::<HmmerTable>(path),
+            Tool::Nail => b'n',
+            Tool::Mmseqs => b'm',
+            Tool::Hmmer => b'h',
         }
     }
-}
 
-/// The best score each pair got in one table read as layout `C`.
-fn best_scores<C: HitColumns>(path: &Path) -> anyhow::Result<HashMap<Pair, f32>> {
-    let tbl =
-        Table::<C>::open(path).with_context(|| format!("failed to read {}", path.display()))?;
-
-    let mut best: HashMap<Pair, f32> = HashMap::new();
-    for hit in tbl.iter() {
-        // a pair can be reported more than once; the best of them is the
-        // one a threshold would see
-        best.entry((hit.query.clone(), hit.target.clone()))
-            .and_modify(|s| *s = s.max(hit.score))
-            .or_insert(hit.score);
+    /// The tool a `pass` character names, whichever case it is in.
+    pub fn of_letter(letter: u8) -> Option<Tool> {
+        match letter.to_ascii_lowercase() {
+            b'n' => Some(Tool::Nail),
+            b'm' => Some(Tool::Mmseqs),
+            b'h' => Some(Tool::Hmmer),
+            _ => None,
+        }
     }
 
-    Ok(best)
+    /// Where this tool's score column sits among the ones a table carries.
+    pub fn at(self) -> usize {
+        match self {
+            Tool::Nail => 0,
+            Tool::Mmseqs => 1,
+            Tool::Hmmer => 2,
+        }
+    }
 }
 
 impl fmt::Display for Tool {
@@ -95,7 +151,7 @@ impl fmt::Display for Tool {
 }
 
 /// How big one side of a search is.
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Size {
     /// Families for the query, sequences for a target shard.
     pub count: usize,
@@ -110,191 +166,284 @@ pub struct Run {
     pub tool: Tool,
     /// What the column cost, summed over every shard it covered.
     pub wall_s: f64,
-    /// Whatever else the commands recorded — the settings that tell this run
+    /// Whatever else the commands recorded -- the settings that tell this run
     /// apart from the others of the same tool.
     pub params: BTreeMap<String, String>,
 }
 
-/// A run and the shards it covered, which is what `collect` needs and what the
-/// written table has no use for: the shards are a property of the pipeline,
-/// listed once in its `#= target` lines rather than once per column.
-struct Column {
-    run: Run,
+/// A run and the shards it covered, which is what collecting needs and what
+/// the written table has no use for: the shards are a property of the
+/// pipeline, listed once in its `#= target` lines rather than once per column.
+pub struct Column {
+    pub run: Run,
     /// In manifest order. Empty string for a pipeline that never named one.
-    shards: Vec<String>,
+    pub shards: Vec<String>,
 }
 
-/// One query/target pair, and what everything scored it.
-#[derive(Clone, Debug)]
-pub struct Row {
-    pub query: String,
-    pub target: String,
-    /// `None` for a family whose decoys gave that tool no usable cutoff.
-    pub cut_nail: Option<f32>,
-    pub cut_mmseqs: Option<f32>,
-    /// Whether seeding found this pair. `None` when the pipeline kept no seeds.
-    pub seeded: Option<bool>,
-    /// One per run, in the same order.
-    pub scores: Vec<Option<f32>>,
-    /// One per run, in the same order: the domain scores behind that run's
-    /// score, best first. Empty for every run but hmmer's, which is the only
-    /// tool that breaks a hit down.
-    pub domains: Vec<Vec<f32>>,
+/// The runs a pipeline declared, in the order it declared them.
+///
+/// The grouping and the wall clock are [`util::ledger`]'s work; what is left
+/// here is which tool a column's name belongs to, since that is what says how
+/// to read its table.
+pub fn runs(ran: &Ledger) -> anyhow::Result<Vec<Column>> {
+    let columns = ran.columns()?;
+
+    ensure!(
+        columns.len() <= MAX_RUNS,
+        "{} runs, and a pass string holds {MAX_RUNS}",
+        columns.len()
+    );
+
+    columns
+        .into_iter()
+        .map(|column| {
+            // a run whose rows are all `*` says what it cost without saying
+            // which targets it searched, and a table read by shard has nothing
+            // to open. every row of its column would be a dash
+            ensure!(
+                !column.shards.is_empty(),
+                "run {:?} covers no shard of its own in ledger.tbl: every row of it is `{}`",
+                column.name,
+                ledger::EVERY_SHARD,
+            );
+
+            Ok(Column {
+                run: Run {
+                    name: column.name,
+                    tool: Tool::parse(&column.tool)?,
+                    wall_s: column.wall_s,
+                    params: column.params,
+                },
+                shards: column.shards,
+            })
+        })
+        .collect()
 }
 
-#[derive(Debug)]
-pub struct Scores {
-    pub query: Size,
-    /// One per shard the runs covered, in manifest order.
-    pub targets: Vec<(String, Size)>,
-    /// Per shard, what seeding cost. Empty when a pipeline never seeded.
-    pub seed_wall_s: Vec<(String, f64)>,
-    pub runs: Vec<Run>,
-    pub rows: Vec<Row>,
+/// The tools a set of runs used, in the order their columns are written.
+pub fn tools(runs: &[Run]) -> Vec<Tool> {
+    Tool::ALL
+        .into_iter()
+        .filter(|tool| runs.iter().any(|run| run.tool == *tool))
+        .collect()
 }
 
-/// Where a pipeline's inputs are, so `parse` can measure what was searched.
-pub struct Inputs<'a> {
-    pub query_hmm: &'a Path,
-    pub targets: &'a Path,
+// -------------------------------------------------------------------- query
+
+/// The query families, numbered in the order their names sort.
+///
+/// A family becomes a number once, here, and everything downstream carries the
+/// number: it is half of a pair's sort key, and the index a cutoff is looked
+/// up at. Sorting by the number is sorting by the name, which is what lets a
+/// block be sorted without a string comparison in it.
+pub struct Queries {
+    /// Sorted, so a name's index is its rank.
+    names: Vec<String>,
+    at: HashMap<String, u32>,
+    pub size: Size,
 }
 
-impl Scores {
-    /// Reads a finished pipeline directory into a table.
-    pub fn collect(
-        dir: &Path,
-        inputs: Inputs<'_>,
-        cutoffs_path: &Path,
-        c: usize,
-    ) -> anyhow::Result<Scores> {
-        let cutoffs = cutoffs(cutoffs_path, c)
-            .with_context(|| format!("failed to read {}", cutoffs_path.display()))?;
+impl Queries {
+    /// The families in a `query.hmm`, with what the set comes to.
+    ///
+    /// Counted off the file rather than remembered from the build, so it
+    /// describes the models that are there.
+    pub fn from_hmm(path: &Path) -> anyhow::Result<Queries> {
+        let bytes = std::fs::metadata(path)
+            .with_context(|| format!("failed to stat {}", path.display()))?
+            .len();
 
-        let ran = Ledger::load(dir)?;
-        ledger::warn(ran.failed(), "command(s)");
+        let models = IndexedHmm::open(path)
+            .with_context(|| format!("failed to index {}", path.display()))?;
 
-        let columns = runs(&ran)?;
-        ensure!(!columns.is_empty(), "no finished runs in {}", dir.display());
+        let mut names: Vec<String> = Vec::with_capacity(models.len());
+        let mut residues = 0u64;
 
-        let seed_wall_s: Vec<(String, f64)> = ran
-            .stage("seed")
-            .map(|row| (row.shard.clone(), row.wall_s.unwrap_or(0.0)))
-            .collect();
-
-        let shards = ran.shards();
-
-        let results = dir.join("results");
-        let seeded = seeds(&results, &shards)?;
-
-        // one pass per column, keeping each column's scores while the union of
-        // pairs grows
-        let mut per_run: Vec<HashMap<Pair, f32>> = Vec::with_capacity(columns.len());
-        let mut per_run_dom: Vec<HashMap<Pair, Vec<f32>>> = Vec::with_capacity(columns.len());
-        let mut pairs: HashSet<Pair> = HashSet::new();
-
-        for Column { run, shards } in &columns {
-            let mut scores: HashMap<Pair, f32> = HashMap::new();
-            let mut domains: HashMap<Pair, Vec<f32>> = HashMap::new();
-
-            for shard in shards {
-                let path = manifest::table_path(&results, &run.name, shard);
-                for (pair, score) in run.tool.read(&path)? {
-                    scores
-                        .entry(pair)
-                        .and_modify(|s| *s = s.max(score))
-                        .or_insert(score);
-                }
-
-                if run.tool == Tool::Hmmer {
-                    let path = manifest::dom_path(&results, &run.name, shard);
-                    domains.extend(read_domains(&path)?);
-                }
-            }
-
-            // which pairs are in the table is settled before any of them is
-            // built: a pair earns a row by clearing a cutoff somewhere, or by
-            // hmmer having reported it at all.
-            //
-            // hmmer's whole reported set is kept, cutoff or not, because it is
-            // what the other columns are measured against -- a pair it found
-            // weakly is still a pair they can be asked about. That is a rule
-            // about the comparison, not about how hmmer is run: it is an
-            // ordinary column everywhere else in this file.
-            for (pair, score) in &scores {
-                let kept = run.tool == Tool::Hmmer
-                    || cutoffs.get(run.tool, &pair.0).is_some_and(|c| *score >= c);
-
-                if kept {
-                    pairs.insert(pair.clone());
-                }
-            }
-
-            per_run.push(scores);
-            per_run_dom.push(domains);
+        for model in models.iter() {
+            names.push(model.header.name.clone());
+            // LENG is the query axis of a search's matrix, and so the honest
+            // measure of how much work the set is
+            residues += model.header.leng as u64;
         }
 
-        // sorted so the file is stable across runs and diffs mean something
-        let mut pairs: Vec<Pair> = pairs.into_iter().collect();
-        pairs.sort_unstable();
+        let size = Size {
+            count: names.len(),
+            residues,
+            bytes,
+        };
 
-        let rows = pairs
-            .into_iter()
-            .map(|(query, target)| {
-                let key = (query.clone(), target.clone());
+        names.sort_unstable();
+        names.dedup();
 
-                Row {
-                    cut_nail: cutoffs.nail.get(&query).copied(),
-                    cut_mmseqs: cutoffs.mmseqs.get(&query).copied(),
-                    seeded: seeded.as_ref().map(|set| set.contains(&key)),
-                    scores: per_run.iter().map(|r| r.get(&key).copied()).collect(),
-                    domains: per_run_dom
-                        .iter()
-                        .map(|d| d.get(&key).cloned().unwrap_or_default())
-                        .collect(),
-                    query,
-                    target,
-                }
-            })
-            .collect();
-
-        let targets = shards
-            .iter()
-            .map(|shard| {
-                let size = fasta_size(&shard_path(inputs.targets, shard))?;
-                Ok((shard.clone(), size))
-            })
-            .collect::<anyhow::Result<Vec<_>>>()?;
-
-        Ok(Scores {
-            query: hmm_size(inputs.query_hmm)?,
-            targets,
-            seed_wall_s,
-            runs: columns.into_iter().map(|c| c.run).collect(),
-            rows,
-        })
-    }
-
-    pub fn write(&self, path: &Path) -> anyhow::Result<()> {
-        // `#=` is metadata for whoever reads this back, `#` is the header a
-        // person reads. stockholm draws the same line in the same place.
-        let mut meta = format!(
-            "#= query {} {} {}\n",
-            self.query.count, self.query.residues, self.query.bytes
+        ensure!(
+            names.len() <= Queries::MOST,
+            "{} families, and a pair's key holds {}",
+            names.len(),
+            Queries::MOST
         );
 
+        let at = names
+            .iter()
+            .enumerate()
+            .map(|(i, name)| (name.clone(), i as u32))
+            .collect();
+
+        Ok(Queries { names, at, size })
+    }
+
+    /// How many families fit in the query half of a pair's key.
+    pub const MOST: usize = 1 << 23;
+
+    pub fn id(&self, name: &str) -> Option<u32> {
+        self.at.get(name).copied()
+    }
+
+    pub fn name(&self, id: u32) -> &str {
+        &self.names[id as usize]
+    }
+
+    pub fn len(&self) -> usize {
+        self.names.len()
+    }
+}
+
+// ------------------------------------------------------------------ cutoffs
+
+/// The score each family's hits are held to, by query id.
+///
+/// hmmer takes nail's: nail approximates hmmer's model, and the calibration
+/// learns no threshold of hmmer's own that anything reads.
+pub struct Cutoffs {
+    nail: Vec<Option<f32>>,
+    mmseqs: Vec<Option<f32>>,
+}
+
+impl Cutoffs {
+    /// The threshold a run of `tool` is held to on one family.
+    pub fn get(&self, tool: Tool, query: u32) -> Option<f32> {
+        let column = match tool {
+            Tool::Nail | Tool::Hmmer => &self.nail,
+            Tool::Mmseqs => &self.mmseqs,
+        };
+
+        column.get(query as usize).copied().flatten()
+    }
+
+    /// One score per family per tool, out of the decoys the calibration scored
+    /// it against.
+    ///
+    /// A zero means the family had fewer decoys than the file has slots, so
+    /// that tool learned nothing about it and gets no cutoff. The two tools are
+    /// kept apart rather than dropped together: a family nail has a threshold
+    /// for is still measurable against nail, whatever mmseqs made of it.
+    ///
+    /// `cutoffs.tbl` names its columns `<tool>_1..<tool>_5` and `<tool>_n`, so
+    /// the column to read is found by name rather than by counting -- which is
+    /// what lets the calibration add a tool without moving anything here.
+    pub fn read(path: &Path, c: usize, queries: &Queries) -> anyhow::Result<Cutoffs> {
+        let text = std::fs::read_to_string(path)
+            .with_context(|| format!("failed to read {}", path.display()))?;
+
+        let headers: Vec<&str> = text
+            .lines()
+            .find_map(|line| {
+                let rest = line.strip_prefix('#')?.trim_start();
+                (!rest.starts_with('-')).then(|| rest.split_whitespace().collect())
+            })
+            .with_context(|| format!("no header in {}", path.display()))?;
+
+        let column = |tool: &str| -> anyhow::Result<usize> {
+            let name = format!("{tool}_{}", c + 1);
+            headers
+                .iter()
+                .position(|h| *h == name)
+                .with_context(|| format!("{} has no {name} column", path.display()))
+        };
+
+        let (nail_at, mmseqs_at) = (column("nail")?, column("mmseqs")?);
+
+        let mut out = Cutoffs {
+            nail: vec![None; queries.len()],
+            mmseqs: vec![None; queries.len()],
+        };
+
+        for line in text.lines() {
+            if line.starts_with('#') || line.trim().is_empty() {
+                continue;
+            }
+
+            let cells: Vec<&str> = line.split_whitespace().collect();
+            let Some(family) = cells.first() else {
+                continue;
+            };
+
+            // a family the calibration knows and this query set does not is
+            // not an error: the calibration covers every family Pfam has
+            let Some(id) = queries.id(family) else {
+                continue;
+            };
+
+            let score = |at: usize| cells.get(at).and_then(|x| x.parse::<f32>().ok());
+
+            // a zero is a family that tool learned nothing about
+            if let Some(s) = score(nail_at).filter(|s| *s > 0.0) {
+                out.nail[id as usize] = Some(s);
+            }
+            if let Some(s) = score(mmseqs_at).filter(|s| *s > 0.0) {
+                out.mmseqs[id as usize] = Some(s);
+            }
+        }
+
+        if out.nail.iter().all(Option::is_none) && out.mmseqs.iter().all(Option::is_none) {
+            bail!(
+                "no usable cutoffs at index {c} in {} for any of the {} families searched",
+                path.display(),
+                queries.len()
+            );
+        }
+
+        Ok(out)
+    }
+}
+
+// --------------------------------------------------------------------- meta
+
+/// What a `scores.tbl` says about itself, above the header.
+pub struct Meta {
+    pub query: Size,
+    /// One per shard the runs covered, in ledger order.
+    pub targets: Vec<(String, Size)>,
+    pub cutoffs: PathBuf,
+    pub c: usize,
+    pub runs: Vec<Run>,
+}
+
+impl Meta {
+    pub fn write(&self, out: &mut impl std::io::Write) -> std::io::Result<()> {
+        writeln!(out, "{FORMAT}")?;
+        writeln!(
+            out,
+            "#= query {} {} {}",
+            self.query.count, self.query.residues, self.query.bytes
+        )?;
+
         for (shard, size) in &self.targets {
-            meta.push_str(&format!(
-                "#= target {} {} {} {}\n",
+            writeln!(
+                out,
+                "#= target {} {} {} {}",
                 label(shard),
                 size.count,
                 size.residues,
                 size.bytes
-            ));
+            )?;
         }
 
-        for (shard, wall) in &self.seed_wall_s {
-            meta.push_str(&format!("#= seed {} {wall:.4}\n", label(shard)));
-        }
+        writeln!(
+            out,
+            "#= cutoffs {} c={}",
+            self.cutoffs.display(),
+            self.c
+        )?;
 
         for run in &self.runs {
             let params: String = run
@@ -302,168 +451,16 @@ impl Scores {
                 .iter()
                 .map(|(k, v)| format!(" {k}={v}"))
                 .collect();
-            meta.push_str(&format!(
-                "#= run {} {} {:.4}{params}\n",
+
+            writeln!(
+                out,
+                "#= run {} {} {:.4}{params}",
                 run.name, run.tool, run.wall_s
-            ));
+            )?;
         }
 
-        let mut headers = vec![
-            "query".to_string(),
-            "target".to_string(),
-            "cut_nail".to_string(),
-            "cut_mmseqs".to_string(),
-        ];
-        let seeded = self.rows.first().is_some_and(|r| r.seeded.is_some());
-        if seeded {
-            headers.push("seeded".to_string());
-        }
-        headers.extend(self.runs.iter().map(|r| r.name.clone()));
-
-        // a domain breakdown is as wide as the pair has domains, so those
-        // columns go on the end where a ragged one costs nothing
-        let dom: Vec<usize> = (0..self.runs.len())
-            .filter(|&i| self.runs[i].tool == Tool::Hmmer)
-            .collect();
-        headers.extend(dom.iter().map(|&i| format!("{}_dom", self.runs[i].name)));
-
-        let cells: Vec<Vec<String>> = self
-            .rows
-            .iter()
-            .map(|r| {
-                let mut row = vec![
-                    r.query.clone(),
-                    r.target.clone(),
-                    score(r.cut_nail),
-                    score(r.cut_mmseqs),
-                ];
-                if seeded {
-                    row.push(match r.seeded {
-                        Some(true) => "y".to_string(),
-                        Some(false) => "n".to_string(),
-                        None => dash(),
-                    });
-                }
-                row.extend(r.scores.iter().map(|s| score(*s)));
-                row.extend(dom.iter().map(|&i| domains(&r.domains[i])));
-                row
-            })
-            .collect();
-
-        // the domain list is as wide as the pair has domains, so like argv in
-        // manifest.tbl the last column is written as it comes and never padded
-        tbl::write(
-            path,
-            tbl::Table {
-                meta: &meta,
-                headers: &headers,
-                rows: &cells,
-                ragged_last: true,
-            },
-        )
-    }
-
-    /// Reads back what [`Scores::write`] wrote.
-    ///
-    /// The `#= run` lines give the columns and the `#` header says whether a
-    /// `seeded` column sits in front of them, so a row's fields are placed by
-    /// what the file declares rather than by a count agreed on in advance.
-    pub fn read(path: &Path) -> anyhow::Result<Scores> {
-        let file =
-            File::open(path).with_context(|| format!("failed to open {}", path.display()))?;
-
-        let mut query: Option<Size> = None;
-        let mut targets: Vec<(String, Size)> = Vec::new();
-        let mut seed_wall_s: Vec<(String, f64)> = Vec::new();
-        let mut runs: Vec<Run> = Vec::new();
-        let mut seeded_col = false;
-        let mut rows: Vec<Row> = Vec::new();
-
-        for line in BufReader::new(file).lines() {
-            let line = line?;
-
-            if let Some(rest) = line.strip_prefix("#=") {
-                let mut it = rest.split_whitespace();
-                let Some(key) = it.next() else { continue };
-                let f: Vec<&str> = it.collect();
-
-                match key {
-                    "query" => query = Some(size(&f)?),
-                    "target" => targets.push((shard_of(&f)?, size(&f[1..])?)),
-                    "seed" => {
-                        let wall = f.get(1).context("a `#= seed` line wants a wall time")?;
-                        seed_wall_s.push((shard_of(&f)?, wall.parse()?));
-                    }
-                    "run" => runs.push(run(&f)?),
-                    other => bail!("unknown `#= {other}` line in {}", path.display()),
-                }
-                continue;
-            }
-
-            if let Some(rest) = line.strip_prefix('#') {
-                // the header names the columns; the rule under it is dashes
-                let rest = rest.trim_start();
-                if rest.starts_with("query ") {
-                    seeded_col = rest.split_whitespace().any(|h| h == "seeded");
-                }
-                continue;
-            }
-
-            if line.trim().is_empty() {
-                continue;
-            }
-
-            // query, target, both cutoffs, maybe seeded, one per run, then one
-            // domain list per hmmer run. every cell is a single token, the
-            // comma-joined domain lists included.
-            let f: Vec<&str> = line.split_whitespace().collect();
-            let doms = runs.iter().filter(|r| r.tool == Tool::Hmmer).count();
-            let want = 4 + usize::from(seeded_col) + runs.len() + doms;
-            ensure!(
-                f.len() == want,
-                "a row of {} has {} fields, expected {want}",
-                path.display(),
-                f.len()
-            );
-
-            let at = 4 + usize::from(seeded_col);
-            let end = at + runs.len();
-
-            let mut dom = f[end..].iter();
-            let domains = runs
-                .iter()
-                .map(|r| match r.tool {
-                    Tool::Hmmer => parse_domains(dom.next().expect("counted above")),
-                    _ => Ok(Vec::new()),
-                })
-                .collect::<anyhow::Result<Vec<_>>>()?;
-
-            rows.push(Row {
-                query: f[0].to_string(),
-                target: f[1].to_string(),
-                cut_nail: parse_score(f[2])?,
-                cut_mmseqs: parse_score(f[3])?,
-                seeded: match seeded_col {
-                    true => Some(f[4] == "y"),
-                    false => None,
-                },
-                scores: f[at..end]
-                    .iter()
-                    .map(|s| parse_score(s))
-                    .collect::<anyhow::Result<Vec<_>>>()?,
-                domains,
-            });
-        }
-
-        ensure!(!runs.is_empty(), "no `#= run` lines in {}", path.display());
-
-        Ok(Scores {
-            query: query.context("no `#= query` line")?,
-            targets,
-            seed_wall_s,
-            runs,
-            rows,
-        })
+        let names: Vec<&str> = self.runs.iter().map(|run| run.name.as_str()).collect();
+        writeln!(out, "#= pass {}", names.join(" "))
     }
 
     /// Which column is hmmer's, which is what everything else is measured
@@ -476,7 +473,7 @@ impl Scores {
             .runs
             .iter()
             .enumerate()
-            .filter(|(_, r)| r.tool == Tool::Hmmer);
+            .filter(|(_, run)| run.tool == Tool::Hmmer);
 
         let (i, _) = it.next().context("no hmmer run to measure against")?;
         ensure!(it.next().is_none(), "more than one hmmer run");
@@ -484,110 +481,85 @@ impl Scores {
         Ok(i)
     }
 
-    /// What everything is a fraction of: the pairs hmmer found and scored over
-    /// their family's cutoff.
-    pub fn denominator(&self, hmmer: usize) -> usize {
-        self.rows
-            .iter()
-            .filter(|r| r.clears(Tool::Hmmer, r.scores[hmmer]))
-            .count()
+    /// The tools whose score columns the table carries.
+    pub fn tools(&self) -> Vec<Tool> {
+        tools(&self.runs)
     }
 }
 
-impl Row {
-    /// The threshold a run of `tool` is held to on this row's family.
-    pub fn cutoff(&self, tool: Tool) -> Option<f32> {
-        match tool {
-            // hmmer takes nail's, as it does in the calibration
-            Tool::Nail | Tool::Hmmer => self.cut_nail,
-            Tool::Mmseqs => self.cut_mmseqs,
+/// A [`Meta`] as its lines arrive, since a reader meets them one at a time.
+#[derive(Default)]
+pub struct Preamble {
+    query: Option<Size>,
+    targets: Vec<(String, Size)>,
+    cutoffs: Option<PathBuf>,
+    c: Option<usize>,
+    runs: Vec<Run>,
+    pass: Vec<String>,
+}
+
+impl Preamble {
+    /// Take in one `#=` line's key and fields.
+    pub fn absorb(&mut self, key: &str, fields: &[&str]) -> anyhow::Result<()> {
+        match key {
+            "query" => self.query = Some(size(fields)?),
+            "target" => self.targets.push((shard_of(fields)?, size(&fields[1..])?)),
+            "cutoffs" => {
+                let [path, rest @ ..] = fields else {
+                    bail!("a `#= cutoffs` line wants a path");
+                };
+
+                self.cutoffs = Some(PathBuf::from(path));
+                self.c = rest
+                    .iter()
+                    .find_map(|field| field.strip_prefix("c="))
+                    .map(str::parse)
+                    .transpose()?;
+            }
+            "run" => self.runs.push(run(fields)?),
+            "pass" => self.pass = fields.iter().map(|name| name.to_string()).collect(),
+            other => bail!("unknown `#= {other}` line"),
         }
+
+        Ok(())
     }
 
-    /// Whether a score of that tool's counts as a hit here. A pair the tool
-    /// never reported does not, and neither does one whose family it has no
-    /// threshold for -- an unmeasurable pair is not a found one.
-    pub fn clears(&self, tool: Tool, score: Option<f32>) -> bool {
-        match (self.cutoff(tool), score) {
-            (Some(cutoff), Some(score)) => score >= cutoff,
-            _ => false,
-        }
-    }
-
-    /// How many of an hmmer column's domains carry enough of the hit to count
-    /// as their own.
-    ///
-    /// The measure is against the best domain rather than an absolute score:
-    /// what is being asked is whether the hit is one region of the sequence or
-    /// several, and a weak family's several are still several.
-    pub fn domain_count(&self, run: usize) -> usize {
-        /// A tenth of the best domain, which is mgnify's threshold.
-        const SIGNIFICANT: f32 = 0.1;
-
-        let domains = &self.domains[run];
-        let Some(&best) = domains.first() else {
-            return 0;
+    /// The preamble, once the header has been reached.
+    pub fn finish(self) -> anyhow::Result<Meta> {
+        let meta = Meta {
+            query: self.query.context("no `#= query` line")?,
+            targets: self.targets,
+            cutoffs: self.cutoffs.context("no `#= cutoffs` line")?,
+            c: self.c.context("no `c=` on the `#= cutoffs` line")?,
+            runs: self.runs,
         };
 
-        match best > 0.0 {
-            true => domains.iter().filter(|d| *d / best >= SIGNIFICANT).count(),
-            false => domains.len(),
-        }
+        ensure!(!meta.runs.is_empty(), "no `#= run` lines");
+        ensure!(!meta.targets.is_empty(), "no `#= target` lines");
+
+        // the pass string is read by position, so a legend that disagrees with
+        // the runs is a file that cannot be read rather than one to guess at
+        let names: Vec<&str> = meta.runs.iter().map(|run| run.name.as_str()).collect();
+        ensure!(
+            self.pass == names,
+            "`#= pass` names {:?}, the runs are {:?}",
+            self.pass,
+            names
+        );
+
+        Ok(meta)
     }
-}
-
-// ------------------------------------------------------------------- fields
-
-fn dash() -> String {
-    "-".to_string()
 }
 
 /// A shard with no name, from a pipeline that only ever searched one target.
-fn label(shard: &str) -> &str {
+pub fn label(shard: &str) -> &str {
     match shard.is_empty() {
         true => "-",
         false => shard,
     }
 }
 
-fn score(s: Option<f32>) -> String {
-    match s {
-        Some(s) => format!("{s:.1}"),
-        None => dash(),
-    }
-}
-
-fn parse_score(s: &str) -> anyhow::Result<Option<f32>> {
-    match s {
-        "-" => Ok(None),
-        s => Ok(Some(s.parse().with_context(|| format!("bad score {s:?}"))?)),
-    }
-}
-
-/// Every domain score on one line, comma-joined so the whole list is a single
-/// whitespace token however long it gets.
-fn domains(scores: &[f32]) -> String {
-    match scores {
-        [] => dash(),
-        scores => scores
-            .iter()
-            .map(|s| format!("{s:.1}"))
-            .collect::<Vec<_>>()
-            .join(","),
-    }
-}
-
-fn parse_domains(s: &str) -> anyhow::Result<Vec<f32>> {
-    match s {
-        "-" => Ok(Vec::new()),
-        s => s
-            .split(',')
-            .map(|x| x.parse().with_context(|| format!("bad domain score {x:?}")))
-            .collect(),
-    }
-}
-
-/// The shard a `#= target` or `#= seed` line is about, back from its label.
+/// The shard a `#= target` line is about, back from its label.
 fn shard_of(fields: &[&str]) -> anyhow::Result<String> {
     match *fields.first().context("a metadata line names no shard")? {
         "-" => Ok(String::new()),
@@ -623,249 +595,5 @@ fn run(fields: &[&str]) -> anyhow::Result<Run> {
             .filter_map(|p| p.split_once('='))
             .map(|(k, v)| (k.to_string(), v.to_string()))
             .collect(),
-    })
-}
-
-// ------------------------------------------------------------------- ledger.tbl
-
-/// The columns a pipeline ran, in the order it declared them.
-///
-/// The grouping and the wall clock are [`util::ledger`]' work; what is left here
-/// is which tool a column's name belongs to, since that is what says how to
-/// read its table.
-fn runs(ran: &Ledger) -> anyhow::Result<Vec<Column>> {
-    ran.columns()?
-        .into_iter()
-        .map(|column| {
-            Ok(Column {
-                run: Run {
-                    name: column.name,
-                    tool: Tool::parse(&column.tool)?,
-                    wall_s: column.wall_s,
-                    params: column.params,
-                },
-                shards: column.shards,
-            })
-        })
-        .collect()
-}
-
-fn shard_path(targets: &Path, shard: &str) -> std::path::PathBuf {
-    match shard.is_empty() {
-        // the one target a pipeline with no shard axis searched
-        true => targets.join("target.fa"),
-        false => targets.join(format!("{shard}.fa")),
-    }
-}
-
-// ------------------------------------------------------------------ domains
-
-/// The domain scores behind each of one hmmer run's hits, best first.
-///
-/// Only hmmer breaks a hit down this way, so this is the one thing a run of it
-/// carries that a run of anything else does not. A pair in the hit table but
-/// not here simply has no breakdown.
-fn read_domains(path: &Path) -> anyhow::Result<HashMap<Pair, Vec<f32>>> {
-    let dom =
-        HmmerDomHits::open(path).with_context(|| format!("failed to read {}", path.display()))?;
-
-    // one row per domain, so the rows of a pair are its breakdown
-    let mut out: HashMap<Pair, Vec<f32>> = HashMap::new();
-    for hit in dom.iter() {
-        out.entry((hit.query.clone(), hit.target.clone()))
-            .or_default()
-            .push(hit.score);
-    }
-
-    // best first, so the one a threshold would see is in front and the rest
-    // read as the tail behind it
-    for domains in out.values_mut() {
-        domains.sort_by(|x, y| y.total_cmp(x));
-    }
-
-    Ok(out)
-}
-
-/// The (query, target) pairs `--seeds-out` wrote: nail's own prf/seq column
-/// order, whitespace-separated, no header. `None` when the pipeline kept none.
-///
-/// A sequence lives in exactly one shard, so the shards' pairs are disjoint
-/// and the union of them is the whole seed set.
-fn seeds(results: &Path, shards: &[String]) -> anyhow::Result<Option<HashSet<Pair>>> {
-    let mut out: Option<HashSet<Pair>> = None;
-
-    for shard in shards {
-        let path = manifest::seeds_path(results, shard);
-        if !path.is_file() {
-            continue;
-        }
-
-        let file =
-            File::open(&path).with_context(|| format!("failed to open {}", path.display()))?;
-        let pairs = out.get_or_insert_with(HashSet::new);
-
-        for line in BufReader::new(file).lines() {
-            let line = line?;
-            let mut fields = line.split_whitespace();
-            let query = fields.next().context("a seed row has no query")?;
-            let target = fields.next().context("a seed row has no target")?;
-            pairs.insert((query.to_string(), target.to_string()));
-        }
-    }
-
-    Ok(out)
-}
-
-// ------------------------------------------------------------------ cutoffs
-
-pub struct Cutoffs {
-    pub nail: HashMap<String, f32>,
-    pub mmseqs: HashMap<String, f32>,
-}
-
-impl Cutoffs {
-    /// The threshold one tool's score is held against for one family.
-    ///
-    /// hmmer takes nail's: nail approximates hmmer's model, and the
-    /// calibration learns no threshold of hmmer's own that anything reads.
-    fn get(&self, tool: Tool, family: &str) -> Option<f32> {
-        match tool {
-            Tool::Nail | Tool::Hmmer => self.nail.get(family).copied(),
-            Tool::Mmseqs => self.mmseqs.get(family).copied(),
-        }
-    }
-}
-
-/// One score per family per tool, out of the decoys the calibration scored it
-/// against.
-///
-/// A zero means the family had fewer decoys than the file has slots, so that
-/// tool learned nothing about it and gets no cutoff. The two tools are kept
-/// apart rather than dropped together: a family nail has a threshold for is
-/// still measurable against nail, whatever mmseqs made of it.
-///
-/// `cutoffs.tbl` names its columns `<tool>_1..<tool>_5` and `<tool>_n`, so the
-/// column to read is found by name rather than by counting -- which is what
-/// lets the calibration add a tool without moving anything here.
-fn cutoffs(path: &Path, c: usize) -> anyhow::Result<Cutoffs> {
-    let text = std::fs::read_to_string(path)
-        .with_context(|| format!("failed to read {}", path.display()))?;
-
-    let headers: Vec<&str> = text
-        .lines()
-        .find_map(|line| {
-            let rest = line.strip_prefix('#')?.trim_start();
-            (!rest.starts_with('-')).then(|| rest.split_whitespace().collect())
-        })
-        .with_context(|| format!("no header in {}", path.display()))?;
-
-    let column = |tool: &str| -> anyhow::Result<usize> {
-        let name = format!("{tool}_{}", c + 1);
-        headers
-            .iter()
-            .position(|h| *h == name)
-            .with_context(|| format!("{} has no {name} column", path.display()))
-    };
-
-    let (nail_at, mmseqs_at) = (column("nail")?, column("mmseqs")?);
-
-    let mut out = Cutoffs {
-        nail: HashMap::new(),
-        mmseqs: HashMap::new(),
-    };
-
-    for line in text.lines() {
-        if line.starts_with('#') || line.trim().is_empty() {
-            continue;
-        }
-
-        let cells: Vec<&str> = line.split_whitespace().collect();
-        let Some(family) = cells.first() else {
-            continue;
-        };
-
-        let score = |at: usize| cells.get(at).and_then(|x| x.parse::<f32>().ok());
-
-        // a zero is a family that tool learned nothing about
-        if let Some(s) = score(nail_at).filter(|s| *s > 0.0) {
-            out.nail.insert(family.to_string(), s);
-        }
-        if let Some(s) = score(mmseqs_at).filter(|s| *s > 0.0) {
-            out.mmseqs.insert(family.to_string(), s);
-        }
-    }
-
-    if out.nail.is_empty() && out.mmseqs.is_empty() {
-        bail!("no usable cutoffs at index {c} in {}", path.display());
-    }
-
-    Ok(out)
-}
-
-// -------------------------------------------------------------------- sizes
-
-/// How big the query set is: models, and the positions they hold.
-///
-/// Counted here rather than remembered from the build, so it describes the
-/// files that are present rather than the ones that were drawn.
-fn hmm_size(path: &Path) -> anyhow::Result<Size> {
-    let bytes = std::fs::metadata(path)
-        .with_context(|| format!("failed to stat {}", path.display()))?
-        .len();
-
-    let models =
-        IndexedHmm::open(path).with_context(|| format!("failed to index {}", path.display()))?;
-
-    Ok(Size {
-        count: models.len(),
-        // LENG is the query axis of a search's matrix, and so the honest
-        // measure of how much work the set is
-        residues: models.iter().map(|m| m.header.leng as u64).sum(),
-        bytes,
-    })
-}
-
-/// Records and residues in a fasta: everything that isn't a header line or
-/// whitespace.
-///
-/// Residues is the honest unit, since neither families nor sequences are
-/// uniform amounts of work.
-fn fasta_size(path: &Path) -> anyhow::Result<Size> {
-    let bytes = std::fs::metadata(path)
-        .with_context(|| format!("failed to stat {}", path.display()))?
-        .len();
-
-    let file = File::open(path).with_context(|| format!("failed to open {}", path.display()))?;
-    let mut reader = BufReader::new(file);
-
-    let mut buf = [0u8; 1 << 16];
-    let mut count = 0usize;
-    let mut residues = 0u64;
-    let mut in_header = false;
-
-    loop {
-        let n = reader.read(&mut buf)?;
-        if n == 0 {
-            break;
-        }
-
-        for &b in &buf[..n] {
-            match b {
-                b'>' => {
-                    in_header = true;
-                    count += 1;
-                }
-                b'\n' => in_header = false,
-                _ if in_header => {}
-                _ if b.is_ascii_whitespace() => {}
-                _ => residues += 1,
-            }
-        }
-    }
-
-    Ok(Size {
-        count,
-        residues,
-        bytes,
     })
 }

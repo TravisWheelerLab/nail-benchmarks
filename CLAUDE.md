@@ -55,6 +55,8 @@ whichever `hmmsearch` was built for this repo.
   `manifest.tbl`.
 - `libsail` reads and writes the formats: FASTA, Stockholm, p7hmm, and the hit
   tables nail, HMMER, MMseqs2 and BLAST produce.
+- `tabl` writes the padded, `#`-headed tables. It is not published: the
+  workspace takes it as a path dependency on a sibling checkout, `../tabl`.
 - `feisty` sits in `[workspace.dependencies]` and no member uses it.
 
 ## The shape a benchmark has
@@ -136,9 +138,21 @@ MMseqs2's prefilter sensitivity. `cloud-search` seeds once, then searches every
 only thing moving. `hit-loss` follows where the hits HMMER finds get lost.
 `search-size` times every tool over every rung of both ladders.
 
-`mgy parse scores` reads any of them into `scores.tbl`, which holds one row per
-query/target pair and one column per run. `summary` and `funnel` are groupings
-over that.
+`mgy build` writes `sizes.tbl` beside the target shards as it deals them:
+counting a thousand shards afterwards is the whole deal read again, and the
+count is only a metadata line. `mgy build sizes` writes one for a set dealt
+before that.
+
+`mgy parse scores` reads recall into `scores.tbl`: one row per query/target
+pair, one score column per tool, and a `pass` string holding one character per
+run. It collects each shard on its own and writes it as a block in shard order,
+so the file comes out the same bytes however many threads it ran; `--threads`
+and `--mem` size that. `summary` is one streaming pass over the result.
+
+Each of the other two pipelines gets its own table, its own `tabl` schema and
+its own reader when it is built; the shard-parallel collector underneath is
+shared. Until hit-loss has one, `funnel` reads the older shape and nothing
+writes it.
 
 Two things sit outside the shape above. `mgy cutoffs` is a calibration rather
 than a benchmark: five stages that reverse the targets, recruit decoys per
@@ -150,6 +164,14 @@ elsewhere, out of the `.time` files that came back with them, which turns a
 search run on a cluster into an ordinary pipeline directory.
 `benchmarks/mgy/scripts/rename-old-results.sh` renames the older harness's
 files into the names it expects.
+
+Two dev tools sit beside all of that and belong to no pipeline.
+`src/bin/synth_results.rs` writes a recall directory of the right shape and
+size without a search behind it, so `parse scores` can be timed against one the
+size of a real run; it is the crate's second binary, and the shim does not run
+it. `scripts/compare-scores.py` reduces a `scores.tbl` and one in the older
+shape to the same sets of pairs, tool scores and pass flags, and says where
+they differ.
 
 ## benchmarks/pid
 
@@ -187,18 +209,22 @@ rsync -a --delete \
   --exclude '.git/' --exclude 'target/' --exclude 'tmp-claude/' \
   --exclude '/data' --exclude '/tools' --exclude '/benchmarks/pid/profmark' \
   --exclude 'outputs/' --exclude 'tmp/' \
+  --exclude '/benchmarks/mgy/inputs/' --exclude '/benchmarks/pid/inputs/' \
   "$ROOT/" "$SB/"
 
 ln -sfn "$ROOT/data" "$SB/data"
 ln -sfn "$ROOT/tools" "$SB/tools"
 ln -sfn "$ROOT/benchmarks/pid/profmark" "$SB/benchmarks/pid/profmark"
+
+# the workspace names tabl `../tabl`, which from the copy is this
+ln -sfn "$(dirname "$ROOT")/tabl" "$ROOT/tmp-claude/tabl"
 ```
 
 Run that before testing anything, and again after every edit: a copy goes
 stale, and a result from stale source is worth nothing. `--delete` is what
 keeps it current, and it drops what was deleted from the source without
-touching the sandbox's own `outputs/`, `target/` or links, since rsync leaves
-excluded paths on the receiving side alone. The three link paths are excluded
+touching the sandbox's own `inputs/`, `outputs/`, `target/` or links, since
+rsync leaves excluded paths on the receiving side alone. The three link paths are excluded
 without a trailing slash on purpose: a pattern ending in `/` matches only a
 directory, and on the receiving side these are symlinks, so `--delete` removes
 them. It copies uncommitted edits, which is the point: what wants testing is
@@ -215,9 +241,16 @@ seconds.
 The links are the two directories worth 4.3G between them, plus the profmark
 split, which is expensive for the reasons the pid section gives. The sandbox
 reads all three; nothing in it should write them, so do not run `make data` or
-`make tools` from the copy. The generated inputs under `benchmarks/*/inputs/`
-are copied rather than linked, which is what makes `mgy build` and `pid build`
-safe to run there.
+`make tools` from the copy. The fourth is source rather than data: `tabl` is
+built from wherever that link points, so an edit to it reaches the sandbox
+without a sync.
+
+mgy's and pid's `inputs/` are excluded for the same reason `outputs/` is: a
+build writes them and nothing commits them, so the copy builds its own. Without
+the exclude, `--delete` removes the set a `mgy build` in the sandbox just
+wrote, since the real tree has nothing there to match it. long-seqs' `inputs/`
+are two checked-in symlinks into `data/`, so they are copied like any other
+tracked file.
 
 Edit in the real tree and re-sync, never in the sandbox: an edit in the copy is
 gone at the next sync. To check an analysis against a run that finished

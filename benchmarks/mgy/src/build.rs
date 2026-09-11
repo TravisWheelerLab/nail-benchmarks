@@ -33,6 +33,7 @@ use util::tools::{mgnify, mmseqs, pfam_hmm, pfam_sto};
 
 use crate::cut;
 use crate::inputs;
+use crate::scores;
 
 /// Extensions in the MGnify directory treated as fasta.
 const FASTA_EXTENSIONS: [&str; 2] = ["fa", "fasta"];
@@ -43,13 +44,49 @@ pub enum Cmd {
     Fixed(FixedArgs),
     /// Nested rungs on both axes, each a prefix of the next one up.
     Ladder(LadderArgs),
+    /// Count a set of target shards again, for one dealt before `sizes.tbl`.
+    Sizes(SizesArgs),
 }
 
 pub fn main(cmd: Cmd) -> anyhow::Result<()> {
     match cmd {
         Cmd::Fixed(args) => fixed(args),
         Cmd::Ladder(args) => ladder(args),
+        Cmd::Sizes(args) => sizes(args),
     }
+}
+
+#[derive(Parser, Debug)]
+pub struct SizesArgs {
+    /// The directory holding the shards. Defaults to the shared one
+    #[arg(long, value_name = "dir")]
+    targets: Option<std::path::PathBuf>,
+}
+
+/// Count what is in a set of shards, for a set dealt before the deal wrote it
+/// down.
+///
+/// The sizes belong to the shards rather than to a run, so this is `build`'s
+/// and not `parse`'s: it is finishing a set, not reading one.
+fn sizes(args: SizesArgs) -> anyhow::Result<()> {
+    let targets = args.targets.unwrap_or_else(inputs::fixed::targets);
+
+    let shards: Vec<String> = inputs::shards(&targets)?
+        .into_iter()
+        .map(|(n, _)| n.to_string())
+        .collect();
+
+    let rows = scores::sizes::measure(&targets, &shards)?;
+
+    scores::sizes::write(&targets, &rows)?;
+
+    println!(
+        "wrote {} ({} shards)",
+        scores::sizes::path(&targets).display(),
+        rows.len()
+    );
+
+    Ok(())
 }
 
 // -------------------------------------------------------------------- fixed
@@ -158,15 +195,44 @@ fn deal(
     let mut rng = StdRng::seed_from_u64(seed);
     let drawn = seqs.permute_with(&mut rng).take(n_seqs);
 
+    // counted as they are written: reading a thousand shards back to find out
+    // how big they are is the whole deal again
+    let mut counted = vec![(0usize, 0u64); shards];
+
     for (i, rec) in drawn.iter().enumerate() {
-        rec.write_to(&mut writers[i % shards], DEFAULT_LINE_WIDTH)?;
+        let at = i % shards;
+        rec.write_to(&mut writers[at], DEFAULT_LINE_WIDTH)?;
+
+        counted[at].0 += 1;
+        counted[at].1 += rec.seq.len() as u64;
     }
 
     for mut w in writers {
         w.flush()?;
     }
 
-    Ok(())
+    let rows = counted
+        .into_iter()
+        .enumerate()
+        .map(|(at, (count, residues))| {
+            let shard = (at + 1).to_string();
+            let path = out_dir.join(format!("{shard}.fa"));
+            let bytes = std::fs::metadata(&path)
+                .with_context(|| format!("failed to stat {}", path.display()))?
+                .len();
+
+            Ok((
+                shard,
+                scores::Size {
+                    count,
+                    residues,
+                    bytes,
+                },
+            ))
+        })
+        .collect::<anyhow::Result<Vec<_>>>()?;
+
+    scores::sizes::write(out_dir, &rows)
 }
 
 // ------------------------------------------------------------------- ladder

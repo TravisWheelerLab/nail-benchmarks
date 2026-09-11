@@ -1,10 +1,9 @@
-//! Turning any finished pipeline into the one table, and that table into the
-//! numbers.
+//! Turning a finished pipeline into a table, and that table into the numbers.
 //!
-//! There is nothing per-pipeline in here. What the columns are comes out of
-//! `manifest.tbl`, so `parse scores recall` and `parse scores cloud-search`
-//! are the same code pointed at different directories -- and the analyses that
-//! follow are the same code again, pointed at what it wrote.
+//! `scores` and `summary` are recall's. The shard-parallel collector under
+//! them is not -- any pipeline's results go through it -- but what a row looks
+//! like is a decision each analysis makes for itself, so this is where the
+//! pipelines stop being interchangeable.
 
 use std::path::{Path, PathBuf};
 
@@ -13,7 +12,7 @@ use clap::{Parser, Subcommand};
 
 use crate::analyze;
 use crate::inputs;
-use crate::scores::{Inputs, Scores};
+use crate::scores::{self, Scores};
 
 #[derive(Subcommand)]
 pub enum Cmd {
@@ -28,7 +27,7 @@ pub enum Cmd {
 pub fn main(cmd: Cmd) -> anyhow::Result<()> {
     match cmd {
         Cmd::Scores(args) => scores(args),
-        Cmd::Summary(args) => derive(args, "summary.tbl", analyze::summary),
+        Cmd::Summary(args) => summary(args),
         Cmd::Funnel(args) => derive(args, "funnel.tbl", analyze::funnel),
     }
 }
@@ -61,6 +60,15 @@ pub struct ScoresArgs {
 
     #[arg(short, long, value_name = "scores.tbl")]
     out: Option<PathBuf>,
+
+    /// How many shards to collect at once. Defaults to the machine's cores
+    #[arg(long, value_name = "N")]
+    threads: Option<usize>,
+
+    /// How many gigabytes the collectors may hold between them. Defaults to
+    /// half of what the machine has
+    #[arg(long, value_name = "GB")]
+    mem: Option<f64>,
 }
 
 fn scores(args: ScoresArgs) -> anyhow::Result<()> {
@@ -76,23 +84,32 @@ fn scores(args: ScoresArgs) -> anyhow::Result<()> {
 
     let out = args.out.unwrap_or_else(|| dir.join("scores.tbl"));
 
-    let scores = Scores::collect(
-        &dir,
-        Inputs {
-            query_hmm: &query_hmm,
-            targets: &targets,
-        },
-        &cutoffs,
-        args.c,
-    )?;
+    let threads = match args.threads {
+        Some(threads) => threads,
+        None => std::thread::available_parallelism().map(|n| n.get()).unwrap_or(1),
+    };
 
-    scores.write(&out)?;
+    let mem = match args.mem {
+        Some(gb) => (gb * (1u64 << 30) as f64) as u64,
+        None => scores::write::ram() / 2,
+    };
+
+    let count = scores::write::collect(scores::write::Args {
+        dir: &dir,
+        query_hmm: &query_hmm,
+        targets: &targets,
+        cutoffs: &cutoffs,
+        c: args.c,
+        out: &out,
+        threads,
+        mem,
+    })?;
 
     println!(
-        "wrote {} ({} pairs across {} runs)",
+        "wrote {} ({} rows out of {} hits)",
         out.display(),
-        scores.rows.len(),
-        scores.runs.len()
+        count.rows,
+        count.hits
     );
 
     Ok(())
@@ -107,6 +124,43 @@ pub struct TableArgs {
 
     #[arg(short, long, value_name = "out.tbl")]
     out: Option<PathBuf>,
+}
+
+fn summary(args: TableArgs) -> anyhow::Result<()> {
+    let path = table(&args)?;
+    let out = beside(&path, args.out, "summary.tbl")?;
+
+    analyze::summary(&path, &out)?;
+
+    println!("wrote {}", out.display());
+    Ok(())
+}
+
+/// Where a `scores.tbl` is, given either as a path or by pipeline.
+fn table(args: &TableArgs) -> anyhow::Result<PathBuf> {
+    let path = match PathBuf::from(&args.scores) {
+        path if path.is_file() => path,
+        _ => pipeline(&args.scores)?.join("scores.tbl"),
+    };
+
+    if !path.is_file() {
+        bail!(
+            "no scores.tbl at {}; run `mgy parse scores` first",
+            path.display()
+        );
+    }
+
+    Ok(path)
+}
+
+fn beside(path: &Path, out: Option<PathBuf>, name: &str) -> anyhow::Result<PathBuf> {
+    match out {
+        Some(path) => Ok(path),
+        None => Ok(path
+            .parent()
+            .context("scores.tbl has no directory")?
+            .join(name)),
+    }
 }
 
 /// Reads scores.tbl back and hands it to one of the analyses.

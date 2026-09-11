@@ -1,9 +1,8 @@
-//! The analyses, which are all groupings over scores.tbl.
+//! The analyses, which are groupings over a table of pairs.
 //!
-//! Nothing in here reads a results file or knows which pipeline produced the
-//! table. A summary is a count per column, a funnel is a count per checkpoint;
-//! both are held to the same denominator, which is what hmmer found and scored
-//! over its family's cutoff.
+//! Nothing in here reads a results file. A summary is a count per run, a
+//! funnel is a count per checkpoint; both are held to the same denominator,
+//! which is what hmmer found and scored over its family's cutoff.
 //!
 //! They are separate from `parse` because reading every results table is the
 //! expensive half and the half least likely to change: a different statistic
@@ -16,44 +15,68 @@ use anyhow::ensure;
 
 use util::tbl;
 
-use crate::scores::{Scores, Tool};
+use crate::scores::read::Reader;
+use crate::scores::{self, Scores, Tool};
 
 /// What every run found, and what it cost.
 ///
-/// One row per column of scores.tbl, with each run's own settings carried
-/// across as columns -- so the same table is cloud-search's (A, B) surface,
-/// recall's sensitivity per prefilter setting, and the recall-against-runtime
-/// points, depending only on what the pipeline swept.
-pub fn summary(scores: &Scores, out: &Path) -> anyhow::Result<()> {
-    let hmmer = scores.hmmer()?;
+/// One pass over `scores.tbl`, counting per run: what it reported over the
+/// cutoff, how much of that hmmer also found, and how much of that hmmer read
+/// as one domain rather than several. Nothing is held but the counters.
+pub fn summary(path: &Path, out: &Path) -> anyhow::Result<()> {
+    let mut scores = Reader::open(path)?;
 
-    let truth = scores.denominator(hmmer);
+    let hmmer = scores.meta.hmmer()?;
+    let runs = scores.meta.runs.len();
+
+    let mut found = vec![0usize; runs];
+    let mut hits = vec![0usize; runs];
+    let mut hits_sd = vec![0usize; runs];
+    let (mut truth, mut truth_sd) = (0usize, 0usize);
+    let mut rows = 0u64;
+
+    while let Some(row) = scores.next()? {
+        rows += 1;
+
+        let true_hit = row.passed(hmmer);
+
+        // a hit hmmer breaks into one region is a different question from one
+        // it breaks into several: the tools disagree most about the second
+        let single = true_hit && row.domain_count() == 1;
+
+        if true_hit {
+            truth += 1;
+            truth_sd += usize::from(single);
+        }
+
+        for run in 0..runs {
+            if !row.passed(run) {
+                continue;
+            }
+
+            found[run] += 1;
+
+            // held to hmmer as well, so a run is credited for what it agreed
+            // with rather than for everything it scored highly
+            if true_hit {
+                hits[run] += 1;
+                hits_sd[run] += usize::from(single);
+            }
+        }
+    }
+
     ensure!(
         truth > 0,
         "hmmer found nothing that clears a cutoff; there is nothing to measure against"
     );
 
-    // a hit hmmer breaks into one region is a different question from one it
-    // breaks into several: the tools disagree most about the second kind
-    let single: Vec<bool> = scores
-        .rows
-        .iter()
-        .map(|r| r.domain_count(hmmer) == 1)
-        .collect();
-
-    let truth_sd = scores
-        .rows
-        .iter()
-        .zip(&single)
-        .filter(|(r, sd)| **sd && r.clears(Tool::Hmmer, r.scores[hmmer]))
-        .count();
-
     // every setting any run recorded, so a pipeline that swept two knobs gets
     // two columns and one that swept none gets none
     let keys: BTreeSet<&str> = scores
+        .meta
         .runs
         .iter()
-        .flat_map(|r| r.params.keys())
+        .flat_map(|run| run.params.keys())
         .map(String::as_str)
         .collect();
 
@@ -66,29 +89,11 @@ pub fn summary(scores: &Scores, out: &Path) -> anyhow::Result<()> {
     );
 
     let cells: Vec<Vec<String>> = scores
+        .meta
         .runs
         .iter()
         .enumerate()
         .map(|(i, run)| {
-            let mut found = 0usize;
-            let mut hits = 0usize;
-            let mut hits_sd = 0usize;
-
-            for (row, &sd) in scores.rows.iter().zip(&single) {
-                if !row.clears(run.tool, row.scores[i]) {
-                    continue;
-                }
-
-                found += 1;
-
-                // held to hmmer as well, so a run is credited for what it
-                // agreed with rather than for everything it scored highly
-                if row.clears(Tool::Hmmer, row.scores[hmmer]) {
-                    hits += 1;
-                    hits_sd += usize::from(sd);
-                }
-            }
-
             let mut cells = vec![run.name.clone(), run.tool.to_string()];
             cells.extend(keys.iter().map(|k| match run.params.get(*k) {
                 Some(value) => value.clone(),
@@ -96,11 +101,11 @@ pub fn summary(scores: &Scores, out: &Path) -> anyhow::Result<()> {
             }));
             cells.extend([
                 format!("{:.4}", run.wall_s),
-                found.to_string(),
-                hits.to_string(),
-                format!("{:.4}", frac(hits, truth)),
-                hits_sd.to_string(),
-                format!("{:.4}", frac(hits_sd, truth_sd)),
+                found[i].to_string(),
+                hits[i].to_string(),
+                format!("{:.4}", frac(hits[i], truth)),
+                hits_sd[i].to_string(),
+                format!("{:.4}", frac(hits_sd[i], truth_sd)),
             ]);
 
             cells
@@ -110,11 +115,52 @@ pub fn summary(scores: &Scores, out: &Path) -> anyhow::Result<()> {
     tbl::write(
         out,
         tbl::Table {
-            meta: &meta(scores, hmmer, truth),
+            meta: &preamble(&scores.meta, truth, rows),
             headers: &headers,
             rows: &cells,
             ragged_last: false,
         },
+    )
+}
+
+/// What was searched, what the fractions are fractions of, and the two times
+/// the figures use as reference lines.
+fn preamble(meta: &scores::Meta, truth: usize, rows: u64) -> String {
+    let (mut count, mut residues, mut bytes) = (0usize, 0u64, 0u64);
+    for (_, size) in &meta.targets {
+        count += size.count;
+        residues += size.residues;
+        bytes += size.bytes;
+    }
+
+    let hmmer = meta
+        .runs
+        .iter()
+        .find(|run| run.tool == Tool::Hmmer)
+        .map(|run| run.wall_s)
+        .unwrap_or_default();
+
+    format!(
+        "# query  {:>9} families  {:>12} residues  {:>12} bytes\n\
+         # target {:>9} seqs      {:>12} residues  {:>12} bytes\n\
+         # pairs  {:>9} rows      {:>12} runs\n\
+         # hmmer  {:>9} hits      {:>12.4} wall_s\n\
+         # seed   {:>9}           {:>12} wall_s\n\
+         #\n",
+        meta.query.count,
+        meta.query.residues,
+        meta.query.bytes,
+        count,
+        residues,
+        bytes,
+        rows,
+        meta.runs.len(),
+        truth,
+        hmmer,
+        "",
+        // recall does not seed: nail's prefilter is part of its search, and
+        // there is no stage of its own to time
+        "-",
     )
 }
 

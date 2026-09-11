@@ -10,9 +10,11 @@ path = "src/main.rs"
 [dependencies]
 libsail = { workspace = true }
 michi = { workspace = true }
+tabl = { workspace = true }
 util = { workspace = true }
 
 anyhow = { workspace = true }
 clap = { workspace = true }
+memchr = { workspace = true }
 rand = { workspace = true }
 rayon = { workspace = true }
