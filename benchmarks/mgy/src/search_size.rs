@@ -77,7 +77,7 @@ pub fn main(args: Args) -> anyhow::Result<()> {
 
     let mut pl = PipelineBuilder::new().step(dirs.mkdir());
     for split in &splits {
-        pl = pl.step(split.step());
+        pl = pl.step(split.step(&[]));
     }
 
     for &t in &targets {

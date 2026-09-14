@@ -173,6 +173,8 @@ fn ledger(dir: &Path, shards: &[String]) -> anyhow::Result<()> {
                 stage: String::new(),
                 params: params(name),
                 wall_s: Some(1.0),
+                cpu_s: None,
+                max_rss_kb: None,
             })
         })
         .collect();

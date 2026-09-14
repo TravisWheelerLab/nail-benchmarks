@@ -27,6 +27,16 @@ pub const HMMER_CPU: usize = 2;
 /// Every tool reports down to here, so they can be compared.
 pub const EVALUE: &str = "10";
 
+/// The stage the query split belongs to.
+//
+// no table and no search, but splitting all of Pfam takes long
+// enough that a run omitting it does not account for its own
+// wall clock
+const SPLIT: &str = "split";
+
+/// The stage building mmseqs' target database belongs to.
+const CREATEDB: &str = "createdb";
+
 /// The stage mmseqs' table conversion belongs to.
 //
 // a stage rather than a run: what a column cost is the search that produced
@@ -109,10 +119,13 @@ impl Split {
 
     /// Rust in place of a command, so it is a closure step. Whatever a previous
     /// run left in there would be searched as if it belonged.
-    pub fn step(&self) -> Step {
+    ///
+    /// `extra` is whatever tells one split from another, for a pipeline that
+    /// cuts up more than one query set.
+    pub fn step(&self, extra: &[(&str, String)]) -> Step {
         let (query, dir, jobs) = (self.query.clone(), self.dir.clone(), self.parts.len());
 
-        Step::from_closures([Closure::new("split", move || {
+        let closure = Closure::new("split", move || {
             std::fs::remove_dir_all(&dir).ok();
             let written = split::write_splits(&query, Kind::Hmm, jobs, &dir)?;
 
@@ -127,9 +140,32 @@ impl Split {
             );
 
             Ok(())
-        })])
-        .name("split")
+        })
+        .field(manifest::STAGE, SPLIT);
+
+        let closure = extra
+            .iter()
+            .fold(closure, |closure, (key, value)| closure.field(*key, value));
+
+        Step::from_closures([closure]).name("split")
     }
+}
+
+/// The mmseqs database a search reads its targets out of.
+pub fn createdb(mmseqs: &Path, target: &Path, db: &Path, shard: &str, threads: usize) -> Cmd {
+    Cmd::new(mmseqs)
+        .name("createdb")
+        .sub("createdb")
+        // mmseqs takes every core it can find unless told otherwise, so the
+        // setup around a search is held to the same count as the search itself
+        .arg("--threads", threads)
+        .path(target)
+        .path(db)
+        // a stage, not a run: charging database construction to
+        // a search would report the tool as slower than it is,
+        // and dropping it would lose wall clock the pipeline paid
+        .field(manifest::STAGE, CREATEDB)
+        .field(manifest::SHARD, shard)
 }
 
 /// One hmmer run over one shard: the query's parts searched together, then
@@ -202,15 +238,23 @@ pub fn hmmer(
                 )
                 .name("tbl"),
             ),
-            cat(
-                (0..parts.len()).map(|i| scratch.join(format!("{i}.domtbl"))),
-                manifest::dom_path(&dirs.results, name, shard_name),
-            )
-            .name("domtbl"),
+            fields(
+                cat(
+                    (0..parts.len()).map(|i| scratch.join(format!("{i}.domtbl"))),
+                    manifest::dom_path(&dirs.results, name, shard_name),
+                )
+                .name("domtbl"),
+            ),
         ])
         .name(format!("cat.{name}.{shard_name}")),
     }
 }
+
+/// The stage a seeding belongs to.
+//
+// a ledger row is keyed by (stage, shard), so a pipeline that
+// seeds several times per shard has to suffix this
+pub const SEED: &str = "seed";
 
 /// One seeding pass, kept so later searches can replay it.
 ///
@@ -224,27 +268,34 @@ pub fn seed(
     query_hmm: &Path,
     target: &Path,
     shard_name: &str,
+    seeds_out: &Path,
     dirs: &Dirs,
     threads: usize,
     mmseqs_s: &str,
     seed_mode: &str,
+    stage: &str,
+    extra: &[(&str, String)],
 ) -> Step {
-    Step::serial([Cmd::new(nail)
+    let cmd = Cmd::new(nail)
         .sub("search")
         .arg("--mmseqs-path", mmseqs)
         .arg("-t", threads)
         .arg("--tmp-dir", dirs.tmp.join("seeding"))
         .arg("--mmseqs-s", mmseqs_s)
         .arg("--seed-mode", seed_mode)
-        .arg("--seeds-out", dirs.seeds(shard_name))
+        .arg("--seeds-out", seeds_out)
         .flag("--only-seed")
         .flag("--allow-overwrite")
         .path(query_hmm)
         .path(target)
-        .field(manifest::STAGE, "seed")
-        .field(manifest::SHARD, shard_name)])
-    .name("seeds")
-    .cores(threads)
+        .field(manifest::STAGE, stage)
+        .field(manifest::SHARD, shard_name);
+
+    let cmd = extra
+        .iter()
+        .fold(cmd, |cmd, (key, value)| cmd.field(*key, value));
+
+    Step::serial([cmd]).name("seeds").cores(threads)
 }
 
 /// One mmseqs search over one target, and the conversion that writes its table.

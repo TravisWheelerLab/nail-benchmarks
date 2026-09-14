@@ -115,8 +115,12 @@ reads those. It is the only command that writes a ledger by hand.
 - `manifest` reads back the table `michi`'s sink wrote, and builds the
   `results/` paths from it.
 - `ledger` holds the shape the analyses read: one row per run per shard, with
-  each run's seconds already totalled. It distills a manifest into that shape,
-  and reads and writes `ledger.tbl`.
+  each run's seconds, core-seconds and peak resident set already totalled. It
+  distills a manifest into that shape, and reads and writes `ledger.tbl`. The
+  three fold differently. Batched commands overlap, so the step takes as long
+  as its slowest and holds every one of their resident sets at once, while
+  serial commands take their total and only ever hold one. Core-seconds are work rather than
+  elapsed time, so they add however the commands were scheduled.
 - `tbl` writes the padded, `#`-headed table every analysis produces.
 - `tools` holds where the binaries and the downloads are.
 - `split` cuts a query set into balanced parts for a batch of jobs.

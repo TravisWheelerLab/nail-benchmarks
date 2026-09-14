@@ -140,17 +140,20 @@ pub fn main(args: Args) -> anyhow::Result<()> {
 
     let mut pl = PipelineBuilder::new()
         .step(dirs.mkdir())
-        .step(split.step())
+        .step(split.step(&[]))
         .step(search::seed(
             &bins.nail,
             &bins.mmseqs,
             &query_hmm,
             &target,
             &args.shard,
+            &dirs.seeds(&args.shard),
             &dirs,
             args.threads,
             MMSEQS_S,
             SEED_MODE,
+            search::SEED,
+            &[],
         ));
 
     let hmmer = search::hmmer(
@@ -172,6 +175,9 @@ pub fn main(args: Args) -> anyhow::Result<()> {
 
         let cmd = Cmd::new(&bins.nail)
             .sub("search")
+            // nail looks for mmseqs at startup even when it is replaying seeds
+            // and will never call it, and nothing here is on PATH
+            .arg("--mmseqs-path", &bins.mmseqs)
             .arg("-t", args.threads)
             .arg("--seeds", dirs.seeds(&args.shard))
             .arg("-E", search::EVALUE)

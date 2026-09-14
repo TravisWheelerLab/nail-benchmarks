@@ -615,6 +615,8 @@ mod tests {
                     stage: String::new(),
                     params: BTreeMap::from([("s".to_string(), "9.0".to_string())]),
                     wall_s: Some(1.5),
+                    cpu_s: None,
+                    max_rss_kb: None,
                 })
             })
             .collect();

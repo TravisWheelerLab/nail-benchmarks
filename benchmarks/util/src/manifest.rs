@@ -62,7 +62,11 @@ fn stem(name: &str, shard: &str, ext: Option<&str>) -> String {
 }
 
 const WALL: &str = "wall(s)";
+const USER: &str = "user(s)";
+const SYS: &str = "sys(s)";
+const RSS: &str = "max_rss";
 const EXIT: &str = "exit";
+const STATUS: &str = "status";
 
 /// What a batched step puts in the step cell of each of its commands.
 const BATCH: &str = "||";
@@ -87,10 +91,45 @@ impl Row {
         self.get(WALL)?.parse().ok()
     }
 
-    /// Whether the command finished successfully. A row with no exit code
-    /// never ran, which is not success.
+    /// The command's cpu time, user plus system. `None` for a closure, which
+    /// runs on a thread and so has no `wait4` to ask.
+    pub(crate) fn cpu_s(&self) -> Option<f64> {
+        let user: f64 = self.get(USER)?.parse().ok()?;
+        let sys: f64 = self.get(SYS)?.parse().ok()?;
+
+        Some(user + sys)
+    }
+
+    /// The high-water mark of the command's resident set, in kilobytes.
+    pub(crate) fn max_rss_kb(&self) -> Option<u64> {
+        let text = self.get(RSS)?;
+        let at = text.find(|c: char| c.is_ascii_alphabetic())?;
+        let (value, unit) = text.split_at(at);
+
+        let kib: f64 = value.parse().ok()?;
+
+        // michi renders this for a person -- `940KiB`, `10.4MiB`,
+        // `1.02GiB` -- so it is parsed back through the unit it
+        // was rendered in
+        let scale = match unit {
+            "KiB" => 1.0,
+            "MiB" => 1024.0,
+            "GiB" => 1024.0 * 1024.0,
+            _ => return None,
+        };
+
+        Some((kib * scale) as u64)
+    }
+
+    /// Whether the command finished successfully.
     pub(crate) fn ok(&self) -> bool {
-        self.get(EXIT) == Some("0")
+        match self.get(EXIT) {
+            Some(exit) => exit == "0",
+            // a closure has no exit code, so it reports through
+            // `status`; without this arm a step of Rust reads as
+            // a step that failed
+            None => self.get(STATUS) == Some("ok"),
+        }
     }
 
     /// The step cell: a label on a step's own summary row, `|` or `||` on the

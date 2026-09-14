@@ -29,6 +29,8 @@ use crate::tbl;
 pub const EVERY_SHARD: &str = "*";
 
 const WALL: &str = "wall(s)";
+const CPU: &str = "cpu(s)";
+const RSS: &str = "max_rss";
 
 /// What the ledger is called, in a pipeline directory.
 pub const FILE: &str = "ledger.tbl";
@@ -53,6 +55,12 @@ pub struct Row {
     /// Seconds, or `None` for a row that says a run covered this shard
     /// without saying what that cost.
     pub wall_s: Option<f64>,
+    /// Core-seconds, which unlike the wall clock do not depend on how many
+    /// commands ran at once. `None` where nothing recorded them.
+    pub cpu_s: Option<f64>,
+    /// The high-water mark of the resident set, in kilobytes: what the run
+    /// needs a machine to have rather than what it cost.
+    pub max_rss_kb: Option<u64>,
 }
 
 impl Row {
@@ -122,7 +130,17 @@ impl Ledger {
                 Some(value) => value,
             };
 
-            let wall = cell(WALL);
+            let number = |key: &str, what: &str| -> anyhow::Result<Option<f64>> {
+                let text = cell(key);
+                match text.is_empty() {
+                    true => Ok(None),
+                    false => Ok(Some(
+                        text.parse()
+                            .with_context(|| format!("{text:?} is not {what}"))?,
+                    )),
+                }
+            };
+
             rows.push(Row {
                 name: cell(manifest::NAME).to_string(),
                 tool: cell(manifest::TOOL).to_string(),
@@ -133,13 +151,9 @@ impl Ledger {
                     .filter(|key| !cell(key).is_empty())
                     .map(|key| ((*key).clone(), cell(key).to_string()))
                     .collect(),
-                wall_s: match wall.is_empty() {
-                    true => None,
-                    false => Some(
-                        wall.parse()
-                            .with_context(|| format!("{wall:?} is not a wall clock time"))?,
-                    ),
-                },
+                wall_s: number(WALL, "a wall clock time")?,
+                cpu_s: number(CPU, "a cpu time")?,
+                max_rss_kb: number(RSS, "a resident set size")?.map(|kb| kb as u64),
             });
         }
 
@@ -169,6 +183,8 @@ impl Ledger {
         ];
         headers.extend(keys.iter().cloned());
         headers.push(WALL.to_string());
+        headers.push(CPU.to_string());
+        headers.push(RSS.to_string());
 
         let rows: Vec<Vec<String>> = self
             .rows
@@ -186,6 +202,14 @@ impl Ledger {
                 }));
                 cells.push(match row.wall_s {
                     Some(wall) => format!("{wall:.2}"),
+                    None => "-".to_string(),
+                });
+                cells.push(match row.cpu_s {
+                    Some(cpu) => format!("{cpu:.2}"),
+                    None => "-".to_string(),
+                });
+                cells.push(match row.max_rss_kb {
+                    Some(rss) => rss.to_string(),
                     None => "-".to_string(),
                 });
                 cells
@@ -207,6 +231,12 @@ impl Ledger {
                 ragged_last: false,
             },
         )
+    }
+
+    /// Every row, runs and stages alike. What a pipeline cost is all of them,
+    /// not only the searches that became columns.
+    pub fn rows(&self) -> impl Iterator<Item = &Row> {
+        self.rows.iter()
     }
 
     pub fn runs(&self) -> impl Iterator<Item = &Row> {
@@ -293,10 +323,13 @@ impl Ledger {
     }
 }
 
+// what the ledger says itself, as against the settings a benchmark asked for.
+// a metric that is not named here is read back as a param, which would put it
+// into a run's identity and make two rows of one run disagree
 fn is_column(header: &str) -> bool {
     matches!(
         header,
-        manifest::NAME | manifest::TOOL | manifest::SHARD | manifest::STAGE | WALL
+        manifest::NAME | manifest::TOOL | manifest::SHARD | manifest::STAGE | WALL | CPU | RSS
     )
 }
 
@@ -393,9 +426,8 @@ struct Group {
     stage: bool,
     tool: String,
     params: BTreeMap<String, String>,
-    /// Seconds per step: the serial commands added up, and the longest of the
-    /// batched ones.
-    steps: BTreeMap<usize, (f64, f64)>,
+    /// What each step of this group cost, by the step's index in the pipeline.
+    steps: BTreeMap<usize, Cost>,
     /// Whether any command of this group finished. A group of nothing but
     /// failures is not a run.
     ran: bool,
@@ -443,22 +475,41 @@ impl Group {
             self.params.insert(key, value);
         }
 
-        let wall = row.wall_s().unwrap_or(0.0);
         let at = self.steps.entry(step).or_default();
+
         match row.batched() {
-            true => at.1 = at.1.max(wall),
-            false => at.0 += wall,
+            // batched commands overlap: the step takes as long as its slowest,
+            // and holds every one of their resident sets at once
+            true => {
+                at.wall = at.wall.max(row.wall_s().unwrap_or(0.0));
+                at.rss_kb += row.max_rss_kb().unwrap_or(0);
+            }
+            // serial commands follow one another: the step takes their total,
+            // and only ever holds one of them
+            false => {
+                at.wall += row.wall_s().unwrap_or(0.0);
+                at.rss_kb = at.rss_kb.max(row.max_rss_kb().unwrap_or(0));
+            }
         }
+
+        // core-seconds are work rather than elapsed time, so they add however
+        // the commands were scheduled
+        at.cpu += row.cpu_s().unwrap_or(0.0);
+        at.timed |= row.cpu_s().is_some();
+        at.measured |= row.max_rss_kb().is_some();
 
         Ok(())
     }
 
     fn row(&self) -> Row {
-        let wall = self
-            .steps
-            .values()
-            .map(|(serial, batch)| serial + batch)
-            .sum();
+        // steps follow one another, so the elapsed times and the work add,
+        // and the peak is whichever step held the most
+        let wall = self.steps.values().map(|step| step.wall).sum();
+        let cpu = self.steps.values().map(|step| step.cpu).sum();
+        let rss = self.steps.values().map(|step| step.rss_kb).max();
+
+        let timed = self.steps.values().any(|step| step.timed);
+        let measured = self.steps.values().any(|step| step.measured);
 
         Row {
             name: match self.stage {
@@ -473,8 +524,23 @@ impl Group {
             },
             params: self.params.clone(),
             wall_s: Some(wall),
+            // a closure has no `wait4`, so a step made only of those reports
+            // nothing rather than reporting zero
+            cpu_s: timed.then_some(cpu),
+            max_rss_kb: measured.then_some(rss.unwrap_or(0)),
         }
     }
+}
+
+/// What one step of a group came to, before the steps are folded together.
+#[derive(Default)]
+struct Cost {
+    wall: f64,
+    cpu: f64,
+    rss_kb: u64,
+    /// Whether anything in the step reported a cpu time, or a resident set.
+    timed: bool,
+    measured: bool,
 }
 
 /// The file [`Ledger::write`] writes, in a pipeline directory.
@@ -652,6 +718,8 @@ mod tests {
                 stage: String::new(),
                 params: BTreeMap::new(),
                 wall_s: None,
+                cpu_s: None,
+                max_rss_kb: None,
             },
             Row {
                 name: "hmmer".to_string(),
@@ -660,6 +728,8 @@ mod tests {
                 stage: String::new(),
                 params: BTreeMap::new(),
                 wall_s: None,
+                cpu_s: None,
+                max_rss_kb: None,
             },
             Row {
                 name: "hmmer".to_string(),
@@ -668,11 +738,117 @@ mod tests {
                 stage: String::new(),
                 params: BTreeMap::new(),
                 wall_s: Some(2043.77),
+                cpu_s: None,
+                max_rss_kb: None,
             },
         ];
 
         let columns = Ledger::from_rows(rows).columns().unwrap();
         assert_eq!(columns[0].wall_s, 2043.77);
         assert_eq!(columns[0].shards, vec!["1".to_string(), "2".to_string()]);
+    }
+
+    /// The three metrics compose differently over one step, because they
+    /// measure different things: two commands that ran at once took as long as
+    /// the slower, did both their work, and held both their memory.
+    #[test]
+    fn a_batched_step_folds_each_metric_its_own_way() {
+        let runs = manifest(
+            "batched-metrics",
+            "# step cmd  name shard tool  wall(s) user(s) sys(s) max_rss exit\n\
+             # ---- ---- ---- ----- ----- ------- ------- ------ ------- ----\n\
+             ||     0    hmm  1     hmmer 10.00   9.00    1.00   400KiB  0\n\
+             ||     1    hmm  1     hmmer 6.00    5.00    1.00   300KiB  0\n",
+        );
+
+        let row = runs.runs().next().unwrap();
+        assert_eq!(row.wall_s, Some(10.00));
+        assert_eq!(row.cpu_s, Some(16.00));
+        assert_eq!(row.max_rss_kb, Some(700));
+    }
+
+    /// Two commands run in series: the step takes their total, does both
+    /// their work, and holds only the larger.
+    #[test]
+    fn a_serial_step_folds_each_metric_its_own_way() {
+        let runs = manifest(
+            "serial",
+            "# step cmd  name shard tool wall(s) user(s) sys(s) max_rss exit\n\
+             # ---- ---- ---- ----- ---- ------- ------- ------ ------- ----\n\
+             |      0    a    1     nail 10.00   9.00    1.00   400KiB  0\n\
+             |      1    a    1     nail 6.00    5.00    1.00   300KiB  0\n",
+        );
+
+        let row = runs.runs().next().unwrap();
+        assert_eq!(row.wall_s, Some(16.00));
+        assert_eq!(row.cpu_s, Some(16.00));
+        assert_eq!(row.max_rss_kb, Some(400));
+    }
+
+    /// A manifest with no `user(s)` or `max_rss` column, and a closure, which
+    /// has no `wait4` to ask.
+    #[test]
+    fn a_command_that_reported_neither_says_so() {
+        let runs = manifest(
+            "untimed",
+            "# step cmd  name shard tool wall(s) exit\n\
+             # ---- ---- ---- ----- ---- ------- ----\n\
+             [1]    nail a    1     nail 0.12    0\n",
+        );
+
+        let row = runs.runs().next().unwrap();
+        assert_eq!(row.wall_s, Some(0.12));
+        assert_eq!(row.cpu_s, None);
+        assert_eq!(row.max_rss_kb, None);
+    }
+
+    /// The metrics are the ledger's own, not params.
+    #[test]
+    fn the_metrics_survive_a_round_trip_without_becoming_params() {
+        let dir = std::env::temp_dir().join(format!("util-ledger-{}-trip", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("ledger.tbl");
+
+        let written = manifest(
+            "trip",
+            "# step cmd  name shard tool s    wall(s) user(s) sys(s) max_rss exit\n\
+             # ---- ---- ---- ----- ---- ---- ------- ------- ------ ------- ----\n\
+             [1]    nail a    1     nail 12.0 0.12    0.20    0.05   512KiB  0\n",
+        );
+        written.write(&path).unwrap();
+
+        let read = Ledger::read(&path).unwrap();
+        let row = read.runs().next().unwrap();
+
+        assert_eq!(row.wall_s, Some(0.12));
+        assert_eq!(row.cpu_s, Some(0.25));
+        assert_eq!(row.max_rss_kb, Some(512));
+
+        // the swept setting is a param; the three metrics are not
+        assert_eq!(row.params.keys().collect::<Vec<_>>(), vec!["s"]);
+    }
+
+    /// A ledger with no cpu or max_rss column reads with both as `None`.
+    #[test]
+    fn a_ledger_without_the_metrics_still_reads() {
+        let dir = std::env::temp_dir().join(format!("util-ledger-{}-old", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("ledger.tbl");
+
+        std::fs::write(
+            &path,
+            "# name tool shard stage wall(s)\n\
+             # ---- ---- ----- ----- -------\n\
+             \x20 a    nail 1     -     0.12\n",
+        )
+        .unwrap();
+
+        let read = Ledger::read(&path).unwrap();
+        let row = read.runs().next().unwrap();
+
+        assert_eq!(row.wall_s, Some(0.12));
+        assert_eq!(row.cpu_s, None);
+        assert_eq!(row.max_rss_kb, None);
+        assert!(row.params.is_empty());
     }
 }

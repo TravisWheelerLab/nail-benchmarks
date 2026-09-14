@@ -308,23 +308,30 @@ impl Run {
     /// One row per shard, plus the whole-run row where there is one.
     fn rows(&self) -> Vec<ledger::Row> {
         let params: BTreeMap<String, String> = self.params.iter().cloned().collect();
-        let row = |shard: &str, wall_s: Option<f64>| ledger::Row {
+        let row = |shard: &str, timing: Option<&util::time::Timing>| ledger::Row {
             name: self.name.clone(),
             tool: self.tool.clone(),
             shard: shard.to_string(),
             stage: String::new(),
             params: params.clone(),
-            wall_s,
+            wall_s: timing.map(|t| t.wall_s),
+            // a `time` command that reported neither half of the cpu time says
+            // nothing about it, which is not the same as saying zero
+            cpu_s: timing.and_then(|t| match (t.user_s, t.sys_s) {
+                (None, None) => None,
+                (user, sys) => Some(user.unwrap_or(0.0) + sys.unwrap_or(0.0)),
+            }),
+            max_rss_kb: timing.and_then(|t| t.max_rss_kb),
         };
 
         let mut out: Vec<ledger::Row> = self
             .shards
             .iter()
-            .map(|shard| row(&shard.name, shard.timing.as_ref().map(|t| t.wall_s)))
+            .map(|shard| row(&shard.name, shard.timing.as_ref()))
             .collect();
 
         if let Some(whole) = &self.whole {
-            out.push(row(ledger::EVERY_SHARD, Some(whole.wall_s)));
+            out.push(row(ledger::EVERY_SHARD, Some(whole)));
         }
 
         out

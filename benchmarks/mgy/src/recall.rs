@@ -115,7 +115,7 @@ pub fn main(args: Args) -> anyhow::Result<()> {
         search::jobs(args.threads),
     );
 
-    let mut pl = PipelineBuilder::new().step(dirs.mkdir()).step(split.step());
+    let mut pl = PipelineBuilder::new().step(dirs.mkdir()).step(split.step(&[]));
 
     for (idx, target) in &shards {
         let shard = idx.to_string();
@@ -131,15 +131,7 @@ pub fn main(args: Args) -> anyhow::Result<()> {
                         .path(scratch.join("targetDB")),
                     |cmd, s| cmd.path(scratch.join(format!("alnDB-s{s:.1}"))),
                 ),
-                // mmseqs takes every core it can find unless told otherwise, so
-                // the setup around a search is held to the same count as the
-                // search itself
-                Cmd::new(&bins.mmseqs)
-                    .name("createdb")
-                    .sub("createdb")
-                    .arg("--threads", args.threads)
-                    .path(target)
-                    .path(&target_db),
+                search::createdb(&bins.mmseqs, target, &target_db, &shard, args.threads),
             ])
             .name(format!("prep.{idx}")),
         );
