@@ -136,11 +136,10 @@ three. `mgy build` cuts the sources into an input set: `fixed` is one query set
 against target shards of equal size, `ladder` is nested rungs on both axes,
 each a prefix of the one above.
 
-Four pipelines. `recall` searches every shard while sweeping nail's and
+Three benchmarks. `recall` searches every shard while sweeping nail's and
 MMseqs2's prefilter sensitivity. `cloud-search` seeds once, then searches every
 `(A, B)` pruning cell off those same seeds, so the pruning parameters are the
 only thing moving. `hit-loss` follows where the hits HMMER finds get lost.
-`search-size` times every tool over every rung of both ladders.
 
 `mgy build` writes `sizes.tbl` beside the target shards as it deals them:
 counting a thousand shards afterwards is the whole deal read again, and the
@@ -180,12 +179,57 @@ a tradeoff of every cell in wall time against sensitivity, where the `full`
 run -- `--full-dp`, which records no `-A` and no `-B` and so sits off the grid
 -- is the ceiling the pruned cells are read against.
 
-Two things sit outside the shape above. `mgy cutoffs` is a calibration rather
-than a benchmark: five stages that reverse the targets, recruit decoys per
+Three things sit outside the shape above, and none of them asks what was
+found.
+
+`mgy calibrate` asks what a run will cost. `calibrate run` times each primitive
+the benchmarks are built out of -- the query split, mmseqs' createdb, seeding,
+a replay off a seed set, nail and mmseqs end to end, hmmsearch -- over the
+rungs of the ladder, building every command through the same `search` helpers
+the benchmarks use, so what is timed is what will run. `calibrate fit` turns
+those timings into `cost.tbl`; `calibrate predict` composes a pipeline out of
+them, folding the way the ledger does so the total is wall clock rather than
+core-seconds.
+
+A search costs
+
+```text
+intercept + a*query_residues + b*target_residues + c*query_residues*target_residues
+```
+
+and this is why the ladder sweeps a grid rather than a diagonal. The product
+of the two set sizes is not a stand-in for a search's cost, at least not for
+nail and mmseqs: both pay for the query before they look at a target (nail
+builds an mmseqs profile database out of the HMMs on every run), and both
+pay for the target whatever the query is (an index to build, a database to
+scan). Only what is left after those two is an all-against-all comparison.
+Measured over the target axis at two query rungs 4.69x apart, the slope in
+target residues rose 1.93x for nail, 2.59x for mmseqs and 3.75x for hmmer --
+a pure product would have moved all three by 4.69x. Fit with fewer terms,
+the missing ones are absorbed into the product and then multiplied by the
+size of the run.
+
+The grid has to be wide enough on both axes to separate them: four
+coefficients cannot be told apart by two query rungs, and a fit made from
+too few comes back with negative slopes.
+
+Two more things make it a calibration rather than a stopwatch. `fit` holds the
+top target rung back, fits on the rest, and scores its own prediction of the
+rung it did not see, so a model that extrapolates badly shows it in a `holdout`
+column. And the seed count is fitted as a primitive of its own, because a
+replay's cost follows the seed set it was handed rather than the target it came
+from -- without it there is no way to price a cell at a size nobody has
+seeded.
+
+`mgy cutoffs` is the other calibration, and the words do not mean the same
+thing: cutoffs calibrates scores, calibrate calibrates cost. It is a
+calibration rather than a benchmark: five stages that reverse the targets, recruit decoys per
 family, search each family against its own decoys forward and reversed, and
 learn the per-family score cutoffs every hit is then held against. It keeps its
 own directory tree, and produces `data/mgy-cutoffs.tbl`, which is committed and
-promoted by hand. `mgy import` writes a `ledger.tbl` for result tables produced
+promoted by hand.
+
+`mgy import` writes a `ledger.tbl` for result tables produced
 elsewhere, out of the `.time` files that came back with them, which turns a
 search run on a cluster into an ordinary pipeline directory.
 `benchmarks/mgy/scripts/rename-old-results.sh` renames the older harness's

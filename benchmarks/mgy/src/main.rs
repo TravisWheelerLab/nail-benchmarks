@@ -10,6 +10,7 @@
 
 mod analyze;
 mod build;
+mod calibrate;
 mod clean;
 mod cloud_search;
 mod cut;
@@ -22,7 +23,6 @@ mod plot;
 mod recall;
 mod scores;
 mod search;
-mod search_size;
 
 use std::path::PathBuf;
 
@@ -53,8 +53,9 @@ enum Command {
     CloudSearch(cloud_search::Args),
     /// Seed once, run hmmer, then run nail once at its defaults.
     HitLoss(hit_loss::Args),
-    /// Time every tool over every rung of the query and target ladders.
-    SearchSize(search_size::Args),
+    /// Measure what a search costs here, and predict what a planned run will.
+    #[command(subcommand)]
+    Calibrate(calibrate::Cmd),
     /// Bring in result tables produced somewhere other than here, timed by
     /// the `.time` files that came back with them.
     Import(import::Args),
@@ -75,7 +76,7 @@ fn main() -> anyhow::Result<()> {
         Command::Recall(args) => recall::main(args),
         Command::CloudSearch(args) => cloud_search::main(args),
         Command::HitLoss(args) => hit_loss::main(args),
-        Command::SearchSize(args) => search_size::main(args),
+        Command::Calibrate(cmd) => calibrate::main(cmd),
         Command::Import(args) => import::main(args),
         Command::Clean(args) => clean::main(args),
         Command::Parse(cmd) => parse::main(cmd),
