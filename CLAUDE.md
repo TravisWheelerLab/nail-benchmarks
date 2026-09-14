@@ -147,16 +147,38 @@ counting a thousand shards afterwards is the whole deal read again, and the
 count is only a metadata line. `mgy build sizes` writes one for a set dealt
 before that.
 
-`mgy parse scores` reads recall into `scores.tbl`: one row per query/target
-pair, one score column per tool, and a `pass` string holding one character per
-run. It collects each shard on its own and writes it as a block in shard order,
-so the file comes out the same bytes however many threads it ran; `--threads`
-and `--mem` size that. `summary` is one streaming pass over the result.
+There are two table grammars, and which one a pipeline gets is settled by
+whether it moves one tool's parameters in a way that changes what that tool
+scores a pair.
 
-Each of the other two pipelines gets its own table, its own `tabl` schema and
-its own reader when it is built; the shard-parallel collector underneath is
-shared. Until hit-loss has one, `funnel` reads the older shape and nothing
-writes it.
+`mgy parse scores` reads recall into `scores.tbl`: one row per query/target
+pair, one score column per tool, and a `pass` string holding one character
+per run. A prefilter sweep changes which pairs a tool reports, not what it
+scores them, so one column per tool is the honest shape and the cheap one --
+six runs over a thousand shards is four billion rows, and a column per run is
+what made an earlier grammar write 700 GB.
+
+`mgy parse runs` reads cloud-search and hit-loss into `runs.tbl`: one score
+column per run, plus a `seeded` column where the pipeline kept a seed list.
+`-A` and `-B` constrain the dynamic programming, so two cells can score one
+pair differently, and that is what the sweep measures.
+These pipelines search one shard, so the wider row costs nothing.
+
+Both are collected the same way: each shard on its own, written as a block in
+shard order, so the file comes out the same bytes however many threads it ran.
+`--threads` and `--mem` size that. `summary` is one streaming pass and reads
+either grammar -- it reads only the `pass` string and the domain list, and
+those sit in the same place in both. `funnel` reads `runs.tbl` alone, because where a
+pair was dropped is a question about a run rather than about a tool.
+
+    recall        parse scores → parse summary
+    cloud-search  parse runs   → parse summary → plot
+    hit-loss      parse runs   → parse funnel
+
+`plot` draws two figures off cloud-search's summary: the `(A, B)` heatmaps, and
+a tradeoff of every cell in wall time against sensitivity, where the `full`
+run -- `--full-dp`, which records no `-A` and no `-B` and so sits off the grid
+-- is the ceiling the pruned cells are read against.
 
 Two things sit outside the shape above. `mgy cutoffs` is a calibration rather
 than a benchmark: five stages that reverse the targets, recruit decoys per

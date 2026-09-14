@@ -1,13 +1,17 @@
 //! One row per query/target pair, and what the runs made of it.
 //!
-//! This is recall's table alone. `hit-loss` and `cloud-search` render their
-//! own shapes over the same collector, so no column here has to mean
-//! something for a pipeline that does not have it.
+//! Two tables are written in this shape and share everything but their
+//! columns. [`write`] holds recall's, a score per tool; [`runs`] holds the
+//! sweeps', a score per run. What is in this module is what neither owns: the
+//! tools, the runs a ledger declares, the query numbering, the cutoffs, and
+//! the preamble both write. [`shard`] reads a shard's results into pairs and
+//! [`collect`] turns shards into a file; [`frame`] reads one back.
 //!
 //! ```text
 //! #= format scores 2
 //! #= query <count> <residues> <bytes>
 //! #= target <shard> <count> <residues> <bytes>
+//! #= seed <shard> <wall_s>
 //! #= cutoffs <path> c=<n>
 //! #= run <name> <tool> <wall_s> [k=v ...]
 //! #= pass <run name> ...
@@ -23,9 +27,11 @@
 //! ```
 //!
 //! One `#= target` line per shard and one `#= run` line per run, both in
-//! ledger order; `#= cutoffs` records the file and the column the pass letters
-//! were judged by; `#= pass` names the run behind each character of the `pass`
-//! column. A reader refuses a file that does not open `#= format scores 2`.
+//! ledger order; `#= seed` says what seeding cost, and is absent for a
+//! pipeline that never seeds; `#= cutoffs` records the file and the column the
+//! pass letters were judged by; `#= pass` names the run behind each character
+//! of the `pass` column. A reader refuses a file that does not open the format
+//! line its table expects.
 //!
 //! Rows sit in a block per shard, sorted by (query, target) within the block.
 //! A sequence lives in exactly one shard, so the blocks partition the pairs
@@ -36,11 +42,10 @@
 //! lowercase otherwise, so a pair no run passed reads `nnnmmh`. hmmer is held
 //! to nail's cutoff, as it is in the calibration.
 //!
-//! The scores are one column per tool rather than one per run. A tool gives a
-//! pair the same score wherever it reports it; what its parameterization
-//! changes is which pairs it reports, and `pass` is where that is recorded.
-//! `-` means no run of that tool reported the pair: absent is not a score, and
-//! a zero or a NaN would compare against a threshold and look like one.
+//! Which axis the score columns run along is the one thing the two tables
+//! disagree about, and [`write`] and [`runs`] each say why. `-` means no score:
+//! absent is not one, and a zero or a NaN would compare against a threshold
+//! and look like one.
 //!
 //! `inc` is hmmer's tblout inclusion count and `dom` its per-domain scores in
 //! domtbl order, so the k-th score is the k-th row of
@@ -48,18 +53,20 @@
 //!
 //! A pair earns a row by clearing some run's cutoff, or by hmmer having
 //! reported it at all. hmmer's whole reported set is kept because it is what
-//! the other tools are measured against: a pair it found weakly is still a
+//! everything else is measured against: a pair it found weakly is still a
 //! pair they can be asked about.
 //!
 //! Every column is padded to its width except `query`, which is unpadded
 //! because a query's rows are adjacent and so line up without it, and `dom`,
 //! which is as wide as the pair has domains.
 
+pub mod collect;
+pub mod frame;
 pub mod read;
+pub mod runs;
 mod scan;
 pub mod shard;
 pub mod sizes;
-pub mod v1;
 pub mod write;
 
 use std::collections::{BTreeMap, HashMap};
@@ -73,17 +80,17 @@ use libsail::seq::p7hmm::IndexedHmm;
 
 use util::ledger::{self, Ledger};
 
-pub use v1::Scores;
-
-/// What the file opens with, and what a reader will not read past.
+/// What recall's table opens with. The sweeps' is [`runs::FORMAT`].
 pub const FORMAT: &str = "#= format scores 2";
 
 /// A tenth of the best domain, which is mgnify's threshold for a domain
 /// carrying enough of a hit to count as its own.
 pub const SIGNIFICANT: f32 = 0.1;
 
-/// How many runs a pass string can hold. cloud-search's grid is the widest
-/// pipeline here at 83.
+/// How many runs a pass string can hold, and so how many score columns a
+/// `runs.tbl` carries.
+//
+// cloud-search's grid is the widest pipeline here, at 83
 pub const MAX_RUNS: usize = 128;
 
 // ---
@@ -413,14 +420,21 @@ pub struct Meta {
     pub query: Size,
     /// One per shard the runs covered, in ledger order.
     pub targets: Vec<(String, Size)>,
+    /// Per shard, what seeding cost. Empty where a pipeline never seeded, so
+    /// that seeding taking no time and there being no seeding stay different
+    /// answers.
+    pub seeds: Vec<(String, f64)>,
     pub cutoffs: PathBuf,
     pub c: usize,
     pub runs: Vec<Run>,
 }
 
 impl Meta {
-    pub fn write(&self, out: &mut impl std::io::Write) -> std::io::Result<()> {
-        writeln!(out, "{FORMAT}")?;
+    /// `format` is the table's own `#= format` line. Everything under it is
+    /// the same whatever the columns turn out to be, which is why the two
+    /// tables share a preamble and not a schema.
+    pub fn write(&self, format: &str, out: &mut impl std::io::Write) -> std::io::Result<()> {
+        writeln!(out, "{format}")?;
         writeln!(
             out,
             "#= query {} {} {}",
@@ -436,6 +450,10 @@ impl Meta {
                 size.residues,
                 size.bytes
             )?;
+        }
+
+        for (shard, wall) in &self.seeds {
+            writeln!(out, "#= seed {} {wall:.4}", label(shard))?;
         }
 
         writeln!(
@@ -492,6 +510,7 @@ impl Meta {
 pub struct Preamble {
     query: Option<Size>,
     targets: Vec<(String, Size)>,
+    seeds: Vec<(String, f64)>,
     cutoffs: Option<PathBuf>,
     c: Option<usize>,
     runs: Vec<Run>,
@@ -504,6 +523,10 @@ impl Preamble {
         match key {
             "query" => self.query = Some(size(fields)?),
             "target" => self.targets.push((shard_of(fields)?, size(&fields[1..])?)),
+            "seed" => {
+                let wall = fields.get(1).context("a `#= seed` line wants a wall time")?;
+                self.seeds.push((shard_of(fields)?, wall.parse()?));
+            }
             "cutoffs" => {
                 let [path, rest @ ..] = fields else {
                     bail!("a `#= cutoffs` line wants a path");
@@ -529,6 +552,7 @@ impl Preamble {
         let meta = Meta {
             query: self.query.context("no `#= query` line")?,
             targets: self.targets,
+            seeds: self.seeds,
             cutoffs: self.cutoffs.context("no `#= cutoffs` line")?,
             c: self.c.context("no `c=` on the `#= cutoffs` line")?,
             runs: self.runs,

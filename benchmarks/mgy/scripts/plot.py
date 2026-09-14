@@ -1,11 +1,17 @@
 #!/usr/bin/env python3
-"""The pruning heatmaps, out of the summary.tbl `mgy parse summary` writes.
+"""The cloud-search figures, out of the summary.tbl `mgy parse summary` writes.
 
     plot.py summary.tbl --out figures/
 
-One row per run, and the settings a run was swept over are columns. This wants
--A and -B among them, so it draws for cloud-search and skips itself for the
+One row per run, and the settings a run was swept over are columns. These want
+-A and -B among them, so they draw for cloud-search and skip themselves for the
 pipelines that swept something else.
+
+Two figures. `heatmaps` is the surface -- sensitivity and wall time over the
+(A, B) grid. `tradeoff` is the same runs as points in time against
+sensitivity, which is where the unpruned `--full-dp` cell earns its keep: it
+is the ceiling every pruned cell is measured against, and it sits off the grid
+because it has no -A or -B of its own.
 """
 
 import argparse
@@ -19,12 +25,14 @@ mpl.use("Agg")
 import matplotlib.pyplot as plt
 import numpy as np
 from matplotlib.colors import Normalize
+from matplotlib.ticker import NullFormatter, NullLocator
 
 # a big canvas with the text scaled up to match, so a figure dropped into a
 # document or a slide is legible without anyone zooming
 SCALE = 1.75
 mpl.rcParams.update({"font.size": mpl.rcParams["font.size"] * SCALE})
 
+WIDE = (16, 9)
 PANELS = (22, 9)
 
 # small enough to fit inside a heatmap cell, which the base size does not
@@ -33,8 +41,10 @@ CELL_SIZE = 11
 # the palette the pid and mgnify benchmarks use, so figures from all three sit
 # together
 TOL_RED = "#CC3311"
+TOL_TEAL = "#009988"
 
 HMMER_COLOR = TOL_RED
+FULL_COLOR = TOL_TEAL
 
 
 def save(fig, out, name):
@@ -61,6 +71,36 @@ def colorbar(fig, mappable, ax, **kw):
     cb.solids.set_rasterized(False)
     cb.solids.set_edgecolor("face")
     return cb
+
+
+def log_time(ax):
+    """A log time axis that keeps its labels.
+
+    The grid spans well under a decade, so the default locator finds one or two
+    ticks and the axis reads as blank. Asking for the 1/2/3/5/7 subdivisions
+    fills it in.
+    """
+    ax.set_xscale("log")
+    ax.xaxis.set_major_locator(plt.LogLocator(base=10, subs=(1, 2, 3, 5, 7)))
+    ax.xaxis.set_major_formatter(plt.FuncFormatter(lambda v, _: f"{v:g}"))
+    ax.xaxis.set_minor_locator(NullLocator())
+    ax.xaxis.set_minor_formatter(NullFormatter())
+
+
+def pareto(points):
+    """The points nothing else beats on both time and sensitivity."""
+    front, best = [], -np.inf
+    for p in sorted(points, key=lambda p: (p.wall_s, -p.sens)):
+        if p.sens > best:
+            front.append(p)
+            best = p.sens
+    return front
+
+
+def alpha_colors(g):
+    cmap = plt.get_cmap("viridis")
+    norm = Normalize(min(g.alphas), max(g.alphas))
+    return cmap, norm
 
 
 @dataclass
@@ -110,6 +150,16 @@ class Table:
     def cells(self):
         """The runs that sit on the (A, B) grid."""
         return [r for r in self.searches if np.isfinite(r.a) and np.isfinite(r.b)]
+
+    @property
+    def full(self):
+        """The unpruned run, which is the ceiling the cells are read against.
+
+        It is a search like any other and sits in the table like one; what
+        keeps it off the grid is that `--full-dp` records no -A and no -B.
+        """
+        off = [c for c in self.searches if not (np.isfinite(c.a) and np.isfinite(c.b))]
+        return off[0] if off else None
 
     @property
     def alphas(self):
@@ -184,7 +234,7 @@ def read(path):
         target_count=int(num("target")),
         hmmer_hits=int(num("hmmer")),
         hmmer_wall_s=num("hmmer", 2),
-        seed_wall_s=num("seed", 1),
+        seed_wall_s=num("seed", 0),
     )
 
 
@@ -269,6 +319,71 @@ def heatmaps(g, out):
     return save(fig, out, "heatmaps")
 
 
+def tradeoff(g, out):
+    """Every cell as a point in time/sensitivity, with the front traced."""
+    if not g.cells:
+        return None
+
+    fig, ax = plt.subplots(figsize=WIDE, constrained_layout=True)
+    cmap, norm = alpha_colors(g)
+
+    for c in g.cells:
+        ax.scatter(
+            c.wall_s, c.sens, s=190, color=cmap(norm(c.a)),
+            edgecolor="white", linewidth=1.0, zorder=3,
+        )
+
+    front = pareto(g.cells)
+    ax.plot(
+        [p.wall_s for p in front], [p.sens for p in front],
+        color="black", linewidth=2.0, linestyle="--", zorder=2,
+        label="pareto front",
+    )
+
+    # the ceiling: the most nail can find off these seeds, and the longest it
+    # can take to find it
+    if g.full is not None:
+        ax.axhline(
+            g.full.sens, color=FULL_COLOR, linewidth=2.5, linestyle=":",
+            label=f"--full-dp ceiling ({g.full.sens:.3f})",
+        )
+        ax.scatter(
+            [g.full.wall_s], [g.full.sens], marker="*", s=900,
+            color=FULL_COLOR, edgecolor="white", linewidth=1.2, zorder=4,
+            label=f"--full-dp ({g.full.wall_s:.2f}s)",
+        )
+
+    if np.isfinite(g.hmmer_wall_s):
+        ax.axvline(
+            g.hmmer_wall_s, color=HMMER_COLOR, linewidth=2.5, linestyle="-.",
+            label=f"hmmer wall ({g.hmmer_wall_s:.2f}s)",
+        )
+
+    default = next((c for c in g.cells if c.a == 10.0 and c.b == 16.0), None)
+    if default is not None:
+        ax.annotate(
+            "nail default\n-A 10 -B 16",
+            (default.wall_s, default.sens),
+            textcoords="offset points", xytext=(30, -70), fontweight="bold",
+            arrowprops=dict(arrowstyle="->", color="black", linewidth=1.8),
+        )
+
+    colorbar(fig, plt.cm.ScalarMappable(norm=norm, cmap=cmap), ax,
+             label="-A   (local pruning)")
+
+    # most of the grid sits in the cheap corner, so a linear axis stacks it all
+    # against the left edge
+    log_time(ax)
+
+    ax.set_xlabel("wall time (s), log scale")
+    ax.set_ylabel("sensitivity vs hmmer")
+    ax.set_title(f"what pruning buys and what it costs\n{subtitle(g)}")
+    ax.grid(alpha=0.25, zorder=0, which="both")
+    ax.legend(loc="lower right")
+
+    return save(fig, out, "tradeoff")
+
+
 def main():
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument("summary", help="the summary.tbl to plot")
@@ -280,8 +395,14 @@ def main():
 
     # a table with no grid in it draws nothing and says so, rather than failing
     # the run: what a pipeline can be plotted as is a property of what it swept
-    path = heatmaps(read(args.summary), out)
-    print(f"wrote {path}" if path else "skipped: no (A, B) grid to draw")
+    g = read(args.summary)
+    drawn = [path for path in (heatmaps(g, out), tradeoff(g, out)) if path]
+
+    for path in drawn:
+        print(f"wrote {path}")
+
+    if not drawn:
+        print("skipped: no (A, B) grid to draw")
 
 
 if __name__ == "__main__":

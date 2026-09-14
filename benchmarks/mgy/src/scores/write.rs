@@ -1,28 +1,22 @@
-//! Writing recall's `scores.tbl`: the shape of the table, and the shards that
-//! fill it.
+//! Writing recall's `scores.tbl`: the shape of the table, and what a row of it
+//! says.
 //!
-//! Every target lives in exactly one shard, so a shard's rows are a run of the
-//! file that nothing outside it belongs in. Shards are collected in parallel
-//! and written in order, which is what gets a sort of four billion rows for
-//! the price of sorting each shard's own.
-//!
-//! The same bytes come out however many threads there were: a worker renders
-//! its block into memory and the file takes them in shard order.
+//! One column per tool rather than per run, which is recall's premise: a sweep
+//! of a prefilter changes which pairs a tool reports, not what it scores them.
+//! The shards themselves are collected by [`super::collect`], which serves
+//! every table here and knows what none of them look like.
 
-use std::collections::BTreeMap;
 use std::fmt::Write as _;
 use std::io::{BufWriter, Write};
-use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
-use std::sync::{Condvar, Mutex, mpsc};
+use std::path::Path;
 
 use anyhow::{Context, ensure};
 
 use tabl::{Column, Schema, Stream, Widths};
 
 use util::ledger::{self, Ledger};
-use util::manifest;
 
+use super::collect::{self, Job};
 use super::shard::{Count, Pair, Scratch, Shard};
 use super::{Cutoffs, Meta, Queries, Tool, label, runs, sizes, tools};
 
@@ -33,18 +27,6 @@ const TARGET: usize = 16;
 
 /// How wide a score is written: four digits, a point and a place.
 const SCORE: usize = 6;
-
-/// What a shard costs to hold while it is collected, beside the share of its
-/// input that [`estimate`] allows for.
-const OVERHEAD: u64 = 64 << 20;
-
-/// How much of a shard's input it holds at the peak, in eighths.
-///
-/// Measured rather than reasoned: a synthetic shard of 4.0 GB peaked at 3.1 GB
-/// resident with one worker, which is the hits and the domains it was read
-/// into, the block it was rendered to, and what the allocator was holding
-/// while each of those doubled.
-const PEAK: u64 = 6;
 
 pub struct Args<'a> {
     /// The pipeline directory: `ledger.tbl` and `results/`.
@@ -76,7 +58,9 @@ pub fn collect(args: Args<'_>) -> anyhow::Result<Count> {
     let meta = Meta {
         query: queries.size,
         targets: sizes::of(args.targets, &shards)?,
-        cutoffs: absolute(args.cutoffs),
+        // recall never seeds, so there is no stage to time and no line
+        seeds: Vec::new(),
+        cutoffs: collect::absolute(args.cutoffs),
         c: args.c,
         runs: columns.iter().map(|column| column.run.clone()).collect(),
     };
@@ -93,7 +77,7 @@ pub fn collect(args: Args<'_>) -> anyhow::Result<Count> {
         .with_context(|| format!("failed to create {}", args.out.display()))?;
     let mut out = BufWriter::with_capacity(1 << 20, file);
 
-    meta.write(&mut out)?;
+    meta.write(super::FORMAT, &mut out)?;
     Stream::new(schema.clone(), widths.clone(), &mut out).header()?;
 
     let results = args.dir.join("results");
@@ -103,9 +87,23 @@ pub fn collect(args: Args<'_>) -> anyhow::Result<Count> {
         queries: &queries,
         cutoffs: &cutoffs,
         hmmer: Some(hmmer),
+        // recall never seeds: nail's prefilter is part of its search, so
+        // there is no seed list beside its results and no stage to time
+        seeds: false,
     };
 
-    let count = blocks(&work, &shards, &args, &schema, &widths, &tools, &mut out)?;
+    let job = Job {
+        work: &work,
+        shards: &shards,
+        threads: args.threads,
+        mem: args.mem,
+    };
+
+    let count = collect::blocks(
+        job,
+        |work, shard, scratch| block(work, shard, scratch, &schema, &widths, &tools),
+        &mut out,
+    )?;
 
     writeln!(out, "#= end {}", count.rows)?;
     out.flush()?;
@@ -121,135 +119,6 @@ pub fn collect(args: Args<'_>) -> anyhow::Result<Count> {
     Ok(count)
 }
 
-/// Collect every shard and write the blocks in order.
-fn blocks(
-    work: &Shard<'_>,
-    shards: &[String],
-    args: &Args<'_>,
-    schema: &Schema,
-    widths: &Widths,
-    tools: &[Tool],
-    out: &mut impl Write,
-) -> anyhow::Result<Count> {
-    let ticket = AtomicUsize::new(0);
-    let stop = AtomicBool::new(false);
-    let budget = Budget::new(args.mem);
-    let (send, recv) = mpsc::channel::<Message>();
-
-    let threads = args.threads.max(1).min(shards.len());
-
-    std::thread::scope(|scope| -> anyhow::Result<Count> {
-        for _ in 0..threads {
-            let send = send.clone();
-            let (ticket, stop, budget) = (&ticket, &stop, &budget);
-
-            scope.spawn(move || {
-                let mut scratch = Scratch::default();
-
-                loop {
-                    if stop.load(Ordering::Relaxed) {
-                        return;
-                    }
-
-                    let at = ticket.fetch_add(1, Ordering::Relaxed);
-                    let Some(shard) = shards.get(at) else {
-                        return;
-                    };
-
-                    let held = estimate(work, shard);
-                    budget.take(at, held);
-
-                    let message = match block(work, shard, &mut scratch, schema, widths, tools) {
-                        Ok((block, count)) => Message::Block {
-                            at,
-                            block,
-                            count,
-                            held,
-                        },
-                        Err(error) => {
-                            budget.give(held);
-                            stop.store(true, Ordering::Relaxed);
-                            Message::Failed {
-                                shard: shard.clone(),
-                                error,
-                            }
-                        }
-                    };
-
-                    if send.send(message).is_err() {
-                        return;
-                    }
-                }
-            });
-        }
-
-        // the senders the workers hold are clones; this one would keep the
-        // channel open after they are all done
-        drop(send);
-
-        let mut pending: BTreeMap<usize, (Vec<u8>, u64)> = BTreeMap::new();
-        let mut next = 0usize;
-        let mut total = Count::default();
-        let mut failure: Option<(String, anyhow::Error)> = None;
-
-        for message in recv {
-            match message {
-                Message::Failed { shard, error } => {
-                    failure.get_or_insert((shard, error));
-
-                    // nothing more will be written, so the blocks waiting for
-                    // a shard that failed give their room back rather than
-                    // holding the workers still reading
-                    for (_, (_, held)) in std::mem::take(&mut pending) {
-                        budget.give(held);
-                    }
-                }
-                Message::Block {
-                    at,
-                    block,
-                    count,
-                    held,
-                } => {
-                    if failure.is_some() {
-                        budget.give(held);
-                        continue;
-                    }
-
-                    total.add(count);
-                    pending.insert(at, (block, held));
-
-                    while let Some((block, held)) = pending.remove(&next) {
-                        out.write_all(&block)?;
-                        next += 1;
-
-                        budget.waiting_for(next);
-                        budget.give(held);
-                    }
-                }
-            }
-        }
-
-        if let Some((shard, error)) = failure {
-            return Err(error.context(format!("shard {shard}")));
-        }
-
-        Ok(total)
-    })
-}
-
-enum Message {
-    Block {
-        at: usize,
-        block: Vec<u8>,
-        count: Count,
-        held: u64,
-    },
-    Failed {
-        shard: String,
-        error: anyhow::Error,
-    },
-}
-
 /// One shard's rows, rendered into memory.
 fn block(
     work: &Shard<'_>,
@@ -263,8 +132,11 @@ fn block(
     out.meta(format!("shard {}", label(shard)))?;
 
     let mut doms = String::new();
+    let mut by_tool = ByTool::default();
 
-    let count = work.collect(shard, scratch, &mut |pair: &Pair<'_>| {
+    let mut count = work.collect(shard, scratch, &mut |pair: &Pair<'_>| {
+        by_tool.take(work.runs, pair);
+
         let mut line = out.line()?;
 
         line.text(work.queries.name(pair.query))?;
@@ -272,7 +144,7 @@ fn block(
         line.bytes(pair.pass)?;
 
         for tool in tools {
-            match pair.scores[tool.at()] {
+            match by_tool.scores[tool.at()] {
                 Some(score) => line.num(score as f64)?,
                 None => line.missing()?,
             };
@@ -303,7 +175,41 @@ fn block(
         Ok(())
     })?;
 
+    count.disagreements = by_tool.disagreements;
+
     Ok((out.into_inner(), count))
+}
+
+/// recall's three score columns, folded out of a pair's per-run scores.
+///
+/// A tool's score is whichever of its runs reported the pair first, which is
+/// the run of lowest index: runs of one tool agree on a pair's score by
+/// construction, so a disagreement is worth counting rather than picking
+/// between. That premise is recall's -- a sweep of a prefilter changes which
+/// pairs a tool reports, not what it scores them -- so the fold lives here
+/// rather than in the collector, which serves tables that have no such
+/// premise.
+#[derive(Default)]
+struct ByTool {
+    scores: [Option<f32>; 3],
+    disagreements: u64,
+}
+
+impl ByTool {
+    fn take(&mut self, runs: &[super::Column], pair: &Pair<'_>) {
+        self.scores = [None; 3];
+
+        for (at, score) in pair.scores.iter().enumerate() {
+            let Some(best) = *score else { continue };
+            let slot = &mut self.scores[runs[at].run.tool.at()];
+
+            match *slot {
+                None => *slot = Some(best),
+                Some(first) if first != best => self.disagreements += 1,
+                Some(_) => {}
+            }
+        }
+    }
 }
 
 /// The table's columns, which are fixed before a row is read: a stream cannot
@@ -329,161 +235,14 @@ fn schema(runs: usize, tools: &[Tool]) -> Schema {
     Schema::new(columns)
 }
 
-/// What a shard will take to collect: its tables, the hits they become, and
-/// the block they are rendered into.
-fn estimate(work: &Shard<'_>, shard: &str) -> u64 {
-    let bytes: u64 = work
-        .runs
-        .iter()
-        .filter(|column| column.shards.iter().any(|covered| covered == shard))
-        .map(|column| {
-            let table = manifest::table_path(work.results, &column.run.name, shard);
-            let dom = manifest::dom_path(work.results, &column.run.name, shard);
-
-            [table, dom]
-                .iter()
-                .filter_map(|path| std::fs::metadata(path).ok())
-                .map(|meta| meta.len())
-                .sum::<u64>()
-        })
-        .sum();
-
-    bytes * PEAK / 8 + OVERHEAD
-}
-
-/// How much memory the collectors may hold between them.
-///
-/// A shard is admitted when what it asks for fits under the limit, and holds
-/// its share until its block has been written. One that asks for more than the
-/// whole limit runs alone rather than not at all.
-///
-/// The shard the file is waiting for is admitted whatever is held. Without
-/// that the budget can fill with blocks that have been collected and cannot be
-/// written -- the file wants shard 4, the room is held by the blocks for 5, 6
-/// and 7, and the worker that claimed 4 is waiting for room that only writing
-/// 4 would free.
-struct Budget {
-    limit: u64,
-    state: Mutex<State>,
-    room: Condvar,
-}
-
-struct State {
-    used: u64,
-    /// Which shard the file is waiting for.
-    next: usize,
-}
-
-impl Budget {
-    fn new(limit: u64) -> Budget {
-        Budget {
-            limit: limit.max(1),
-            state: Mutex::new(State { used: 0, next: 0 }),
-            room: Condvar::new(),
-        }
-    }
-
-    fn take(&self, at: usize, want: u64) {
-        let mut state = self.state.lock().expect("the budget outlives its holders");
-
-        while state.used > 0 && state.used + want > self.limit && at != state.next {
-            state = self
-                .room
-                .wait(state)
-                .expect("the budget outlives its holders");
-        }
-
-        state.used += want;
-    }
-
-    fn give(&self, want: u64) {
-        let mut state = self.state.lock().expect("the budget outlives its holders");
-        state.used = state.used.saturating_sub(want);
-
-        self.room.notify_all();
-    }
-
-    /// Say which shard the file is waiting for, which is the one that cannot
-    /// be made to wait.
-    fn waiting_for(&self, at: usize) {
-        let mut state = self.state.lock().expect("the budget outlives its holders");
-        state.next = at;
-
-        self.room.notify_all();
-    }
-}
-
-/// Half of what the machine has, which is what a collector is allowed by
-/// default. Falls back to eight gigabytes where the machine will not say.
-pub fn ram() -> u64 {
-    const FALLBACK: u64 = 8 << 30;
-
-    #[cfg(target_os = "linux")]
-    let total = std::fs::read_to_string("/proc/meminfo").ok().and_then(|text| {
-        text.lines()
-            .find_map(|line| line.strip_prefix("MemTotal:"))
-            .and_then(|rest| rest.split_whitespace().next())
-            .and_then(|kb| kb.parse::<u64>().ok())
-            .map(|kb| kb * 1024)
-    });
-
-    #[cfg(target_os = "macos")]
-    let total = std::process::Command::new("sysctl")
-        .args(["-n", "hw.memsize"])
-        .output()
-        .ok()
-        .and_then(|out| String::from_utf8(out.stdout).ok())
-        .and_then(|text| text.trim().parse::<u64>().ok());
-
-    #[cfg(not(any(target_os = "linux", target_os = "macos")))]
-    let total: Option<u64> = None;
-
-    total.unwrap_or(FALLBACK)
-}
-
-/// A path as the `#= cutoffs` line should carry it: what was given, made
-/// absolute, so a table read elsewhere still names the file it was judged by.
-pub fn absolute(path: &Path) -> PathBuf {
-    match path.is_absolute() {
-        true => path.to_path_buf(),
-        false => std::env::current_dir()
-            .map(|dir| dir.join(path))
-            .unwrap_or_else(|_| path.to_path_buf()),
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
 
     use std::collections::BTreeMap;
+    use std::path::PathBuf;
 
     use util::ledger::Row;
-
-    #[test]
-    fn a_budget_admits_one_shard_bigger_than_all_of_it() {
-        let budget = Budget::new(1 << 20);
-
-        // nothing is held, so an oversized shard goes ahead rather than
-        // waiting for room that will never come
-        budget.take(0, 1 << 30);
-        budget.give(1 << 30);
-    }
-
-    /// The shard the file is waiting for goes ahead even with the room full,
-    /// since everything held is waiting on it.
-    #[test]
-    fn a_budget_never_holds_up_the_shard_being_written() {
-        let budget = std::sync::Arc::new(Budget::new(1 << 20));
-        budget.take(5, 1 << 20);
-        budget.waiting_for(4);
-
-        let waiting = budget.clone();
-        let admitted = std::thread::spawn(move || waiting.take(4, 1 << 20));
-
-        // it has to come back without anything being given back first
-        admitted.join().unwrap();
-    }
 
     /// The runs, in the order the ledger declares them: two of nail at
     /// different sensitivities, one of mmseqs, one of hmmer.

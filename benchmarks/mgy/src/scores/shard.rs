@@ -60,9 +60,12 @@ pub struct Pair<'a> {
     /// One character per run, in ledger order: the tool's letter, uppercase
     /// where that run reported the pair at or above its family's cutoff.
     pub pass: &'a [u8],
-    /// One per tool, at [`Tool::at`], `None` where no run of that tool
-    /// reported the pair.
-    pub scores: &'a [Option<f32>; 3],
+    /// One per run, in ledger order, `None` where that run did not report
+    /// the pair.
+    pub scores: &'a [Option<f32>],
+    /// Whether seeding found this pair, `None` where the pipeline kept no seed
+    /// list. Seeding nothing and never having seeded are different answers.
+    pub seeded: Option<bool>,
     /// hmmer's inclusion count, `None` where hmmer did not report the pair.
     pub inc: Option<u16>,
     /// hmmer's domain scores, in domtbl order.
@@ -74,8 +77,8 @@ pub struct Pair<'a> {
 pub struct Count {
     pub rows: u64,
     pub hits: u64,
-    /// Pairs two runs of one tool gave different scores, which the table has
-    /// one column for and so cannot show both of.
+    /// Pairs two runs of one tool gave different scores, for a table that
+    /// folds them into one column.
     pub disagreements: u64,
 }
 
@@ -94,6 +97,8 @@ pub struct Scratch {
     hits: Vec<Hit>,
     doms: Vec<Dom>,
     pass: Vec<u8>,
+    scores: Vec<Option<f32>>,
+    seeds: Vec<u64>,
     dom_scores: Vec<f32>,
     name: Vec<u8>,
 }
@@ -104,8 +109,16 @@ pub struct Shard<'a> {
     pub runs: &'a [Column],
     pub queries: &'a Queries,
     pub cutoffs: &'a Cutoffs,
-    /// Which run's `.domtbl` carries the domain breakdown.
+    /// Which run's `.domtbl` carries the domain breakdown, and the run whose
+    /// pairs are kept regardless of cutoff.
     pub hmmer: Option<usize>,
+    /// Whether to read `results/seeds.<shard>` and say of each pair whether
+    /// seeding found it.
+    ///
+    /// The seed list is read for a flag on rows, not for rows of its own: a
+    /// pair nothing reported is not among the hits and so never reaches a
+    /// renderer, seeded or not.
+    pub seeds: bool,
 }
 
 impl Shard<'_> {
@@ -140,6 +153,18 @@ impl Shard<'_> {
     ) -> anyhow::Result<Option<Count>> {
         scratch.hits.clear();
         scratch.doms.clear();
+        scratch.seeds.clear();
+
+        // before the hit tables rather than after: the seed list holds every
+        // pair any nail run could report, so a shard whose names will not key
+        // as MGYP is detected here, and the retry re-reads one small file
+        // than every table in the shard
+        if self.seeds {
+            let path = manifest::seeds_path(self.results, shard);
+            if !seeds(&path, &mut keys, self.queries, &mut scratch.seeds)? {
+                return Ok(None);
+            }
+        }
 
         for (at, column) in self.runs.iter().enumerate() {
             if !column.shards.iter().any(|covered| covered == shard) {
@@ -183,6 +208,9 @@ impl Shard<'_> {
             for dom in &mut scratch.doms {
                 dom.key = rerank(dom.key, &rank);
             }
+            for key in &mut scratch.seeds {
+                *key = rerank(*key, &rank);
+            }
         }
 
         Ok(Some(self.fold(&keys, scratch, render)?))
@@ -199,12 +227,15 @@ impl Shard<'_> {
             hits,
             doms,
             pass,
+            scores,
+            seeds,
             dom_scores,
             name,
         } = scratch;
 
         hits.sort_unstable_by_key(|hit| (hit.key, hit.run));
         doms.sort_unstable_by_key(|dom| (dom.key, dom.ord));
+        seeds.sort_unstable();
 
         let mut count = Count {
             hits: hits.len() as u64,
@@ -219,6 +250,7 @@ impl Shard<'_> {
 
         let mut at = 0usize;
         let mut dom_at = 0usize;
+        let mut seed_at = 0usize;
 
         while at < hits.len() {
             let key = hits[at].key;
@@ -227,7 +259,12 @@ impl Shard<'_> {
             pass.clear();
             pass.extend_from_slice(&letters);
 
-            let mut scores: [Option<f32>; 3] = [None; 3];
+            // cleared rather than resized: `resize` on a vector that already
+            // has the length leaves the previous pair's scores in it, which
+            // would invent one for a run that reported nothing
+            scores.clear();
+            scores.resize(self.runs.len(), None);
+
             let mut inc: Option<u16> = None;
 
             while at < hits.len() && hits[at].key == key {
@@ -254,19 +291,20 @@ impl Shard<'_> {
                     pass[run as usize] = pass[run as usize].to_ascii_uppercase();
                 }
 
-                match scores[tool.at()] {
-                    None => scores[tool.at()] = Some(best),
-                    // runs of one tool agree on a pair's score by
-                    // construction, so a disagreement is worth counting rather
-                    // than picking between
-                    Some(first) if first != best => count.disagreements += 1,
-                    Some(_) => {}
-                }
+                scores[run as usize] = Some(best);
 
                 if tool == Tool::Hmmer {
                     inc = Some(included);
                 }
             }
+
+            // both lists are sorted by the same key the hits are, so each is
+            // walked forward once across the whole shard rather than searched
+            // per pair. a seed list with the pair twice is harmless
+            while seed_at < seeds.len() && seeds[seed_at] < key {
+                seed_at += 1;
+            }
+            let seeded = self.seeds.then(|| seeds.get(seed_at) == Some(&key));
 
             // every domain of this pair, in the order the domtbl listed them
             dom_scores.clear();
@@ -278,8 +316,12 @@ impl Shard<'_> {
                 dom_at += 1;
             }
 
+            // read off `hmmer` rather than off the tool: a table
+            // with a column per run has no one place a tool's
+            // score lives
             let passed = pass.iter().any(u8::is_ascii_uppercase);
-            if !passed && scores[Tool::Hmmer.at()].is_none() {
+            let reference = self.hmmer.is_some_and(|at| scores[at].is_some());
+            if !passed && !reference {
                 continue;
             }
 
@@ -288,7 +330,8 @@ impl Shard<'_> {
                 query,
                 target: &name[..],
                 pass: &pass[..],
-                scores: &scores,
+                scores: &scores[..],
+                seeded,
                 inc,
                 doms: &dom_scores[..],
             })?;
@@ -434,6 +477,59 @@ impl Rows<'_> {
 
         Ok(true)
     }
+}
+
+/// The (query, target) pairs one shard's seeding found.
+///
+/// nail's `--seeds-out` is its own two-column list -- profile then sequence,
+/// whitespace-separated, no header -- rather than a hit table, so it is read
+/// here rather than through a `libsail` layout. Keyed the same way the hits
+/// are, since it is walked beside them.
+fn seeds(
+    path: &Path,
+    keys: &mut Keys,
+    queries: &Queries,
+    out: &mut Vec<u64>,
+) -> anyhow::Result<bool> {
+    let mut lines = open(path)?;
+    let mut last: Option<(Vec<u8>, u32)> = None;
+
+    while let Some((at, line)) = lines.next()? {
+        let Some([query, target]) = scan::fields(line, [0, 1]) else {
+            bail!(
+                "{}:{at} has {} fields, a seed list is a query and a target",
+                path.display(),
+                scan::count(line)
+            );
+        };
+
+        let Some(tid) = keys.tid(target) else {
+            return Ok(false);
+        };
+
+        let qid = match &last {
+            Some((name, id)) if name == query => *id,
+            _ => {
+                let name = std::str::from_utf8(query).with_context(|| {
+                    format!("{}:{at} has a query name that is not text", path.display())
+                })?;
+
+                let id = queries.id(name).with_context(|| {
+                    format!(
+                        "{}:{at} seeds family {name:?}, which is not in the query set",
+                        path.display()
+                    )
+                })?;
+
+                last = Some((query.to_vec(), id));
+                id
+            }
+        };
+
+        out.push((qid as u64) << TID | tid);
+    }
+
+    Ok(true)
 }
 
 /// Every domain of every hit in one `--domtblout`, in the order it listed them.
