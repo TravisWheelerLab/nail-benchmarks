@@ -25,7 +25,7 @@ use util::ledger;
 use util::manifest;
 
 /// The seeding settings this benchmark searches with.
-const MMSEQS_S: &str = "12.0";
+pub const MMSEQS_S: &str = "12.0";
 const SEED_MODE: &str = "prog";
 
 /// The column hmmer's run becomes, which every cell is measured against.
@@ -152,8 +152,7 @@ pub fn main(args: Args) -> anyhow::Result<()> {
             args.threads,
             MMSEQS_S,
             SEED_MODE,
-            search::SEED,
-            &[],
+            &[(manifest::STAGE, search::SEED.to_string())],
         ));
 
     let hmmer = search::hmmer(

@@ -16,9 +16,10 @@
 //! inputs/<kind>/targets/   what is being searched
 //! ```
 
+use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
-use anyhow::{Context, bail};
+use anyhow::{Context, bail, ensure};
 
 /// A way of cutting the two sources into an input set.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -174,6 +175,30 @@ pub mod ladder {
     /// against. Written by `build ladder`, one file per axis.
     pub fn sizes(dir: &Path) -> PathBuf {
         dir.join("sizes.tbl")
+    }
+
+    /// Every target rung and what it came to in residues.
+    pub fn target_residues() -> anyhow::Result<BTreeMap<usize, u64>> {
+        let path = sizes(&targets());
+        let table = util::tbl::read(&path).with_context(|| {
+            format!("failed to read {}; has `mgy build ladder` run?", path.display())
+        })?;
+
+        let mut out = BTreeMap::new();
+        for cells in &table.cells {
+            let get = |key: &str| -> anyhow::Result<u64> {
+                cells
+                    .get(key)
+                    .with_context(|| format!("{} has no {key} column", path.display()))?
+                    .parse()
+                    .with_context(|| format!("{} has a {key} that is not a number", path.display()))
+            };
+
+            out.insert(get("rung")? as usize, get("residues")?);
+        }
+
+        ensure!(!out.is_empty(), "no rungs in {}", path.display());
+        Ok(out)
     }
 }
 

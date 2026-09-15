@@ -1,9 +1,14 @@
 //! What a planned run of a pipeline will cost.
 //!
-//! A pipeline is a multiset of primitives, and this is the one place that
-//! multiset is written down: how many seeds, how many cells, how many
-//! hmmsearch parts, and which of them overlap. [`super::fit`] supplies what
-//! each one costs; this supplies how many there are.
+//! A pipeline is a multiset of searches, and this is the one place that
+//! multiset is written down: how many sensitivities, how many cells, and which
+//! of them overlap. [`super::fit`] supplies what each one costs; this supplies
+//! how many there are. A nail run appears here as its two halves, seeding and
+//! then the alignment off those seeds.
+//!
+//! Only the searches are priced. Splitting the query, building mmseqs'
+//! database and reformatting what it found are all real wall clock that no
+//! total here includes.
 //!
 //! The arithmetic follows the same rule the ledger folds by, so the total is
 //! wall-clock-shaped rather than a sum of core-seconds: commands that ran at
@@ -20,13 +25,14 @@
 
 use std::path::PathBuf;
 
-use anyhow::{Context, bail, ensure};
+use anyhow::{Context, bail};
 use clap::Parser;
 
 use util::ledger::{self, Ledger};
 
 use super::fit::Model;
 use super::{FILE, Part};
+use crate::recall::{MMSEQS_S, NAIL_S};
 
 #[derive(Parser, Debug)]
 pub struct Args {
@@ -41,14 +47,6 @@ pub struct Args {
     /// Mean residues per sequence. The default is what MGnify runs to
     #[arg(long, default_value_t = 320.0, value_name = "X")]
     seq_len: f64,
-
-    /// How many Pfam families are searched with
-    #[arg(long, default_value_t = 20795, value_name = "N")]
-    fams: usize,
-
-    /// Mean model length, in match states
-    #[arg(long, default_value_t = 170.0, value_name = "X")]
-    fam_len: f64,
 
     /// How many target shards, for a pipeline with a shard axis
     #[arg(long, default_value_t = 1, value_name = "N")]
@@ -77,13 +75,9 @@ pub fn main(args: Args) -> anyhow::Result<()> {
     };
     let model = Model::read(&cost)?;
 
-    let q_res = args.fams as f64 * args.fam_len;
-    let t_res = args.seqs as f64 * args.seq_len;
-
     let plan = Plan {
         pipeline: args.pipeline.clone(),
-        q_res,
-        t_res,
+        t_res: args.seqs as f64 * args.seq_len,
         shards: args.shards,
         jobs: crate::search::jobs(args.threads),
     };
@@ -101,7 +95,6 @@ pub fn main(args: Args) -> anyhow::Result<()> {
 /// The run being costed.
 struct Plan {
     pipeline: String,
-    q_res: f64,
     t_res: f64,
     shards: usize,
     /// How many ways hmmer's query is cut.
@@ -139,29 +132,20 @@ impl Plan {
         }
     }
 
-    /// One primitive, `times` of them one after another.
-    ///
-    /// `seeds` is used only by a replay, and unread for every other part.
+    /// One search, `times` of them one after another.
     fn serial(
         &self,
         model: &Model,
         part: Part,
         knobs: &[(&str, &str)],
-        seeds: f64,
         times: usize,
         what: &str,
     ) -> anyhow::Result<Cost> {
         let row = model.of(part, knobs).with_context(|| {
-            format!("cost.tbl has no fit for {part}; was it measured?")
+            format!("cost.tbl has no fit for {part} at {knobs:?}; was it measured?")
         })?;
 
-        let loads: Vec<f64> = part
-            .loads()
-            .iter()
-            .map(|load| load.of(self.q_res, self.t_res, seeds))
-            .collect();
-
-        let each = row.at(&loads).max(0.0);
+        let each = row.at(self.t_res).max(0.0);
 
         Ok(Cost {
             what: what.to_string(),
@@ -183,7 +167,6 @@ impl Plan {
             model,
             Part::Hmmer,
             &[],
-            0.0,
             times,
             &format!("hmmer ({} parts at once)", self.jobs),
         )?;
@@ -193,97 +176,76 @@ impl Plan {
         Ok(cost)
     }
 
-    /// How many pairs seeding will find at this size.
-    fn seeds(&self, model: &Model) -> anyhow::Result<f64> {
-        let row = model.of(Part::Seeds, &[]).with_context(|| {
-            format!(
-                "cost.tbl has no fit for {}; a replay cannot be placed without one",
-                Part::Seeds
-            )
-        })?;
-
-        let loads: Vec<f64> = Part::Seeds
-            .loads()
-            .iter()
-            .map(|load| load.of(self.q_res, self.t_res, 0.0))
-            .collect();
-
-        let seeds = row.at(&loads);
-        ensure!(
-            seeds.is_finite() && seeds > 0.0,
-            "the seed count fits to {seeds:.0} pairs at this size, which is not a seed set"
-        );
-
-        Ok(seeds)
-    }
-
     fn recall(&self, model: &Model) -> anyhow::Result<Vec<Cost>> {
-        Ok(vec![
-            self.serial(model, Part::Split, &[], 0.0, 1, "split")?,
-            self.serial(
-                model,
-                Part::Createdb,
-                &[],
-                0.0,
-                self.shards,
-                "createdb (per shard)",
-            )?,
-            self.serial(model, Part::Nail, &[], 0.0, self.shards, "nail (per shard)")?,
-            self.serial(
+        let mut steps = Vec::new();
+
+        // recall searches every shard once per sensitivity, and the two tools
+        // are swept over different ones, so a single nail row and a single
+        // mmseqs row would price a fifth of what runs.
+        //
+        // a nail run is its seeding plus the alignment off those seeds; the
+        // sweep times the halves rather than the whole, since that is what
+        // cloud-search and hit-loss are built out of
+        for s in NAIL_S.split(',') {
+            for part in [Part::Seed, Part::Align] {
+                steps.push(self.serial(
+                    model,
+                    part,
+                    &[("s", s)],
+                    self.shards,
+                    &format!("nail {part} -s {s} (per shard)"),
+                )?);
+            }
+        }
+
+        for s in MMSEQS_S.split(',') {
+            steps.push(self.serial(
                 model,
                 Part::Mmseqs,
-                &[],
-                0.0,
+                &[("s", s)],
                 self.shards,
-                "mmseqs (per shard)",
-            )?,
-            self.hmmer(model, self.shards)?,
-        ])
+                &format!("mmseqs -s {s} (per shard)"),
+            )?);
+        }
+
+        steps.push(self.hmmer(model, self.shards)?);
+        Ok(steps)
     }
 
     fn cloud_search(&self, model: &Model) -> anyhow::Result<Vec<Cost>> {
-        let seeds = self.seeds(model)?;
-
         // the default grid: nine alphas by nine betas, and the unpruned cell
         const CELLS: usize = 9 * 9 + 1;
 
+        // every cell replays the one seed set, so the alignment is priced at
+        // the seeding sensitivity cloud-search uses rather than at recall's
+        let seed_s = crate::cloud_search::MMSEQS_S;
+
         Ok(vec![
-            self.serial(model, Part::Split, &[], 0.0, 1, "split")?,
             self.serial(
                 model,
                 Part::Seed,
-                &[],
-                0.0,
+                &[("s", seed_s)],
                 1,
                 "seed (once, replayed by every cell)",
             )?,
             self.hmmer(model, 1)?,
             self.serial(
                 model,
-                Part::Replay,
-                &[],
-                seeds,
+                Part::Align,
+                &[("s", seed_s)],
                 CELLS,
-                &format!("replay ({CELLS} cells, {seeds:.0} seeds each)"),
+                &format!("align ({CELLS} cells)"),
             )?,
         ])
     }
 
     fn hit_loss(&self, model: &Model) -> anyhow::Result<Vec<Cost>> {
-        let seeds = self.seeds(model)?;
+        let seed_s = crate::hit_loss::MMSEQS_S;
 
         Ok(vec![
-            self.serial(model, Part::Split, &[], 0.0, 1, "split")?,
-            self.serial(model, Part::Seed, &[], 0.0, 1, "seed")?,
+            self.serial(model, Part::Seed, &[("s", seed_s)], 1, "seed")?,
             self.hmmer(model, 1)?,
-            self.serial(
-                model,
-                Part::Replay,
-                &[],
-                seeds,
-                1,
-                &format!("replay ({seeds:.0} seeds)"),
-            )?,
+            self.serial(model, Part::Align, &[("s", seed_s)], 1, "align")?,
         ])
     }
 }
@@ -293,8 +255,8 @@ fn report(plan: &Plan, steps: &[Cost], args: &Args) {
     let peak = steps.iter().filter_map(|step| step.max_rss_kb).max();
 
     println!(
-        "{} over {} shard(s) of {} sequences, against {} families, at {} threads\n",
-        plan.pipeline, plan.shards, args.seqs, args.fams, args.threads
+        "{} over {} shard(s) of {} sequences, against all of Pfam, at {} threads\n",
+        plan.pipeline, plan.shards, args.seqs, args.threads
     );
 
     println!("  {:<44} {:>5}  {:>12}  {:>12}", "step", "n", "each", "wall");

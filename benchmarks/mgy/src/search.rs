@@ -250,7 +250,7 @@ pub fn hmmer(
     }
 }
 
-/// The stage a seeding belongs to.
+/// The stage a seeding belongs to, for the pipelines that record it as one.
 //
 // a ledger row is keyed by (stage, shard), so a pipeline that
 // seeds several times per shard has to suffix this
@@ -273,8 +273,7 @@ pub fn seed(
     threads: usize,
     mmseqs_s: &str,
     seed_mode: &str,
-    stage: &str,
-    extra: &[(&str, String)],
+    fields: &[(&str, String)],
 ) -> Step {
     let cmd = Cmd::new(nail)
         .sub("search")
@@ -288,10 +287,9 @@ pub fn seed(
         .flag("--allow-overwrite")
         .path(query_hmm)
         .path(target)
-        .field(manifest::STAGE, stage)
         .field(manifest::SHARD, shard_name);
 
-    let cmd = extra
+    let cmd = fields
         .iter()
         .fold(cmd, |cmd, (key, value)| cmd.field(*key, value));
 

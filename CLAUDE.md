@@ -182,44 +182,55 @@ run -- `--full-dp`, which records no `-A` and no `-B` and so sits off the grid
 Three things sit outside the shape above, and none of them asks what was
 found.
 
-`mgy calibrate` asks what a run will cost. `calibrate run` times each primitive
-the benchmarks are built out of -- the query split, mmseqs' createdb, seeding,
-a replay off a seed set, nail and mmseqs end to end, hmmsearch -- over the
-rungs of the ladder, building every command through the same `search` helpers
-the benchmarks use, so what is timed is what will run. `calibrate fit` turns
-those timings into `cost.tbl`; `calibrate predict` composes a pipeline out of
-them, folding the way the ledger does so the total is wall clock rather than
-core-seconds.
+`mgy calibrate` asks what a run will cost. `calibrate run` times the searches
+the benchmarks are built out of -- nail's seeding, the alignment off those
+seeds, `mmseqs search` and `hmmsearch` -- over the target rungs of the ladder,
+building every command through the same `search` helpers the benchmarks use,
+so what is timed is what will run. `--parts` narrows it to a subset of those
+four. `calibrate fit` turns the timings into `cost.tbl`; `calibrate predict`
+composes a pipeline out of them, folding the way the ledger does so the total
+is wall clock rather than core-seconds.
 
-A search costs
+Only the searches are timed. Cutting the query up, building mmseqs' database
+and reformatting what it found are real wall clock, and none of them is what
+the benchmarks compare.
+
+The query is every Pfam family at every rung, because that is what the
+benchmarks search with. So the only thing that moves is the target, and a
+search costs
 
 ```text
-intercept + a*query_residues + b*target_residues + c*query_residues*target_residues
+intercept + slope * target_residues
 ```
 
-and this is why the ladder sweeps a grid rather than a diagonal. The product
-of the two set sizes is not a stand-in for a search's cost, at least not for
-nail and mmseqs: both pay for the query before they look at a target (nail
-builds an mmseqs profile database out of the HMMs on every run), and both
-pay for the target whatever the query is (an index to build, a database to
-scan). Only what is left after those two is an all-against-all comparison.
-Measured over the target axis at two query rungs 4.69x apart, the slope in
-target residues rose 1.93x for nail, 2.59x for mmseqs and 3.75x for hmmer --
-a pure product would have moved all three by 4.69x. Fit with fewer terms,
-the missing ones are absorbed into the product and then multiplied by the
-size of the run.
+An earlier version swept a grid on both axes and fitted a query term, a target
+term and their product. Holding the query fixed collapses three of those into
+the two here, and the terms it drops were the ones carrying the error: the
+product coefficient did most of the work at the sizes being predicted and was
+the least determined thing in the model, so dropping a single rung from the
+grid moved nail's predicted cost by a factor of two.
 
-The grid has to be wide enough on both axes to separate them: four
-coefficients cannot be told apart by two query rungs, and a fit made from
-too few comes back with negative slopes.
+What is left is an intercept that is mostly the query and a slope that is
+entirely the target. The intercept is large, since nail builds an mmseqs
+profile database out of 20,795 HMMs on every invocation, and at the bottom of
+the ladder it is nearly the whole cost: over the first three rungs a fourfold
+increase in target size did not move the total past the run-to-run noise. The
+slope becomes measurable only once the target term clears that noise, and that
+is why the rungs double all the way to 128,000 sequences. The rung of a single
+sequence at the bottom measures the intercept on its own.
 
-Two more things make it a calibration rather than a stopwatch. `fit` holds the
-top target rung back, fits on the rest, and scores its own prediction of the
-rung it did not see, so a model that extrapolates badly shows it in a `holdout`
-column. And the seed count is fitted as a primitive of its own, because a
-replay's cost follows the seed set it was handed rather than the target it came
-from -- without it there is no way to price a cell at a size nobody has
-seeded.
+A whole nail search is the seeding plus the alignment off those seeds, so the
+end-to-end run is not timed. Over a ladder spanning 131x the two halves came
+to within 1.1% of it at every sensitivity, so the third timing was dropped.
+
+`fit` holds the top rung back, fits on the rest, and scores its own prediction
+of the rung it did not see, so a model that extrapolates badly reports it in a
+`holdout` column instead of being believed. That column is the one to read
+first. On the eight-rung ladder every part over-predicted, from 2.4% for the
+alignments to 25% for mmseqs at its lower sensitivity, so a prediction off it
+reads as an upper bound. The alignments are the rows to trust: their cost is
+almost all target work, and they are the only ones the ladder pinned to better
+than 3%.
 
 `mgy cutoffs` is the other calibration, and the words do not mean the same
 thing: cutoffs calibrates scores, calibrate calibrates cost. It is a

@@ -29,7 +29,7 @@ use util::manifest;
 
 /// The seeding settings this benchmark searches with, matching cloud-search's
 /// so the two are asking about the same seed set.
-const MMSEQS_S: &str = "12.0";
+pub const MMSEQS_S: &str = "12.0";
 const SEED_MODE: &str = "prog";
 
 /// The columns the two runs become.
@@ -103,8 +103,7 @@ pub fn main(args: Args) -> anyhow::Result<()> {
             args.threads,
             MMSEQS_S,
             SEED_MODE,
-            search::SEED,
-            &[],
+            &[(manifest::STAGE, search::SEED.to_string())],
         ));
 
     let hmmer = search::hmmer(

@@ -24,10 +24,15 @@ use util::manifest;
 
 /// mmseqs' own default is 300, which loses hits nail's seeding keeps. 2000 is
 /// what the other pipelines here search at, so the columns stay comparable.
-const MMSEQS_MAX_SEQS: usize = 2000;
+pub const MMSEQS_MAX_SEQS: usize = 2000;
 
 /// nail's seeding mode, matching what cloud-search and hit-loss seed with.
-const SEED_MODE: &str = "prog";
+pub const SEED_MODE: &str = "prog";
+
+/// The sensitivities this sweeps, which `calibrate` reads so the model is
+/// fitted at the settings it will be asked to price.
+pub const NAIL_S: &str = "9.0,10.0,12.0";
+pub const MMSEQS_S: &str = "7.5,12.0";
 
 /// The column hmmer's run becomes, which the other two are measured against.
 const HMMER: &str = "hmmer";
@@ -42,7 +47,7 @@ pub struct Args {
     #[arg(
         long,
         value_delimiter = ',',
-        default_value = "9.0,10.0,12.0",
+        default_value = NAIL_S,
         value_name = "X,X,..."
     )]
     nail_s: Vec<f32>,
@@ -51,7 +56,7 @@ pub struct Args {
     #[arg(
         long,
         value_delimiter = ',',
-        default_value = "7.5,12.0",
+        default_value = MMSEQS_S,
         value_name = "X,X,..."
     )]
     mmseqs_s: Vec<f32>,
