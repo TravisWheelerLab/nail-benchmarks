@@ -250,6 +250,16 @@ pub fn hmmer(
     }
 }
 
+/// The k-mer length every mmseqs search here is held to.
+//
+// nail passes this to the mmseqs prefilter it seeds with --
+// `--mmseqs-k`, whose default is 6 -- while mmseqs' own
+// default is 0, meaning it picks one from the database size.
+// a standalone run left on 0 would be searching with a
+// different k at every rung of the ladder, and a different
+// one again from the k inside nail
+pub const MMSEQS_K: usize = 6;
+
 /// The stage a seeding belongs to, for the pipelines that record it as one.
 //
 // a ledger row is keyed by (stage, shard), so a pipeline that
@@ -333,7 +343,8 @@ impl Mmseqs<'_> {
         let mut search = Cmd::new(self.bin)
             .name("search")
             .sub("search")
-            .arg("--threads", self.threads);
+            .arg("--threads", self.threads)
+            .arg("-k", MMSEQS_K);
 
         if let Some(s) = &self.s {
             search = search.arg("-s", s);

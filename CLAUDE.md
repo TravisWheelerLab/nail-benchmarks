@@ -223,6 +223,12 @@ A whole nail search is the seeding plus the alignment off those seeds, so the
 end-to-end run is not timed. Over a ladder spanning 131x the two halves came
 to within 1.1% of it at every sensitivity, so the third timing was dropped.
 
+Every `mmseqs search` here passes `-k 6`, which is what nail passes the
+prefilter it seeds with. mmseqs' own default is 0, meaning it picks a k-mer
+length from the size of the database, so a run left on the default would
+search with a different k at every rung and a different one again from the k
+inside nail.
+
 `fit` holds the top rung back, fits on the rest, and scores its own prediction
 of the rung it did not see, so a model that extrapolates badly reports it in a
 `holdout` column instead of being believed. That column is the one to read
