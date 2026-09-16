@@ -425,11 +425,6 @@ fn run_cmd(cmd: Cmd, paths: &Paths) -> anyhow::Result<()> {
     }
 }
 
-// ----------------------------------------------------------------- reverse
-
-/// Write a copy of `src` with every sequence reversed. Reversed sequences keep
-/// the composition of the original but destroy its homology, which makes them
-/// usable as decoys when calibrating score cutoffs.
 // ----------------------------------------------------------------- recruit
 
 fn recruit(args: RecruitArgs, paths: &Paths) -> anyhow::Result<()> {
@@ -462,7 +457,7 @@ fn recruit(args: RecruitArgs, paths: &Paths) -> anyhow::Result<()> {
                     PCmd::new(&mmseqs_bin)
                         .name("createdb")
                         .sub("createdb")
-                        .path(&shard)
+                        .path(shard)
                         .path(&target_db),
                 ])
                 .name(format!("prep.{idx}")),
@@ -485,7 +480,7 @@ fn recruit(args: RecruitArgs, paths: &Paths) -> anyhow::Result<()> {
                     )
                     .flag("--allow-overwrite")
                     .path(&query_hmm)
-                    .path(&shard)])
+                    .path(shard)])
                 .name(format!("nail.{idx}")),
             )
             .step(

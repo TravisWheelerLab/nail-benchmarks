@@ -419,13 +419,10 @@ check the shards it was handed against the ones the build made.
 `benchmarks/store/scripts/rename-old-results.sh` renames the older harness's
 files into the names it expects.
 
-Two dev tools sit beside all of that and belong to no pipeline.
-`benchmarks/scores/src/bin/synth_results.rs` writes a recall directory of the right shape and
-size without a search behind it, so `parse scores` can be timed against one the
-size of a real run; it is the crate's second binary, and the shim does not run
-it. `benchmarks/scores/scripts/compare-scores.py` reduces a `scores.tbl` and one in the older
-shape to the same sets of pairs, tool scores and pass flags, and says where
-they differ.
+One dev tool sits beside all of that and belongs to no pipeline.
+`benchmarks/scores/scripts/compare-scores.py` reduces a `scores.tbl` and one in
+the older shape to the same sets of pairs, tool scores and pass flags, and says
+where they differ.
 
 ## benchmarks/pid
 
