@@ -13,5 +13,6 @@ clap = { workspace = true }
 libsail = { workspace = true }
 michi = { workspace = true }
 rayon = { workspace = true }
+search = { workspace = true }
 serde = { workspace = true }
 util = { workspace = true }

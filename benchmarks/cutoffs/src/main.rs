@@ -76,19 +76,16 @@ const DECOYS: &str = "decoys";
 const DECOYS_REV: &str = "decoys-rev";
 const QUERIES: &str = "queries";
 
-// every stage reports down to here, so scores are comparable
-const EVALUE: &str = "10";
-
 // recruitment only has to nominate candidates, so it runs a cheap sweep
 // rather than the decoy stage's wide-open one
 const RECRUIT_S: &str = "11.0";
-const RECRUIT_MAX_SEQS: &str = "5000";
+const RECRUIT_MAX_SEQS: usize = 5000;
 
 // wide open, so a decoy's score is its real score rather than one truncated
 // by a prefilter. one thread each: the parallelism is in running many
 // families at once, not in any one search
 const DECOY_S: &str = "12.0";
-const DECOY_MAX_SEQS: &str = "1000000000";
+const DECOY_MAX_SEQS: usize = 1_000_000_000;
 
 // the run names both stages file their tables under. Each stage has its own
 // results directory, so the stage does not need naming again in the file
@@ -100,10 +97,11 @@ const HMMER: &str = "hmmer";
 /// the bare tool name; only the reversed one needs saying.
 /// What the manifest calls the commands around a search, so a database build
 /// is never charged to the tool that reads it.
+//
+// createdb and convert are not here: those commands come from
+// `search`, which names its own stages
 const DIRS: &str = "dirs";
 const PROFILE: &str = "profile";
-const CREATEDB: &str = "createdb";
-const CONVERT: &str = "convert";
 const CLEAN: &str = "clean";
 
 /// The column that tells a family's forward search from its reversed one.
@@ -468,11 +466,13 @@ fn recruit(args: RecruitArgs, paths: &Paths) -> anyhow::Result<()> {
                         .flag("-p")
                         .path(scratch.join("targetDB"))
                         .path(scratch.join("alnDB")),
-                    PCmd::new(&mmseqs_bin)
-                        .name("createdb")
-                        .sub("createdb")
-                        .path(shard)
-                        .path(&target_db),
+                    search::createdb(
+                        &mmseqs_bin,
+                        shard,
+                        &target_db,
+                        &idx.to_string(),
+                        args.threads,
+                    ),
                 ])
                 .name(format!("prep.{idx}")),
             )
@@ -486,8 +486,9 @@ fn recruit(args: RecruitArgs, paths: &Paths) -> anyhow::Result<()> {
                     .arg("-t", args.threads)
                     .arg("--tmp-dir", scratch.join("nail"))
                     .arg("--mmseqs-s", RECRUIT_S)
+                    .arg("--seed-mode", search::sweeps::SEED_MODE)
                     .arg("--mmseqs-max-seqs", RECRUIT_MAX_SEQS)
-                    .arg("-E", EVALUE)
+                    .arg("-E", search::EVALUE)
                     .arg(
                         "--tbl-out",
                         manifest::table_path(&results, NAIL, &idx.to_string()),
@@ -498,30 +499,28 @@ fn recruit(args: RecruitArgs, paths: &Paths) -> anyhow::Result<()> {
                 .name(format!("nail.{idx}")),
             )
             .step(
-                Step::serial([
-                    PCmd::new(&mmseqs_bin)
-                        .name("search")
-                        .sub("search")
-                        .arg("--threads", args.threads)
-                        .arg("-s", RECRUIT_S)
-                        .arg("--max-seqs", RECRUIT_MAX_SEQS)
-                        .arg("-e", EVALUE)
-                        .path(&query_db)
-                        .path(&target_db)
-                        .path(&aln_db)
-                        .path(scratch.join("work")),
-                    PCmd::new(&mmseqs_bin)
-                        .name("convertalis")
-                        .sub("convertalis")
-                        .field(manifest::NAME, MMSEQS)
-                        .field(manifest::TOOL, MMSEQS)
-                        .field(manifest::SHARD, idx.to_string())
-                        .arg("--format-mode", 0)
-                        .path(&query_db)
-                        .path(&target_db)
-                        .path(&aln_db)
-                        .path(manifest::table_path(&results, MMSEQS, &idx.to_string())),
-                ])
+                Step::serial({
+                    let cmds = search::Mmseqs {
+                        bin: &mmseqs_bin,
+                        query_db: &query_db,
+                        target_db: &target_db,
+                        aln_db: aln_db.clone(),
+                        work: scratch.join("work"),
+                        out: manifest::table_path(&results, MMSEQS, &idx.to_string()),
+                        threads: args.threads,
+                        s: Some(RECRUIT_S.to_string()),
+                        max_seqs: Some(RECRUIT_MAX_SEQS),
+                    }
+                    .cmds();
+
+                    [
+                        cmds.search,
+                        cmds.convert
+                            .field(manifest::NAME, MMSEQS)
+                            .field(manifest::TOOL, MMSEQS)
+                            .field(manifest::SHARD, idx.to_string()),
+                    ]
+                })
                 .name(format!("mmseqs.{idx}")),
             )
             .step(PCmd::new("rm").name("clean").flag("-rf").path(&scratch));
@@ -865,8 +864,9 @@ fn search(args: SearchArgs, paths: &Paths) -> anyhow::Result<()> {
                             .arg("-t", 1)
                             .arg("--tmp-dir", dir_scratch(family, direction).join("nail"))
                             .arg("--mmseqs-s", DECOY_S)
+                            .arg("--seed-mode", search::sweeps::SEED_MODE)
                             .arg("--mmseqs-max-seqs", DECOY_MAX_SEQS)
-                            .arg("-E", EVALUE)
+                            .arg("-E", search::EVALUE)
                             .flag("--allow-overwrite")
                             .arg("--tbl-out", table(NAIL, family))
                             .path(hmm(family))
@@ -883,14 +883,13 @@ fn search(args: SearchArgs, paths: &Paths) -> anyhow::Result<()> {
                 Step::batched(
                     jobs,
                     per_family(&|family| {
-                        PCmd::new(&mmseqs_bin)
-                            .name("createdb")
-                            .sub("createdb")
-                            .arg("--threads", 1)
-                            .path(target(family))
-                            .path(dir_scratch(family, direction).join("targetDB/targetDB"))
-                            .field(manifest::STAGE, CREATEDB)
-                            .field(manifest::SHARD, family)
+                        search::createdb(
+                            &mmseqs_bin,
+                            &target(family),
+                            &dir_scratch(family, direction).join("targetDB/targetDB"),
+                            family,
+                            1,
+                        )
                     }),
                 )
                 .name(format!("createdb.{direction}")),
@@ -901,20 +900,23 @@ fn search(args: SearchArgs, paths: &Paths) -> anyhow::Result<()> {
                     per_family(&|family| {
                         let (name, tool, shard) = run_of(MMSEQS, family);
                         let d = dir_scratch(family, direction);
-                        PCmd::new(&mmseqs_bin)
-                            .sub("search")
-                            .path(query_db(family))
-                            .path(d.join("targetDB/targetDB"))
-                            .path(d.join("alnDB/alnDB"))
-                            .path(d.join("work"))
-                            .arg("--threads", 1)
-                            .arg("-s", DECOY_S)
-                            .arg("--max-seqs", DECOY_MAX_SEQS)
-                            .arg("-e", EVALUE)
-                            .field(manifest::NAME, name)
-                            .field(manifest::TOOL, tool)
-                            .field(manifest::SHARD, shard)
-                            .field(DIRECTION, direction)
+                        search::Mmseqs {
+                            bin: &mmseqs_bin,
+                            query_db: &query_db(family),
+                            target_db: &d.join("targetDB/targetDB"),
+                            aln_db: d.join("alnDB/alnDB"),
+                            work: d.join("work"),
+                            out: table(MMSEQS, family),
+                            threads: 1,
+                            s: Some(DECOY_S.to_string()),
+                            max_seqs: Some(DECOY_MAX_SEQS),
+                        }
+                        .cmds()
+                        .search
+                        .field(manifest::NAME, name)
+                        .field(manifest::TOOL, tool)
+                        .field(manifest::SHARD, shard)
+                        .field(DIRECTION, direction)
                     }),
                 )
                 .name(format!("mmseqs.{direction}")),
@@ -924,16 +926,20 @@ fn search(args: SearchArgs, paths: &Paths) -> anyhow::Result<()> {
                     jobs,
                     per_family(&|family| {
                         let d = dir_scratch(family, direction);
-                        PCmd::new(&mmseqs_bin)
-                            .name("convertalis")
-                            .sub("convertalis")
-                            .path(query_db(family))
-                            .path(d.join("targetDB/targetDB"))
-                            .path(d.join("alnDB/alnDB"))
-                            .path(table(MMSEQS, family))
-                            .arg("--format-mode", 0)
-                            .field(manifest::STAGE, CONVERT)
-                            .field(manifest::SHARD, family)
+                        search::Mmseqs {
+                            bin: &mmseqs_bin,
+                            query_db: &query_db(family),
+                            target_db: &d.join("targetDB/targetDB"),
+                            aln_db: d.join("alnDB/alnDB"),
+                            work: d.join("work"),
+                            out: table(MMSEQS, family),
+                            threads: 1,
+                            s: Some(DECOY_S.to_string()),
+                            max_seqs: Some(DECOY_MAX_SEQS),
+                        }
+                        .cmds()
+                        .convert
+                        .field(manifest::SHARD, family)
                     }),
                 )
                 .name(format!("convert.{direction}")),
@@ -941,11 +947,18 @@ fn search(args: SearchArgs, paths: &Paths) -> anyhow::Result<()> {
             .step(
                 Step::batched(
                     jobs,
+                    // hmmsearch is the one command here not built through
+                    // `search`. search::hmmer returns a whole Step, batched
+                    // over the parts of one split query and followed by a cat
+                    // that joins their tables. this searches one family per
+                    // command and batches over families instead, and each
+                    // family's table is its own, so there is no split to cut
+                    // and nothing to concatenate
                     per_family(&|family| {
                         let (name, tool, shard) = run_of(HMMER, family);
                         PCmd::new(&hmmsearch_bin)
                             .arg("--cpu", 1)
-                            .arg("-E", EVALUE)
+                            .arg("-E", search::EVALUE)
                             .arg("-o", "/dev/null")
                             .arg("--tblout", table(HMMER, family))
                             .arg(

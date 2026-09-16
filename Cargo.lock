@@ -211,6 +211,7 @@ dependencies = [
  "libsail",
  "michi",
  "rayon",
+ "search",
  "serde",
  "util",
 ]

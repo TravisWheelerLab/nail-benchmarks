@@ -53,7 +53,7 @@ benchmarks/store/         what can be done to the store: import | clean
 benchmarks/recall/        recall against prefilter sensitivity   [fixed]
 benchmarks/cloud-search/  the (A, B) pruning surface             [fixed]
 benchmarks/hit-loss/      where hmmer's hits get lost            [fixed]
-benchmarks/calibrate/     what a search costs, and what a run will  [ladder]
+benchmarks/calibrate/     what a search costs, and what a run will  [ladder, on ice]
 benchmarks/cutoffs/       per-family score cutoffs from decoys    [fixed]
 benchmarks/long-seqs/     how the tools scale with length         [pairs]
 benchmarks/pid/           recall against percent identity, over a profmark split
@@ -66,6 +66,38 @@ libraries sit under them, and two binaries that belong to no benchmark:
 `benchmarks/mgy/` holds no code. It is the `inputs/` and `outputs/` trees the
 old `mgy` crate wrote before the store existed, about 3.5 TB of cluster results
 that nothing here can reproduce. Nothing reads or writes it. Leave it alone.
+
+### How much of the libraries is actually shared
+
+Counted per public item, by how many binaries reference it. A part with one
+consumer belongs in that consumer rather than in a library, and the count is
+the test rather than how well the library reads from the inside.
+
+About a sixth of the two libraries has a single consumer, and all of it is
+recall's:
+
+- `search`, 428 lines. Roughly 87 are recall alone -- `NAIL_S`, `MMSEQS_S`,
+  `MMSEQS_MAX_SEQS`, `createdb` and the whole `Mmseqs` builder, since recall is
+  the only benchmark that sweeps mmseqs. Another 16 have no consumer at all:
+  `cat`, `MMSEQS_K`, `Dirs.results`. The remaining ~325 -- `Dirs`, `Split`,
+  `Hmmer`, `Bins`, `jobs`, `HMMER_CPU` -- are used by recall, cloud-search and
+  hit-loss alike.
+- `scores`, 4,200 lines. Roughly 680 are recall alone: `write.rs` and
+  `read.rs`, which are the `scores.tbl` grammar. Nothing at all is exclusive to
+  cloud-search or to hit-loss.
+
+The seam that shows up is the one the two table grammars already draw, rather
+than a split between reading and analysing: `scores.tbl` is recall's and
+nobody else's, `runs.tbl` is cloud-search's and hit-loss's. hit-loss's use of
+the crate is a strict subset of cloud-search's -- both write `runs.tbl` and
+read `funnel`, and cloud-search also reads `summary`.
+
+All three reach `scores` only through `scores::parse`. No binary names
+`analyze`, `write`, `runs`, `frame`, `read`, `shard` or `collect`, so what sits
+behind that one door can move without touching a caller.
+
+`cutoffs` is the benchmark that uses neither library. It runs the same three
+tools and builds every command by hand, at `cutoffs/src/main.rs:471` and after.
 
 No benchmark looks on `PATH`. `util::tools` holds the path to every binary and
 every download, and a benchmark reads it rather than guessing, so a run uses
@@ -341,6 +373,12 @@ run -- `--full-dp`, which records no `-A` and no `-B` and so sits off the grid
 
 Three things sit outside the shape above, and none of them asks what was
 found.
+
+**`calibrate` is on ice: leave it alone until Jack says otherwise.** It may
+well be deleted. Do not fix, tidy, extend or test it, and do not count it when
+working out how many benchmarks use a shared crate -- a symbol only calibrate
+and one other crate reference has one consumer, not two. The rest of this
+section describes it as it stands.
 
 `calibrate` asks what a run will cost. `calibrate run` times the searches
 the benchmarks are built out of -- nail's seeding, the alignment off those
