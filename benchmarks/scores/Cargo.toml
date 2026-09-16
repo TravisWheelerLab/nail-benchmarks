@@ -15,5 +15,4 @@ util = { workspace = true }
 anyhow = { workspace = true }
 clap = { workspace = true }
 memchr = { workspace = true }
-rand = { workspace = true }
 rayon = { workspace = true }

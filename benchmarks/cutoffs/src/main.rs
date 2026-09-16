@@ -288,8 +288,9 @@ pub struct ReverseArgs {
     #[command(flatten)]
     pub place: Where,
 
-    /// Reverse only the first N shards. This is the one place the size of the
-    /// calibration set is decided; every later stage uses whatever is here
+    /// Reverse only the first N shards of the set. The label says how big the
+    /// set is; this narrows a run below it, and every later stage uses
+    /// whatever was reversed here
     #[arg(short = 'n', long)]
     pub shards: Option<usize>,
 

@@ -441,10 +441,10 @@ impl Set {
     pub fn values(&self, key: &str) -> Vec<String> {
         let mut seen = Vec::new();
         for row in &self.rows {
-            if let Some(value) = row.attrs.get(key) {
-                if !seen.iter().any(|v| v == value) {
-                    seen.push(value.clone());
-                }
+            if let Some(value) = row.attrs.get(key)
+                && !seen.iter().any(|v| v == value)
+            {
+                seen.push(value.clone());
             }
         }
         seen

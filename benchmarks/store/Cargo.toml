@@ -8,10 +8,8 @@ name = "store"
 path = "src/main.rs"
 
 [dependencies]
-libsail = { workspace = true }
 serde = { workspace = true }
 util = { workspace = true }
 
 anyhow = { workspace = true }
 clap = { workspace = true }
-rayon = { workspace = true }

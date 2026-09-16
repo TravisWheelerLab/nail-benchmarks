@@ -126,6 +126,15 @@ fn default_seed() -> u64 {
 }
 
 impl Recipe {
+    /// Where this recipe puts what it makes.
+    fn out(&self) -> &Path {
+        match self {
+            Recipe::Fixed { out, .. } | Recipe::Pairs { out, .. } | Recipe::Ladder { out, .. } => {
+                out
+            }
+        }
+    }
+
     fn shape(&self) -> &'static str {
         match self {
             Recipe::Fixed { .. } => "fixed",
@@ -143,17 +152,30 @@ struct Cli {
     /// Which label of paths.toml to build. Omit to list them
     #[arg(long = "in", value_name = "label")]
     label: Option<String>,
+
+    /// Take back what is already at the label's `out` first, so a changed
+    /// recipe can be rebuilt in place
+    #[arg(long)]
+    rebuild: bool,
 }
 
 fn main() -> anyhow::Result<()> {
     let paths = paths::File::open(env!("CARGO_MANIFEST_DIR"))?;
 
-    let Some(label) = Cli::parse().label else {
+    let cli = Cli::parse();
+
+    let Some(label) = cli.label.clone() else {
         println!("{}", listing(&paths)?);
         return Ok(());
     };
 
-    match paths.get::<Recipe>(&label)? {
+    let recipe: Recipe = paths.get(&label)?;
+
+    if cli.rebuild {
+        take_back(paths.at(recipe.out()))?;
+    }
+
+    match recipe {
         Recipe::Fixed {
             queries,
             alignments,
@@ -822,9 +844,27 @@ fn collection_at(dir: &Path) -> anyhow::Result<Aggregate<IndexedFasta>> {
 /// manifest, so the mixture would be searched as if it were one set.
 fn claim(set: &Path) -> anyhow::Result<()> {
     if set.exists() {
-        bail!("{} already exists; remove it to rebuild", set.display());
+        bail!(
+            "{} already exists; pass --rebuild to take it back first",
+            set.display()
+        );
     }
     Ok(())
+}
+
+/// Remove what is at a label's `out`, so a changed recipe can be rebuilt.
+//
+// through the same measure-show-ask that `store clean` uses rather than a
+// bare remove_dir_all: a fixed set at a thousand shards is most of a terabyte,
+// and a recipe typo that points `out` somewhere unintended should be read
+// before it is acted on rather than after
+fn take_back(set: PathBuf) -> anyhow::Result<()> {
+    if !set.exists() {
+        return Ok(());
+    }
+
+    let parent = set.parent().unwrap_or(&set).to_owned();
+    util::clean::run(&parent, &[("set", set)])
 }
 
 /// The first `n` families of Pfam, as both an hmm file and its alignments.
