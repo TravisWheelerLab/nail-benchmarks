@@ -77,8 +77,11 @@ seqs       = 2455939
 
 # ------------------------------------------------------------------ cutoffs
 
-# Reverses every shard and recruits decoys across all of them, so the decoys
-# are drawn from the population the searches they gate are run against.
+# The same deal recall gets, written backwards. Reversing keeps a sequence's
+# composition and destroys its homology, so a family that still scores against
+# one is scoring noise, which is what a threshold is learned from. The tag is
+# on the recipe rather than a stage, so the set arrives reversed and nothing
+# makes a second copy of it.
 [cutoffs-toy]
 shape      = "fixed"
 queries    = "../../data/pfam.hmm"
@@ -88,6 +91,7 @@ out        = "../../store/sets/cutoffs-toy/inputs"
 shards     = 2
 seqs       = 400
 fams       = 5
+reversed   = true
 
 [cutoffs-real]
 shape      = "fixed"
@@ -96,6 +100,7 @@ alignments = "../../data/pfam.sto"
 targets    = "../../data/mgnify"
 out        = "../../store/sets/cutoffs-real/inputs"
 shards     = 1000
+reversed   = true
 
 # ---------------------------------------------------------------- calibrate
 

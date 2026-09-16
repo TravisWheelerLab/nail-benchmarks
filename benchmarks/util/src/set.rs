@@ -110,6 +110,19 @@ pub mod shape {
         attrs: &["shard", "seqs", "residues", "bytes"],
     };
 
+    /// The same as [`FIXED`], with every sequence written backwards.
+    ///
+    /// Reversing is a property of the deal rather than something done to a
+    /// finished set, so a reversed set is drawn by the same recipe under a
+    /// tag. It is a shape of its own because searching one answers a different
+    /// question, and a benchmark handed the wrong one should stop before any
+    /// tool runs.
+    pub const REVERSED: Shape = Shape {
+        name: "reversed",
+        needs: &[Rep::QueryHmm, Rep::QuerySto, Rep::QueryDb, Rep::Target],
+        attrs: &["shard", "seqs", "residues", "bytes"],
+    };
+
     /// Nested rungs on both axes, each a prefix of the one above.
     pub const LADDER: Shape = Shape {
         name: "ladder",
@@ -690,6 +703,25 @@ mod tests {
 
     /// A set built before shapes existed says nothing about itself, so the
     /// columns are all there is to go on.
+    /// The columns are the same, so only the declared shape tells them apart.
+    /// That is the whole reason a builder stamps one.
+    #[test]
+    fn a_reversed_set_is_refused_where_a_forward_one_is_wanted() {
+        let mut reversed = fixed_set();
+        reversed.meta.insert("shape".into(), "reversed".into());
+
+        assert!(reversed.check(&shape::REVERSED).is_ok());
+
+        let err = reversed.check(&shape::FIXED).unwrap_err().to_string();
+        assert!(err.contains("reversed"), "{err}");
+        assert!(err.contains("fixed"), "{err}");
+
+        // and the other way, since recall reading a reversed set is the
+        // failure that costs a run rather than an error
+        let err = fixed_set().check(&shape::REVERSED).unwrap_err().to_string();
+        assert!(err.contains("reversed"), "{err}");
+    }
+
     #[test]
     fn a_set_that_declares_no_shape_is_checked_on_its_columns() {
         let mut set = fixed_set();

@@ -5,6 +5,10 @@
 //! Collecting those scores per family gives a threshold above which a hit is
 //! unlikely to be chance.
 //!
+//! The set it reads is already reversed -- a `fixed` recipe under a
+//! `reversed` tag, drawn the same way and written backwards -- so there is no
+//! stage here that reverses anything.
+//!
 //! Doing that exhaustively would mean searching every family against every
 //! reversed sequence. Instead it runs in two stages:
 //!
@@ -19,8 +23,10 @@
 //! the *forward* sequences, so a recruit that turns out to be a genuine family
 //! member can be dropped instead of inflating the threshold.
 //!
-//! `decoys` sits between them: it reads stage 1's hit tables, un-reverses the
-//! sequences that hit, and splits the query set per family.
+//! `decoys` sits between them: it reads stage 1's hit tables and pulls the
+//! sequences that hit out of the shard they came from. A record read there is
+//! already the reversed decoy, and reversing it is the forward one, so both
+//! directions come out of one pass over the recruits.
 //!
 //! `recruit` is one big search per shard, so it runs through `pipeline` the
 //! same way the rest of this crate does. `search` is the opposite shape — many
@@ -28,11 +34,10 @@
 //! which `pipeline`'s `Cmd`/`Step` DAG has no batched form for (a family needs
 //! several commands in a fixed order: build its query profile, then search
 //! and convert per direction). It runs as a plain rayon pool instead, the same
-//! way `reverse`, `decoys` and `learn` already do their own parallel work in
-//! this file.
+//! way `decoys` and `learn` already do their own parallel work in this file.
 
 use std::collections::{HashMap, HashSet};
-use std::io::{BufWriter, Write};
+use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::sync::Mutex;
@@ -61,7 +66,6 @@ pub const DEFAULT_NAME: &str = "default";
 
 /// What the decoy set holds, relative to its own root. These spell both the
 /// paths the stages write and the cells the manifest carries.
-const TARGETS_REV: &str = "targets-rev";
 const DECOYS: &str = "decoys";
 const DECOYS_REV: &str = "decoys-rev";
 const QUERIES: &str = "queries";
@@ -111,7 +115,6 @@ fn run_name(tool: &str, direction: &str) -> String {
 /// be promoted by hand.
 ///
 /// ```text
-/// store/sets/<name>-decoys/targets-rev/<i>.fa    the reversed shards
 /// store/sets/<name>-decoys/decoys/<family>.fa    what recruited, un-reversed
 /// store/sets/<name>-decoys/decoys-rev/<f>.fa     ... and reversed again
 /// store/sets/<name>-decoys/queries/<family>/     the query set, per family
@@ -193,10 +196,6 @@ impl Layout {
         self.query_db.clone()
     }
 
-    fn targets_rev(&self) -> PathBuf {
-        self.inputs().join(TARGETS_REV)
-    }
-
     fn decoys(&self) -> PathBuf {
         self.inputs().join(DECOYS)
     }
@@ -261,8 +260,6 @@ impl Stage {
 
 #[derive(Subcommand)]
 enum Cmd {
-    /// Reverse the target shards into the calibration directory.
-    Reverse(ReverseArgs),
     /// Sweep every family against the reversed shards to find candidates.
     Recruit(RecruitArgs),
     /// Un-reverse what hit, group it per family, and split the query set.
@@ -281,22 +278,6 @@ pub struct Where {
     /// Omit to list the labels
     #[arg(long = "in", value_name = "label")]
     pub label: Option<String>,
-}
-
-#[derive(Parser, Debug)]
-pub struct ReverseArgs {
-    #[command(flatten)]
-    pub place: Where,
-
-    /// Reverse only the first N shards of the set. The label says how big the
-    /// set is; this narrows a run below it, and every later stage uses
-    /// whatever was reversed here
-    #[arg(short = 'n', long)]
-    pub shards: Option<usize>,
-
-    /// Threads for the reversal itself
-    #[arg(short, long, default_value_t = 4)]
-    pub threads: usize,
 }
 
 #[derive(Parser, Debug)]
@@ -351,8 +332,6 @@ pub struct AllArgs {
     #[command(flatten)]
     pub place: Where,
 
-    #[arg(short = 'n', long)]
-    pub shards: Option<usize>,
 
     #[arg(short, long, default_value_t = 4)]
     pub threads: usize,
@@ -361,9 +340,10 @@ pub struct AllArgs {
     pub jobs: Option<usize>,
 }
 
-/// The set this calibrates against. What it builds out of that is a set of its
-/// own, of shape [`util::set::shape::DECOYS`].
-pub const SHAPE: &util::set::Shape = &util::set::shape::FIXED;
+/// The set this calibrates against: the same deal a benchmark searches, drawn
+/// backwards. What it builds out of that is a set of its own, of shape
+/// [`util::set::shape::DECOYS`].
+pub const SHAPE: &util::set::Shape = &util::set::shape::REVERSED;
 
 #[derive(Parser)]
 #[command(name = "cutoffs", about = "per-family score cutoffs from reversed decoys")]
@@ -425,7 +405,6 @@ fn main() -> anyhow::Result<()> {
 impl Cmd {
     fn label(&self) -> Option<&str> {
         let place = match self {
-            Cmd::Reverse(a) => &a.place,
             Cmd::Recruit(a) => &a.place,
             Cmd::Decoys(a) => &a.place,
             Cmd::Search(a) => &a.place,
@@ -438,7 +417,6 @@ impl Cmd {
 
 fn run_cmd(cmd: Cmd, paths: &Paths) -> anyhow::Result<()> {
     match cmd {
-        Cmd::Reverse(args) => reverse(args, paths),
         Cmd::Recruit(args) => recruit(args, paths),
         Cmd::Decoys(args) => decoys(args, paths),
         Cmd::Search(args) => search(args, paths),
@@ -452,110 +430,10 @@ fn run_cmd(cmd: Cmd, paths: &Paths) -> anyhow::Result<()> {
 /// Write a copy of `src` with every sequence reversed. Reversed sequences keep
 /// the composition of the original but destroy its homology, which makes them
 /// usable as decoys when calibrating score cutoffs.
-fn write_reversed(src: &Path, dst: &Path) -> anyhow::Result<()> {
-    if let Some(dir) = dst.parent() {
-        std::fs::create_dir_all(dir)?;
-    }
-
-    let fa =
-        IndexedFasta::open(src).with_context(|| format!("failed to open {}", src.display()))?;
-    let mut out = BufWriter::new(
-        std::fs::File::create(dst)
-            .with_context(|| format!("failed to create {}", dst.display()))?,
-    );
-
-    for mut rec in fa.iter() {
-        rec.reverse();
-        rec.write_to(&mut out, DEFAULT_LINE_WIDTH)?;
-    }
-
-    out.flush()?;
-    Ok(())
-}
-
-/// Shard files named `<n>.fa` in a directory this calibration wrote.
-///
-/// The set's own targets come from its manifest; these are the reversed and
-/// recruited copies made here, which nothing else reads and which are named by
-/// the shard they came from.
-fn shards(dir: &Path) -> anyhow::Result<Vec<(usize, PathBuf)>> {
-    let entries =
-        std::fs::read_dir(dir).with_context(|| format!("failed to read {}", dir.display()))?;
-
-    let mut out: Vec<(usize, PathBuf)> = entries
-        .filter_map(|e| e.ok())
-        .map(|e| e.path())
-        .filter(|p| p.extension().is_some_and(|x| x == "fa"))
-        .filter_map(|p| {
-            let n = p.file_stem()?.to_str()?.parse::<usize>().ok()?;
-            Some((n, p))
-        })
-        .collect();
-
-    out.sort_by_key(|(n, _)| *n);
-
-    if out.is_empty() {
-        bail!("no files named <n>.fa in {}", dir.display());
-    }
-
-    Ok(out)
-}
-
-fn reverse(args: ReverseArgs, paths: &Paths) -> anyhow::Result<()> {
-    let layout = Layout::new(paths)?;
-    let dst = layout.targets_rev();
-
-    let mut found: Vec<(String, PathBuf)> = layout.targets().to_vec();
-    if let Some(n) = args.shards {
-        if n == 0 {
-            bail!("--shards 0 would leave nothing to calibrate against");
-        }
-        if n > found.len() {
-            eprintln!(
-                "warning: asked for {n} shards but {} has only {}; using all of them",
-                layout.source,
-                found.len()
-            );
-        }
-        found.truncate(n);
-    }
-
-    if dst.exists() {
-        std::fs::remove_dir_all(&dst)?;
-    }
-    std::fs::create_dir_all(&dst)?;
-
-    println!("reversing {} shards into {}...", found.len(), dst.display());
-
-    let pool = pool(args.threads)?;
-    pool.install(|| {
-        found
-            .par_iter()
-            .try_for_each(|(i, path)| -> anyhow::Result<()> {
-                // plain `<n>.fa`, not `<n>.rev.fa`: the directory already says
-                // these are reversed, and the shard index has to stay readable off
-                // the stem for the stages downstream
-                write_reversed(path, &dst.join(format!("{i}.fa")))
-                    .with_context(|| format!("failed to reverse shard {i}"))
-            })
-    })?;
-
-    println!("reversed {} shards", found.len());
-    Ok(())
-}
-
 // ----------------------------------------------------------------- recruit
 
 fn recruit(args: RecruitArgs, paths: &Paths) -> anyhow::Result<()> {
     let layout = Layout::new(paths)?;
-    let rev = layout.targets_rev();
-
-    if !rev.is_dir() {
-        bail!(
-            "no reversed shards in {}; run `mgy cutoffs reverse` first",
-            rev.display()
-        );
-    }
 
     let nail_bin = nail()?;
     let mmseqs_bin = mmseqs()?;
@@ -568,7 +446,7 @@ fn recruit(args: RecruitArgs, paths: &Paths) -> anyhow::Result<()> {
 
     let mut pl = PipelineBuilder::new().step(PCmd::new("mkdir").flag("-p").path(&results));
 
-    for (idx, shard) in shards(&rev)? {
+    for (idx, shard) in layout.targets() {
         let scratch = tmp.join(format!("shard-{idx}"));
         let target_db = scratch.join("targetDB/targetDB");
         let aln_db = scratch.join("alnDB/alnDB");
@@ -660,9 +538,10 @@ fn decoys(args: DecoysArgs, paths: &Paths) -> anyhow::Result<()> {
     let layout = Layout::new(paths)?;
     let recruit_results = layout.recruit()?.results();
 
-    let shard_list: Vec<String> = shards(&layout.targets_rev())?
-        .into_iter()
-        .map(|(i, _)| i.to_string())
+    let shard_list: Vec<String> = layout
+        .targets()
+        .iter()
+        .map(|(name, _)| name.clone())
         .collect();
 
     println!("reading {} recruited shards...", shard_list.len());
@@ -717,11 +596,20 @@ fn decoys(args: DecoysArgs, paths: &Paths) -> anyhow::Result<()> {
     }
     std::fs::create_dir_all(&decoy_dir)?;
 
-    // one lock per family: shards are read in parallel and any of them may
-    // contribute to any family
-    let handles: HashMap<&str, Mutex<PathBuf>> = families
+    let rev_dir = layout.decoys_rev();
+    std::fs::create_dir_all(&rev_dir)?;
+
+    // one lock per family, over both directions: shards are read in parallel
+    // and any of them may contribute to any family
+    let handles: HashMap<&str, Mutex<(PathBuf, PathBuf)>> = families
         .iter()
-        .map(|f| (f.as_str(), Mutex::new(decoy_dir.join(format!("{f}.fa")))))
+        .map(|f| {
+            let paths = (
+                decoy_dir.join(format!("{f}.fa")),
+                rev_dir.join(format!("{f}.fa")),
+            );
+            (f.as_str(), Mutex::new(paths))
+        })
         .collect();
 
     let targets = layout.targets();
@@ -749,52 +637,49 @@ fn decoys(args: DecoysArgs, paths: &Paths) -> anyhow::Result<()> {
                 let shard_fa = IndexedFasta::open(&path)
                     .with_context(|| format!("failed to open {}", path.display()))?;
 
-                let mut buffers: HashMap<&str, Vec<u8>> = HashMap::new();
-                for rec in shard_fa.iter() {
-                    let Some(fams) = by_target.get(rec.name_str()?) else {
+                // the shard is reversed, so a record read out of it is already
+                // the reversed decoy, and reversing it again is the forward
+                // one. both come out of the one pass, over the recruits alone
+                // rather than over the shard
+                let mut buffers: HashMap<&str, (Vec<u8>, Vec<u8>)> = HashMap::new();
+                for mut rec in shard_fa.iter() {
+                    let Some(fams) = by_target.get(rec.name_str()?).cloned() else {
                         continue;
                     };
+
+                    let mut reversed = Vec::new();
+                    rec.write_to(&mut reversed, DEFAULT_LINE_WIDTH)?;
+
+                    rec.reverse();
+                    let mut forward = Vec::new();
+                    rec.write_to(&mut forward, DEFAULT_LINE_WIDTH)?;
+
                     for family in fams {
-                        let buf = buffers.entry(family).or_default();
-                        rec.write_to(buf, DEFAULT_LINE_WIDTH)?;
+                        let (fwd, rev) = buffers.entry(family).or_default();
+                        fwd.extend_from_slice(&forward);
+                        rev.extend_from_slice(&reversed);
                     }
                 }
 
-                for (family, text) in buffers {
+                for (family, (forward, reversed)) in buffers {
                     let guard = handles
                         .get(family)
                         .with_context(|| format!("no handle for family {family}"))?
                         .lock()
                         .expect("family mutex poisoned");
 
-                    let mut file = std::fs::OpenOptions::new()
-                        .create(true)
-                        .append(true)
-                        .open(&*guard)?;
-                    file.write_all(&text)?;
+                    let (fwd_path, rev_path) = &*guard;
+                    for (path, text) in [(fwd_path, &forward), (rev_path, &reversed)] {
+                        let mut file = std::fs::OpenOptions::new()
+                            .create(true)
+                            .append(true)
+                            .open(path)?;
+                        file.write_all(text)?;
+                    }
                 }
 
                 Ok(())
             })
-    })?;
-
-    // ---- reverse them back, so both directions are searched in stage 2
-
-    let rev_dir = layout.decoys_rev();
-    std::fs::create_dir_all(&rev_dir)?;
-
-    println!("reversing decoys...");
-    let names: Vec<&String> = families.iter().collect();
-    pool.install(|| {
-        names.par_iter().try_for_each(|f| -> anyhow::Result<()> {
-            // plain `<family>.fa`, not `<family>.rev.fa`: the directory already
-            // says these are reversed, the same call `reverse` makes for shards
-            write_reversed(
-                &decoy_dir.join(format!("{f}.fa")),
-                &rev_dir.join(format!("{f}.fa")),
-            )
-            .with_context(|| format!("failed to reverse decoys for {f}"))
-        })
     })?;
 
     // ---- split the query set, so each family can be searched on its own
@@ -1301,12 +1186,6 @@ where
 // --------------------------------------------------------------------- all
 
 fn all(args: AllArgs, paths: &Paths) -> anyhow::Result<()> {
-    reverse(ReverseArgs {
-        place: args.place.clone(),
-        shards: args.shards,
-        threads: args.threads,
-    }, paths)?;
-
     recruit(RecruitArgs {
         place: args.place.clone(),
         threads: args.threads,

@@ -161,9 +161,17 @@ builder stamps `#= shape` and the benchmark names the one it reads, and
 | shape | representations | attributes | read by |
 |---|---|---|---|
 | `fixed` | `query_hmm`, `query_sto`, `query_db`, `target` | `shard`, `seqs`, `residues`, `bytes` | recall, cloud-search, hit-loss, cutoffs |
+| `reversed` | the same as `fixed` | the same as `fixed` | cutoffs |
 | `ladder` | the same | `query_rung`, `target_rung`, `query_residues`, `target_residues` | calibrate |
 | `pairs` | `query_fa`, `target` | `pair`, `query_residues`, `residues` | long-seqs |
 | `decoys` | `query_hmm`, `query_sto`, `target` | `family`, `direction` | cutoffs, over what it built |
+
+`reversed` is `fixed` written backwards: the same sources, the same seed and
+the same sharding, with each sequence reversed as it is dealt. Reversing keeps
+a sequence's composition and destroys its homology, so the two sets hold the
+same draw and answer different questions, which is why the columns are
+identical and only the declared shape tells them apart. A `fixed` recipe earns
+it with `reversed = true`.
 
 `pairs` is the one shape with no draw in it. Its two sources are separate
 directories of fasta, so a sequence is never on both sides, and pair `i` is the
@@ -393,11 +401,14 @@ reverse the targets, recruit decoys per family, search each family against its
 own decoys forward and reversed, and learn the per-family score cutoffs every
 hit is then held against.
 
-It is three things wearing one name, and the store is where that shows. The
-first stages build a decoy set, which goes where sets go, at
-`store/sets/<name>-decoys/`, naming in its own `set.tbl` the set it was drawn
-from. `search` is then an ordinary run over that set, and `learn` an analysis
-over that run. Nothing about it is a special kind of artifact; what makes it a
+The set it reads arrives reversed, built by a `fixed` recipe under a
+`reversed` tag, so nothing here reverses anything and no second copy of the
+shards is made. `recruit` and `decoys` build a decoy set, which goes where sets
+go, at `store/sets/<name>-decoys/`, naming in its own `set.tbl` the set it was
+drawn from. A record read out of a reversed shard is already the reversed
+decoy, and reversing it is the forward one, so both directions come out of one
+pass over the recruits. `search` is then an ordinary run over that set, and
+`learn` an analysis over that run. Nothing about it is a special kind of artifact; what makes it a
 calibration rather than a benchmark is that its product,
 `data/mgy-cutoffs.tbl`, is committed and promoted by hand.
 

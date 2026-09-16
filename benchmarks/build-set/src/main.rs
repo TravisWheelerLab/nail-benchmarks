@@ -92,6 +92,15 @@ enum Recipe {
         /// A cap on the families cut. All of them when absent.
         #[serde(default)]
         fams: Option<usize>,
+        /// Write every sequence backwards.
+        ///
+        /// The same deal, not a pass over a finished set: the draw, the
+        /// sharding and the seed are untouched, so a reversed set holds the
+        /// reverse of exactly what its forward twin holds. Reversing keeps a
+        /// sequence's composition and destroys its homology, which is what a
+        /// calibration searches against.
+        #[serde(default)]
+        reversed: bool,
         #[serde(default = "default_seed")]
         seed: u64,
     },
@@ -139,6 +148,7 @@ impl Recipe {
 
     fn shape(&self) -> &'static str {
         match self {
+            Recipe::Fixed { reversed: true, .. } => "reversed",
             Recipe::Fixed { .. } => "fixed",
             Recipe::Pairs { .. } => "pairs",
             Recipe::Ladder { .. } => "ladder",
@@ -186,6 +196,7 @@ fn main() -> anyhow::Result<()> {
             shards,
             seqs,
             fams,
+            reversed,
             seed,
         } => fixed(
             Sources::new(&paths, queries, alignments, targets)?,
@@ -193,6 +204,7 @@ fn main() -> anyhow::Result<()> {
             shards,
             seqs,
             fams,
+            reversed,
             seed,
         ),
         Recipe::Pairs {
@@ -231,9 +243,14 @@ fn listing(paths: &paths::File) -> anyhow::Result<String> {
 
     let mut out = format!("labels in {}\n\n", paths.path().display());
 
-    // the longest label sets the column, so the shapes and sizes line up
-    // however the labels are named
+    // the longest of each sets its column, so the three line up however the
+    // labels are named and whatever a shape is called
     let width = paths.labels().map(str::len).max().unwrap_or(0);
+    let shape_width = paths
+        .labels()
+        .map(|l| paths.get::<Recipe>(l).map(|r| r.shape().len()).unwrap_or(0))
+        .max()
+        .unwrap_or(0);
 
     for label in paths.labels() {
         let recipe: Recipe = paths.get(label)?;
@@ -278,7 +295,7 @@ fn listing(paths: &paths::File) -> anyhow::Result<String> {
 
         let _ = writeln!(
             out,
-            "  {label:<width$}  {shape:<6}  {size:<34}  -> {}",
+            "  {label:<width$}  {shape:<shape_width$}  {size:<34}  -> {}",
             dst.display()
         );
     }
@@ -291,6 +308,13 @@ fn count(n: Option<usize>) -> String {
     match n {
         Some(n) => n.to_string(),
         None => "all".to_string(),
+    }
+}
+
+fn shape_of(reversed: bool) -> &'static str {
+    match reversed {
+        true => set::shape::REVERSED.name,
+        false => set::shape::FIXED.name,
     }
 }
 
@@ -309,6 +333,7 @@ fn fixed(
     shards: usize,
     n_seqs: Option<usize>,
     n_fams: Option<usize>,
+    reversed: bool,
     seed: u64,
 ) -> anyhow::Result<()> {
     claim(&root)?;
@@ -355,7 +380,7 @@ fn fixed(
                             Some(n) => n,
                         };
 
-                        let dealt = deal(&seqs, n_seqs, shards, seed, &targets)?;
+                        let dealt = deal(&seqs, n_seqs, shards, seed, reversed, &targets)?;
                         *counted.lock().expect("the deal poisoned the count") = dealt;
                         Ok(())
                     }
@@ -385,7 +410,7 @@ fn fixed(
         .collect();
 
     Set::new(&root, rows)
-        .says("shape", set::shape::FIXED.name)
+        .says("shape", shape_of(reversed))
         .says("recipe", "fixed")
         .says("seed", seed)
         .says("query", src.hmm.display())
@@ -413,6 +438,7 @@ fn deal(
     n_seqs: usize,
     shards: usize,
     seed: u64,
+    reversed: bool,
     out_dir: &Path,
 ) -> anyhow::Result<Vec<Shard>> {
     std::fs::create_dir_all(out_dir)
@@ -433,8 +459,16 @@ fn deal(
     // how big they are is the whole deal again
     let mut counted = vec![(0usize, 0u64); shards];
 
-    for (i, rec) in drawn.iter().enumerate() {
+    for (i, mut rec) in drawn.iter().enumerate() {
         let at = i % shards;
+
+        // reversed as it is written rather than in a pass afterwards, so the
+        // draw is the same one either way and a reversed set costs what a
+        // forward one costs
+        if reversed {
+            rec.reverse();
+        }
+
         rec.write_to(&mut writers[at], DEFAULT_LINE_WIDTH)?;
 
         counted[at].0 += 1;
