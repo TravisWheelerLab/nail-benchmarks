@@ -234,6 +234,7 @@ fn check_file_names(names: &HashSet<String>) -> anyhow::Result<()> {
 mod tests {
     use super::*;
     use crate::profile;
+    use libsail::seq::stockholm::IndexedStockholm;
 
     fn tmp(name: &str, body: &[u8]) -> std::path::PathBuf {
         let dir = std::env::temp_dir().join(format!("mgy-cut-{}-{name}", std::process::id()));
@@ -260,14 +261,11 @@ s3 WWWWWWWW
 ";
 
     fn ids_and_rows(path: &Path) -> Vec<(String, Vec<String>)> {
-        let source = FileSource::open(path).unwrap();
-        let offsets = build_index::<_, StockholmDelimiter>(source.file()).unwrap();
+        let alignments = IndexedStockholm::open(path).unwrap();
 
-        offsets
-            .iter()
-            .map(|o| {
-                let bytes = source.range(o.start, o.n_bytes).unwrap();
-                let rec = StockholmParser::parse(&bytes).unwrap();
+        (0..alignments.len())
+            .map(|n| {
+                let rec = alignments.try_get(n).unwrap().unwrap();
 
                 let rows = rec
                     .names

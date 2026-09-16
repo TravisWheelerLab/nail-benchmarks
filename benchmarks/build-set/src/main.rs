@@ -36,7 +36,7 @@ use anyhow::{Context, bail, ensure};
 use clap::Parser;
 use serde::Deserialize;
 use libsail::collection::{Aggregate, Indexable, Iterable};
-use libsail::format::Format;
+use libsail::format::{self, Format};
 use libsail::index::Index;
 use libsail::seq::fasta::{DEFAULT_LINE_WIDTH, IndexedFasta};
 use libsail::seq::p7hmm::IndexedHmm;
@@ -49,8 +49,6 @@ use util::paths;
 use util::set::{self, Set};
 use util::tools::mmseqs;
 
-/// Extensions in the MGnify directory treated as fasta.
-const FASTA_EXTENSIONS: [&str; 2] = ["fa", "fasta"];
 
 /// Where a set keeps things, relative to its own root.
 //
@@ -573,22 +571,28 @@ fn make_pairs(
     Ok(())
 }
 
-/// The fasta files in a directory, in name order.
+/// The fasta files in a directory, sorted by name.
+//
+// sniffed rather than matched on the extension: these are
+// somebody else's downloads, and a shard that arrived as
+// .seq or with no extension at all is still a shard.
+// detect_path errors on anything it cannot identify, which
+// here is the same answer as "not a fasta"
 fn fastas(dir: &Path) -> anyhow::Result<Vec<PathBuf>> {
     let mut out: Vec<PathBuf> = std::fs::read_dir(dir)
         .with_context(|| format!("failed to read {}", dir.display()))?
         .filter_map(|e| e.ok().map(|e| e.path()))
-        .filter(|p| {
-            p.extension()
-                .and_then(|x| x.to_str())
-                .is_some_and(|x| FASTA_EXTENSIONS.contains(&x.to_ascii_lowercase().as_str()))
-        })
+        .filter(|p| p.is_file())
+        .filter(|p| matches!(format::detect_path(p), Ok(Format::Fasta)))
         .collect();
 
+    // read_dir hands them over in whatever order the filesystem
+    // holds, and a record's position in the collection has to mean
+    // the same thing on every run for a seed to reproduce a draw
     out.sort();
 
     if out.is_empty() {
-        bail!("no {} files in {}", FASTA_EXTENSIONS.join("/"), dir.display());
+        bail!("no fasta files in {}", dir.display());
     }
 
     Ok(out)
@@ -840,24 +844,7 @@ impl Sources {
 /// into the index and refuses one that no longer matches, so a re-downloaded
 /// shard is rebuilt rather than read through a stale map.
 fn collection_at(dir: &Path) -> anyhow::Result<Aggregate<IndexedFasta>> {
-    let mut paths: Vec<std::path::PathBuf> = std::fs::read_dir(dir)
-        .with_context(|| format!("failed to read {}", dir.display()))?
-        .filter_map(|entry| entry.ok().map(|entry| entry.path()))
-        .filter(|path| {
-            path.extension()
-                .and_then(|ext| ext.to_str())
-                .is_some_and(|ext| FASTA_EXTENSIONS.contains(&ext.to_ascii_lowercase().as_str()))
-        })
-        .collect();
-
-    if paths.is_empty() {
-        bail!("no {} files in {}", FASTA_EXTENSIONS.join("/"), dir.display());
-    }
-
-    // read_dir hands them over in whatever order the filesystem holds, and a
-    // record's position in the collection has to mean the same thing on every
-    // run for a seed to reproduce a draw
-    paths.sort();
+    let paths = fastas(dir)?;
 
     let mut parts = Vec::with_capacity(paths.len());
     for path in &paths {
@@ -1008,7 +995,7 @@ mod tests {
     fn shards_of(dir: &Path, n: usize, shards: usize) -> (Vec<Vec<String>>, PathBuf) {
         let agg = collection_at(dir).unwrap();
         let out = dir.join(format!("out-{n}-{shards}"));
-        deal(&agg, n, shards, 67779, &out).unwrap();
+        deal(&agg, n, shards, 67779, false, &out).unwrap();
 
         let names = (1..=shards)
             .map(|i| {
