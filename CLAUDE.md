@@ -5,21 +5,23 @@ search tool, against the tools it is compared to: HMMER, MMseqs2, BLAST, LAST
 and DIAMOND.
 
 A Cargo workspace at the repo root. Binaries are the interface. There is one
-per benchmark, and each owns its own inputs, runs and analyses.
+per benchmark, and what each of them builds, runs and works out goes in the
+store.
 
 Each binary has a shim beside its `Cargo.toml`, named after it, so the
-`mgy build` and `pid run` spellings used throughout this file are what you
+`recall run` and `pid parse` spellings used throughout this file are what you
 type:
 
 ```
-benchmarks/mgy/mgy recall --shards 2
+benchmarks/recall/recall run --in real
+benchmarks/build-set/build-set --in recall-toy
 benchmarks/pid/pid parse recall
-benchmarks/long-seqs/long-seqs parse cells
 ```
 
-All three are symlinks to `benchmarks/shim`; the crate it builds is the name
-on the link. It builds that crate and runs it only if the build succeeded, so
-a broken build never falls through to the last binary that worked. Nothing can
+Every one of them is a symlink to `benchmarks/shim`; the crate it builds is
+the name on the link. It builds that crate and runs it only if the build
+succeeded, so a broken build never falls through to the last binary that
+worked. Nothing can
 ask cargo whether it would rebuild without letting it rebuild, so the shim
 does not try: it runs `cargo build` every time, which costs about a twentieth
 of a second when there is nothing to do. A build still going after that gets a
@@ -45,7 +47,7 @@ benchmarks/util/          set, store, ledger, tbl, tools, split, cut, ...
 benchmarks/search/        the tool command builders every pipeline composes
 benchmarks/scores/        the pair tables, the analyses, and parse
 
-benchmarks/build-set/     cuts sources into a set: fixed | ladder
+benchmarks/build-set/     cuts sources into a set: fixed | ladder | pairs
 benchmarks/store/         what can be done to the store: import | clean
 
 benchmarks/recall/        recall against prefilter sensitivity   [fixed]
@@ -160,11 +162,10 @@ builder stamps `#= shape` and the benchmark names the one it reads, and
 
 | shape | representations | attributes | read by |
 |---|---|---|---|
-| `fixed` | `query_hmm`, `query_sto`, `query_db`, `target` | `shard`, `seqs`, `residues`, `bytes` | recall, cloud-search, hit-loss, cutoffs |
+| `fixed` | `query_hmm`, `query_sto`, `query_db`, `target` | `shard`, `seqs`, `residues`, `bytes` | recall, cloud-search, hit-loss |
 | `reversed` | the same as `fixed` | the same as `fixed` | cutoffs |
 | `ladder` | the same | `query_rung`, `target_rung`, `query_residues`, `target_residues` | calibrate |
 | `pairs` | `query_fa`, `target` | `pair`, `query_residues`, `residues` | long-seqs |
-| `decoys` | `query_hmm`, `query_sto`, `target` | `family`, `direction` | cutoffs, over what it built |
 
 `reversed` is `fixed` written backwards: the same sources, the same seed and
 the same sharding, with each sequence reversed as it is dealt. Reversing keeps
@@ -253,8 +254,9 @@ have since been overwritten.
 
 Results that came back from a cluster have no manifest and cannot have one,
 since nothing here ran those commands and an exit code or an argv would have to
-be invented. They arrive with `.time` files beside the tables, and `mgy import`
-reads those. It is the only command that writes a ledger by hand.
+be invented. They arrive with `.time` files beside the tables, and
+`store import` reads those. It is the only command that writes a ledger by
+hand.
 
 ## benchmarks/util
 
@@ -286,11 +288,12 @@ reads those. It is the only command that writes a ledger by hand.
 
 ## The Pfam-against-MGnify benchmarks
 
-Pfam profiles against MGnify metagenomic sequences, and the largest of the
-three. `build-set` cuts the sources into a set under `store/sets/`: `fixed` is
-one query set against target shards of equal size, `ladder` is nested rungs on
-both axes, each a prefix of the one above. Both write a `set.tbl`, and every
-pipeline here takes `--in <label>` to say which one to search.
+Pfam profiles against MGnify metagenomic sequences, and the largest sets here
+by a long way. `build-set` cuts the sources into a set under `store/sets/`:
+`fixed` is one query set against target shards of equal size, `ladder` is
+nested rungs on both axes, each a prefix of the one above. Each writes a
+`set.tbl`, and every pipeline here takes `--in <label>` to say which one to
+search.
 
 Three benchmarks. `recall` searches every shard while sweeping nail's and
 MMseqs2's prefilter sensitivity. `cloud-search` seeds once, then searches every
@@ -510,9 +513,10 @@ writes the copy's store.
 
 Then run inside `$SB`, through its own shims. Every binary links to the same
 `benchmarks/shim`, which builds the crate the link is named after and runs what
-it built: `benchmarks/recall/recall run --set mgy-fixed`, and so on. Every path these crates resolve comes from a
-`CARGO_MANIFEST_DIR` (`util/src/tools.rs:18` for the repo root, and pid's own
-for its tree), so a build in the sandbox reads the sandbox's `data/` and
+it built: `benchmarks/recall/recall run --in toy`, and so on. Every path these
+crates resolve comes from a `CARGO_MANIFEST_DIR` (`util/src/tools.rs:18` for
+the repo root, and pid's own for its tree), so a build in the sandbox reads the
+sandbox's `data/` and
 `tools/` links and writes the sandbox's `store/`. Re-syncing an
 existing copy is near instant, and the build from cold takes about fifteen
 seconds.
@@ -526,7 +530,7 @@ without a sync.
 
 `/store` and pid's `inputs/` are excluded for the same reason: a build writes
 them and nothing commits them, so the copy builds its own. Without the exclude,
-`--delete` removes the set a `mgy build` in the sandbox just wrote, since the
+`--delete` removes the set a `build-set` in the sandbox just wrote, since the
 real tree has nothing there to match it. long-seqs' set is checked in under
 `data/long-seqs/`, which is a link, so the copy reads the real one.
 
