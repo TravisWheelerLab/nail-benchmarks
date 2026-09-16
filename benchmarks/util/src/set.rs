@@ -142,12 +142,6 @@ pub mod shape {
         attrs: &["pair", "query_residues", "residues"],
     };
 
-    /// Per-family decoys, forward and reversed, drawn from another set.
-    pub const DECOYS: Shape = Shape {
-        name: "decoys",
-        needs: &[Rep::QueryHmm, Rep::QuerySto, Rep::Target],
-        attrs: &["family", "direction"],
-    };
 }
 
 // ---

@@ -28,18 +28,24 @@
 //! already the reversed decoy, and reversing it is the forward one, so both
 //! directions come out of one pass over the recruits.
 //!
-//! `recruit` is one big search per shard, so it runs through `pipeline` the
-//! same way the rest of this crate does. `search` is the opposite shape — many
-//! tiny per-family searches, run several at once rather than one at a time —
-//! which `pipeline`'s `Cmd`/`Step` DAG has no batched form for (a family needs
-//! several commands in a fixed order: build its query profile, then search
-//! and convert per direction). It runs as a plain rayon pool instead, the same
-//! way `decoys` and `learn` already do their own parallel work in this file.
+//! Both searching stages are `michi` pipelines, and they get there differently.
+//! `recruit` is one big search per shard, so a shard's short chain unrolls
+//! straight into steps. `search` is the opposite shape: many single-query
+//! searches, each a chain of its own, and every tool here parallelises over
+//! queries alone -- so a thread count above one buys nothing and the
+//! parallelism has to be many families at once.
+//!
+//! A `Step` holds `Cmd`s rather than `Step`s, so a batch of ordered chains is
+//! not something michi can be asked for. `search` transposes it: one step per
+//! link of the chain, each batched across every family. Every family's link
+//! still runs in order, since a step finishes before the next begins, and the
+//! cost is a barrier per link rather than one straggler overall.
+//!
+//! `decoys` and `learn` run no tools, so they stay a plain rayon pool.
 
 use std::collections::{HashMap, HashSet};
 use std::io::Write;
 use std::path::{Path, PathBuf};
-use std::process::Command;
 use std::sync::Mutex;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
@@ -55,9 +61,9 @@ use libsail::tbl::nail::NailTable;
 use libsail::tbl::{Hit, HitColumns, HitParser, Table};
 use michi::{Cmd as PCmd, PipelineBuilder, Progress, Step, Table as PTable};
 use util::tools::{hmmsearch, mmseqs, nail};
-use util::{manifest, tbl};
+use util::{ledger, manifest, tbl};
 
-use util::set::{self, Set};
+use util::set::Set;
 
 use util::cut;
 
@@ -92,6 +98,17 @@ const HMMER: &str = "hmmer";
 
 /// Which direction of a family's decoys a search covered. The forward run keeps
 /// the bare tool name; only the reversed one needs saying.
+/// What the manifest calls the commands around a search, so a database build
+/// is never charged to the tool that reads it.
+const DIRS: &str = "dirs";
+const PROFILE: &str = "profile";
+const CREATEDB: &str = "createdb";
+const CONVERT: &str = "convert";
+const CLEAN: &str = "clean";
+
+/// The column that tells a family's forward search from its reversed one.
+const DIRECTION: &str = "direction";
+
 const FORWARD: &str = "fwd";
 const REVERSE: &str = "rev";
 
@@ -115,26 +132,27 @@ fn run_name(tool: &str, direction: &str) -> String {
 /// be promoted by hand.
 ///
 /// ```text
-/// store/sets/<name>-decoys/decoys/<family>.fa    what recruited, un-reversed
-/// store/sets/<name>-decoys/decoys-rev/<f>.fa     ... and reversed again
-/// store/sets/<name>-decoys/queries/<family>/     the query set, per family
-/// store/sets/<name>-decoys/set.tbl               what the two stages built
-/// store/runs/<name>.recruit/                     stage 1's tables
-/// store/runs/<name>.search/                      stage 2's tables
-/// store/analysis/<name>/cutoffs.tbl              what was learned
+/// <set>/outputs/recruit/            stage 1's tables
+/// <set>/outputs/decoys/
+///   decoys/<family>.fa              what recruited, un-reversed
+///   decoys-rev/<family>.fa          ... and reversed again
+///   queries/<family>/               the query set, per family
+/// <set>/outputs/search/             stage 3's tables
+/// <set>/analysis/cutoffs/           what was learned
 /// ```
 struct Layout {
-    /// The decoy set this builds.
-    root: PathBuf,
-    /// Where each of the two search stages writes, and the scratch they share.
+    /// What the middle stage makes for the later ones to read.
+    ///
+    /// Outputs of this pipeline rather than a set of their own: a set is what
+    /// `build-set` produces from sources under a recipe, and these come out of
+    /// whatever `recruit` happened to score.
+    decoys: PathBuf,
+    /// Where each of the two searching stages writes, and the scratch they
+    /// share.
     recruit: PathBuf,
     search: PathBuf,
     analysis: PathBuf,
     tmp: PathBuf,
-    /// The set being calibrated, named so the decoy set can say where it came
-    /// from.
-    source: String,
-
     // resolved out of the source set's manifest once, here, so that the rest
     // of the calibration works in paths rather than in lookups -- and so a set
     // that cannot answer for one of them fails before any stage starts
@@ -158,23 +176,16 @@ impl Layout {
             .collect::<anyhow::Result<Vec<_>>>()?;
 
         Ok(Layout {
-            root: paths.decoys.clone(),
+            decoys: paths.decoys.clone(),
             recruit: paths.recruit.clone(),
             search: paths.search.clone(),
             analysis: paths.analysis.clone(),
             tmp: paths.tmp.clone(),
-            source: paths.set.display().to_string(),
             query_hmm,
             query_sto,
             query_db,
             targets,
         })
-    }
-
-    /// What this calibration generates for its later stages to read: a set in
-    /// its own right, built out of the one it was pointed at.
-    fn inputs(&self) -> PathBuf {
-        self.root.clone()
     }
 
     /// The shards the decoys are drawn from, as the source set named them.
@@ -197,17 +208,17 @@ impl Layout {
     }
 
     fn decoys(&self) -> PathBuf {
-        self.inputs().join(DECOYS)
+        self.decoys.join(DECOYS)
     }
 
     fn decoys_rev(&self) -> PathBuf {
-        self.inputs().join(DECOYS_REV)
+        self.decoys.join(DECOYS_REV)
     }
 
     /// One directory per family, each holding a `query.hmm` and a `query.sto`
     /// -- the same shape as a ladder rung's query directory.
     fn queries(&self) -> PathBuf {
-        self.inputs().join(QUERIES)
+        self.decoys.join(QUERIES)
     }
 
     fn recruit(&self) -> anyhow::Result<Stage> {
@@ -307,6 +318,9 @@ pub struct SearchArgs {
     #[command(flatten)]
     pub place: Where,
 
+    #[arg(long)]
+    pub dry_run: bool,
+
     /// How many families to search at once. Each search is single-threaded,
     /// so this is the whole of the parallelism
     #[arg(short = 'j', long)]
@@ -341,8 +355,8 @@ pub struct AllArgs {
 }
 
 /// The set this calibrates against: the same deal a benchmark searches, drawn
-/// backwards. What it builds out of that is a set of its own, of shape
-/// [`util::set::shape::DECOYS`].
+/// backwards. Everything it makes out of that is its own output rather than a
+/// second set.
 pub const SHAPE: &util::set::Shape = &util::set::shape::REVERSED;
 
 #[derive(Parser)]
@@ -692,36 +706,7 @@ fn decoys(args: DecoysArgs, paths: &Paths) -> anyhow::Result<()> {
         );
     }
 
-    // ---- the manifest, which is what makes this a set rather than a tree
-    //
-    // two rows per family, one per direction, because a decoy's score forward
-    // and a decoy's score reversed are two searches and the stage that runs
-    // them should not have to know the naming scheme to find either
-
-    let mut rows = Vec::new();
-    for family in &families {
-        for (direction, dir) in [("fwd", DECOYS), ("rev", DECOYS_REV)] {
-            rows.push(
-                set::Row::new(
-                    format!("{family}.{direction}"),
-                    format!("{dir}/{family}.fa"),
-                )
-                .query_hmm(format!("{QUERIES}/{family}/query.hmm"))
-                .query_sto(format!("{QUERIES}/{family}/query.sto"))
-                .attr("family", family)
-                .attr("direction", direction),
-            );
-        }
-    }
-
-    Set::new(layout.inputs(), rows)
-        .says("shape", util::set::shape::DECOYS.name)
-        .says("recipe", "cutoffs")
-        .says("from", &layout.source)
-        .says("families", families.len())
-        .save()?;
-
-    println!("wrote {}", layout.inputs().display());
+    println!("wrote {}", layout.decoys.display());
     Ok(())
 }
 
@@ -736,36 +721,13 @@ fn collect<C: HitColumns>(tbl: &Table<HitParser<C>>, map: &mut HashMap<String, V
 
 // ------------------------------------------------------------------ search
 
-/// Run one command to completion, its combined stdout and stderr appended to
-/// `log`. mmseqs reports failures on stdout rather than stderr, so both share
-/// one file rather than splitting a failure across two.
-fn run(cmd: &mut Command, log: &Path) -> anyhow::Result<()> {
-    let out = std::fs::OpenOptions::new()
-        .create(true)
-        .append(true)
-        .open(log)
-        .with_context(|| format!("failed to open {}", log.display()))?;
-
-    let status = cmd
-        .stdout(out.try_clone()?)
-        .stderr(out)
-        .status()
-        .with_context(|| format!("failed to spawn {cmd:?}"))?;
-
-    if !status.success() {
-        bail!("{cmd:?} exited with {status}; see {}", log.display());
-    }
-
-    Ok(())
-}
-
 fn search(args: SearchArgs, paths: &Paths) -> anyhow::Result<()> {
     let layout = Layout::new(paths)?;
     let decoy_dir = layout.decoys();
 
     if !decoy_dir.is_dir() {
         bail!(
-            "no decoys in {}; run `mgy cutoffs decoys` first",
+            "no decoys in {}; run `cutoffs decoys` first",
             decoy_dir.display()
         );
     }
@@ -790,10 +752,8 @@ fn search(args: SearchArgs, paths: &Paths) -> anyhow::Result<()> {
     if results.exists() {
         std::fs::remove_dir_all(&results)?;
     }
-    std::fs::create_dir_all(&results)?;
 
     let tmp = stage.tmp();
-    std::fs::create_dir_all(&tmp)?;
 
     let nail_bin = nail()?;
     let mmseqs_bin = mmseqs()?;
@@ -805,201 +765,234 @@ fn search(args: SearchArgs, paths: &Paths) -> anyhow::Result<()> {
 
     println!("searching {} families, {jobs} at once...", families.len());
 
-    let done = AtomicUsize::new(0);
-    let total = families.len();
+    // one command per family per link of the chain, and one Step per link.
+    //
+    // the searches here are single-query -- one family's profile against its
+    // own decoys -- and every tool parallelises over queries, so a thread
+    // count above 1 buys nothing and the parallelism has to come from running
+    // many families at once. `batched` is that: `jobs` commands in flight,
+    // each of them single-threaded.
+    //
+    // which is why the steps are links rather than families. a family's
+    // commands have to run in order, and a Step holds Cmds rather than Steps,
+    // so a batch of ordered chains is not a thing michi can be asked for. the
+    // transpose is: every family's link k, then every family's link k+1. the
+    // ordering each family needs still holds, since a step finishes before the
+    // next one starts.
+    let per_family = |f: &dyn Fn(&str) -> PCmd| -> Vec<PCmd> {
+        families.iter().map(|family| f(family)).collect()
+    };
 
-    let pool = pool(jobs)?;
-    pool.install(|| {
-        families
-            .par_iter()
-            .try_for_each(|family| -> anyhow::Result<()> {
-                let scratch = tmp.join(family);
-                std::fs::create_dir_all(&scratch)?;
-                let log = scratch.join("log");
+    let scratch = |family: &str| tmp.join(family);
+    let dir_scratch = |family: &str, direction: &str| scratch(family).join(direction);
+    let query_db = |family: &str| scratch(family).join("queryDB");
 
-                let hmm = queries.join(family).join("query.hmm");
-                let sto = queries.join(family).join("query.sto");
-
-                // the query profile is the same for both directions, so it is
-                // built once per family rather than once per search
-                let msa_db = scratch.join("msaDB");
-                let query_db = scratch.join("queryDB");
-                run(
-                    Command::new(&mmseqs_bin)
-                        .arg("convertmsa")
-                        .arg(&sto)
-                        .arg(&msa_db)
-                        .arg("--identifier-field")
-                        .arg("0"),
-                    &log,
-                )?;
-                run(
-                    Command::new(&mmseqs_bin)
-                        .arg("msa2profile")
-                        .arg(&msa_db)
-                        .arg(&query_db)
-                        .arg("--match-mode")
-                        .arg("1"),
-                    &log,
-                )?;
-
-                // the family is the shard and the direction is the run, so a
-                // table is named the way every other pipeline names one
-                let directions = [
-                    (FORWARD, decoy_dir.join(format!("{family}.fa"))),
-                    (REVERSE, rev_dir.join(format!("{family}.fa"))),
-                ];
-
-                for (direction, target) in directions {
-                    let dir_scratch = scratch.join(direction);
-                    std::fs::create_dir_all(&dir_scratch)?;
-
-                    let table = |tool: &str| {
-                        manifest::table_path(&results, &run_name(tool, direction), family)
-                    };
-
-                    run(
-                        Command::new(&nail_bin)
-                            .arg("search")
-                            .arg("--mmseqs-path")
-                            .arg(&mmseqs_bin)
-                            .arg("-t")
-                            .arg("1")
-                            .arg("--tmp-dir")
-                            .arg(dir_scratch.join("nail"))
-                            .arg("--mmseqs-s")
-                            .arg(DECOY_S)
-                            .arg("--mmseqs-max-seqs")
-                            .arg(DECOY_MAX_SEQS)
-                            .arg("-E")
-                            .arg(EVALUE)
-                            .arg("--allow-overwrite")
-                            .arg("--tbl-out")
-                            .arg(table(NAIL))
-                            .arg(&hmm)
-                            .arg(&target),
-                        &log,
-                    )?;
-
-                    let target_db = dir_scratch.join("targetDB/targetDB");
-                    let aln_db = dir_scratch.join("alnDB/alnDB");
-                    std::fs::create_dir_all(target_db.parent().unwrap())?;
-                    std::fs::create_dir_all(aln_db.parent().unwrap())?;
-
-                    run(
-                        Command::new(&mmseqs_bin)
-                            .arg("createdb")
-                            .arg(&target)
-                            .arg(&target_db),
-                        &log,
-                    )?;
-                    run(
-                        Command::new(&mmseqs_bin)
-                            .arg("search")
-                            .arg(&query_db)
-                            .arg(&target_db)
-                            .arg(&aln_db)
-                            .arg(dir_scratch.join("work"))
-                            .arg("--threads")
-                            .arg("1")
-                            .arg("-s")
-                            .arg(DECOY_S)
-                            .arg("--max-seqs")
-                            .arg(DECOY_MAX_SEQS)
-                            .arg("-e")
-                            .arg(EVALUE),
-                        &log,
-                    )?;
-                    run(
-                        Command::new(&mmseqs_bin)
-                            .arg("convertalis")
-                            .arg(&query_db)
-                            .arg(&target_db)
-                            .arg(&aln_db)
-                            .arg(table(MMSEQS))
-                            .arg("--format-mode")
-                            .arg("0"),
-                        &log,
-                    )?;
-
-                    run(
-                        Command::new(&hmmsearch_bin)
-                            .arg("--cpu")
-                            .arg("1")
-                            .arg("-E")
-                            .arg(EVALUE)
-                            .arg("-o")
-                            .arg("/dev/null")
-                            .arg("--tblout")
-                            .arg(table(HMMER))
-                            .arg("--domtblout")
-                            .arg(manifest::dom_path(
-                                &results,
-                                &run_name(HMMER, direction),
-                                family,
-                            ))
-                            .arg(&hmm)
-                            .arg(&target),
-                        &log,
-                    )?;
+    let mut pl = PipelineBuilder::new().step(
+        Step::batched(
+            jobs,
+            per_family(&|family| {
+                let mut cmd = PCmd::new("mkdir").name("dirs").flag("-p").path(&results);
+                for direction in [FORWARD, REVERSE] {
+                    let d = dir_scratch(family, direction);
+                    cmd = cmd.path(d.join("targetDB")).path(d.join("alnDB"));
                 }
+                cmd.field(manifest::STAGE, DIRS)
+            }),
+        )
+        .name("dirs"),
+    );
 
-                std::fs::remove_dir_all(&scratch).ok();
+    // the query profile is the same for both directions, so it is built once
+    // per family rather than once per search
+    pl = pl
+        .step(
+            Step::batched(
+                jobs,
+                per_family(&|family| {
+                    PCmd::new(&mmseqs_bin)
+                        .name("convertmsa")
+                        .sub("convertmsa")
+                        .path(queries.join(family).join("query.sto"))
+                        .path(scratch(family).join("msaDB"))
+                        .arg("--identifier-field", 0)
+                        .field(manifest::STAGE, PROFILE)
+                }),
+            )
+            .name("convertmsa"),
+        )
+        .step(
+            Step::batched(
+                jobs,
+                per_family(&|family| {
+                    PCmd::new(&mmseqs_bin)
+                        .name("msa2profile")
+                        .sub("msa2profile")
+                        .path(scratch(family).join("msaDB"))
+                        .path(query_db(family))
+                        .arg("--match-mode", 1)
+                        .field(manifest::STAGE, PROFILE)
+                }),
+            )
+            .name("msa2profile"),
+        );
 
-                let n = done.fetch_add(1, Ordering::Relaxed) + 1;
-                if n.is_multiple_of(50) || n == total {
-                    eprint!("\r  {n}/{total} families searched");
-                }
+    for (direction, decoys) in [(FORWARD, &decoy_dir), (REVERSE, &rev_dir)] {
+        let target = |family: &str| decoys.join(format!("{family}.fa"));
+        let hmm = |family: &str| queries.join(family).join("query.hmm");
+        let table = |tool: &str, family: &str| {
+            manifest::table_path(&results, &run_name(tool, direction), family)
+        };
 
-                Ok(())
-            })
-    })?;
-    eprintln!();
+        // the family is the shard and the direction is the run, so a table is
+        // named the way every other pipeline names one
+        let run_of = |tool: &'static str, family: &str| {
+            (
+                run_name(tool, direction),
+                tool,
+                family.to_string(),
+            )
+        };
 
-    write_manifest(&stage.manifest(), &families)?;
+        pl = pl
+            .step(
+                Step::batched(
+                    jobs,
+                    per_family(&|family| {
+                        let (name, tool, shard) = run_of(NAIL, family);
+                        PCmd::new(&nail_bin)
+                            .sub("search")
+                            .arg("--mmseqs-path", &mmseqs_bin)
+                            .arg("-t", 1)
+                            .arg("--tmp-dir", dir_scratch(family, direction).join("nail"))
+                            .arg("--mmseqs-s", DECOY_S)
+                            .arg("--mmseqs-max-seqs", DECOY_MAX_SEQS)
+                            .arg("-E", EVALUE)
+                            .flag("--allow-overwrite")
+                            .arg("--tbl-out", table(NAIL, family))
+                            .path(hmm(family))
+                            .path(target(family))
+                            .field(manifest::NAME, name)
+                            .field(manifest::TOOL, tool)
+                            .field(manifest::SHARD, shard)
+                            .field(DIRECTION, direction)
+                    }),
+                )
+                .name(format!("nail.{direction}")),
+            )
+            .step(
+                Step::batched(
+                    jobs,
+                    per_family(&|family| {
+                        PCmd::new(&mmseqs_bin)
+                            .name("createdb")
+                            .sub("createdb")
+                            .arg("--threads", 1)
+                            .path(target(family))
+                            .path(dir_scratch(family, direction).join("targetDB/targetDB"))
+                            .field(manifest::STAGE, CREATEDB)
+                            .field(manifest::SHARD, family)
+                    }),
+                )
+                .name(format!("createdb.{direction}")),
+            )
+            .step(
+                Step::batched(
+                    jobs,
+                    per_family(&|family| {
+                        let (name, tool, shard) = run_of(MMSEQS, family);
+                        let d = dir_scratch(family, direction);
+                        PCmd::new(&mmseqs_bin)
+                            .sub("search")
+                            .path(query_db(family))
+                            .path(d.join("targetDB/targetDB"))
+                            .path(d.join("alnDB/alnDB"))
+                            .path(d.join("work"))
+                            .arg("--threads", 1)
+                            .arg("-s", DECOY_S)
+                            .arg("--max-seqs", DECOY_MAX_SEQS)
+                            .arg("-e", EVALUE)
+                            .field(manifest::NAME, name)
+                            .field(manifest::TOOL, tool)
+                            .field(manifest::SHARD, shard)
+                            .field(DIRECTION, direction)
+                    }),
+                )
+                .name(format!("mmseqs.{direction}")),
+            )
+            .step(
+                Step::batched(
+                    jobs,
+                    per_family(&|family| {
+                        let d = dir_scratch(family, direction);
+                        PCmd::new(&mmseqs_bin)
+                            .name("convertalis")
+                            .sub("convertalis")
+                            .path(query_db(family))
+                            .path(d.join("targetDB/targetDB"))
+                            .path(d.join("alnDB/alnDB"))
+                            .path(table(MMSEQS, family))
+                            .arg("--format-mode", 0)
+                            .field(manifest::STAGE, CONVERT)
+                            .field(manifest::SHARD, family)
+                    }),
+                )
+                .name(format!("convert.{direction}")),
+            )
+            .step(
+                Step::batched(
+                    jobs,
+                    per_family(&|family| {
+                        let (name, tool, shard) = run_of(HMMER, family);
+                        PCmd::new(&hmmsearch_bin)
+                            .arg("--cpu", 1)
+                            .arg("-E", EVALUE)
+                            .arg("-o", "/dev/null")
+                            .arg("--tblout", table(HMMER, family))
+                            .arg(
+                                "--domtblout",
+                                manifest::dom_path(&results, &run_name(HMMER, direction), family),
+                            )
+                            .path(hmm(family))
+                            .path(target(family))
+                            .field(manifest::NAME, name)
+                            .field(manifest::TOOL, tool)
+                            .field(manifest::SHARD, shard)
+                            .field(DIRECTION, direction)
+                    }),
+                )
+                .name(format!("hmmer.{direction}")),
+            );
+    }
 
-    println!("wrote {}", results.display());
-    Ok(())
-}
+    pl = pl.step(
+        Step::batched(
+            jobs,
+            per_family(&|family| {
+                PCmd::new("rm")
+                    .name("clean")
+                    .flag("-rf")
+                    .path(scratch(family))
+                    .field(manifest::STAGE, CLEAN)
+            }),
+        )
+        .name("clean"),
+    );
 
-/// Record what this stage searched, in the shape `parse` reads elsewhere.
-///
-/// Assembled by hand rather than by a [`PTable`] sink: the searches run on a
-/// rayon pool and not through a pipeline. Only the rows a reader needs are
-/// here -- a name, what produced it, which family, which direction, and that it
-/// finished. Every command is checked by `run`, so reaching this point means
-/// they all did.
-fn write_manifest(path: &Path, families: &[String]) -> anyhow::Result<()> {
-    let headers = ["name", "tool", "shard", "direction", "exit"]
-        .map(str::to_string)
-        .to_vec();
+    let pipeline = pl
+        .stderr_dir(tmp.join("stderr"))
+        .sink(Progress::new())
+        .sink(PTable::new(stage.manifest()))
+        .build()
+        .context("failed to build the search")?;
 
-    let rows: Vec<Vec<String>> = families
-        .iter()
-        .flat_map(|family| {
-            [FORWARD, REVERSE].into_iter().flat_map(move |direction| {
-                [NAIL, MMSEQS, HMMER].into_iter().map(move |tool| {
-                    vec![
-                        run_name(tool, direction),
-                        tool.to_string(),
-                        family.clone(),
-                        direction.to_string(),
-                        "0".to_string(),
-                    ]
-                })
-            })
-        })
-        .collect();
+    if args.dry_run {
+        pipeline.dry_run();
+        return Ok(());
+    }
 
-    tbl::write(
-        path,
-        tbl::Table {
-            meta: "",
-            headers: &headers,
-            rows: &rows,
-            ragged_last: false,
-        },
-    )
+    ledger::clear(&stage.root);
+    pipeline.run()?;
+    ledger::record(&stage.root)
 }
 
 // ------------------------------------------------------------------- learn
@@ -1192,10 +1185,14 @@ fn all(args: AllArgs, paths: &Paths) -> anyhow::Result<()> {
         threads: args.threads,
     }, paths)?;
 
-    search(SearchArgs {
-        place: args.place.clone(),
-        jobs: args.jobs,
-    }, paths)?;
+    search(
+        SearchArgs {
+            place: args.place.clone(),
+            dry_run: false,
+            jobs: args.jobs,
+        },
+        paths,
+    )?;
 
     learn(
         LearnArgs {

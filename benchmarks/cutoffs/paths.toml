@@ -1,20 +1,22 @@
 # Where cutoffs reads and writes. Paths only, relative to this file.
 #
-# It reads one set and builds another: `decoys` is a set in its own right, so
-# it gets an `inputs/` like any other, and the searches over it are its runs.
+# It reads one set and everything it makes goes under that set's outputs. The
+# decoys are an intermediate -- stage 2 writes them, stage 3 reads them -- not
+# a set of their own: a set is what build-set produces from sources under a
+# recipe, and these come out of whatever recruit happened to score.
 
 [toy]
 set      = "../../store/sets/cutoffs-toy/inputs"
-decoys   = "../../store/sets/cutoffs-toy-decoys/inputs"
 recruit  = "../../store/sets/cutoffs-toy/outputs/recruit"
-search   = "../../store/sets/cutoffs-toy-decoys/outputs/search"
-analysis = "../../store/sets/cutoffs-toy-decoys/analysis/cutoffs"
-tmp      = "../../store/sets/cutoffs-toy-decoys/tmp/cutoffs"
+decoys   = "../../store/sets/cutoffs-toy/outputs/decoys"
+search   = "../../store/sets/cutoffs-toy/outputs/search"
+analysis = "../../store/sets/cutoffs-toy/analysis/cutoffs"
+tmp      = "../../store/sets/cutoffs-toy/tmp/cutoffs"
 
 [real]
 set      = "../../store/sets/cutoffs-real/inputs"
-decoys   = "../../store/sets/cutoffs-real-decoys/inputs"
 recruit  = "../../store/sets/cutoffs-real/outputs/recruit"
-search   = "../../store/sets/cutoffs-real-decoys/outputs/search"
-analysis = "../../store/sets/cutoffs-real-decoys/analysis/cutoffs"
-tmp      = "../../store/sets/cutoffs-real-decoys/tmp/cutoffs"
+decoys   = "../../store/sets/cutoffs-real/outputs/decoys"
+search   = "../../store/sets/cutoffs-real/outputs/search"
+analysis = "../../store/sets/cutoffs-real/analysis/cutoffs"
+tmp      = "../../store/sets/cutoffs-real/tmp/cutoffs"

@@ -403,14 +403,30 @@ hit is then held against.
 
 The set it reads arrives reversed, built by a `fixed` recipe under a
 `reversed` tag, so nothing here reverses anything and no second copy of the
-shards is made. `recruit` and `decoys` build a decoy set, which goes where sets
-go, at `store/sets/<name>-decoys/`, naming in its own `set.tbl` the set it was
-drawn from. A record read out of a reversed shard is already the reversed
-decoy, and reversing it is the forward one, so both directions come out of one
-pass over the recruits. `search` is then an ordinary run over that set, and
-`learn` an analysis over that run. Nothing about it is a special kind of artifact; what makes it a
-calibration rather than a benchmark is that its product,
-`data/mgy-cutoffs.tbl`, is committed and promoted by hand.
+shards is made. Everything the calibration then makes is an output of that set:
+`recruit`'s tables, the decoys, `search`'s tables, the learned cutoffs.
+
+The decoys were briefly a set of their own, with a `set.tbl` and a shape. That
+was wrong, and the tell was that nothing ever loaded the manifest -- `search`
+globs the directory for families. `build-set` makes a set from sources under a
+recipe, deterministically; the decoy pool comes out of whatever `recruit`
+happened to score, so it could never be a recipe and was never a set. Before
+giving anything a `set.tbl`, ask whether `build-set` could produce it from a
+label.
+
+**Backburner: the pure fix is a `reversal-recruit` shape.** The decoy pool is
+genuinely an input to `search` -- per-family queries against per-family targets
+-- and the honest home for producing it is `build-set`, as a shape of its own.
+What stops that today is that making it requires running alignments: the pool
+is defined by what nail and mmseqs score against the reversed shards, so a
+builder would have to search before it could place. `build-set` cuts and deals
+and has never run a tool. Worth revisiting if a second thing ever needs a
+recruited set, but not for one caller.
+
+A record read out of a reversed shard is already the reversed decoy, and
+reversing it is the forward one, so both directions come out of one pass over
+the recruits. What makes this a calibration rather than a benchmark is that its
+product, `data/mgy-cutoffs.tbl`, is committed and promoted by hand.
 
 `store import` writes a `ledger.tbl` for result tables produced elsewhere, out of
 the `.time` files that came back with them, which turns a search run on a
