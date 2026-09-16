@@ -76,8 +76,9 @@ use std::path::{Path, PathBuf};
 
 use anyhow::{Context, bail, ensure};
 
-use libsail::collection::{Indexable, Iterable};
-use libsail::seq::p7hmm::IndexedHmm;
+use libsail::format::Format;
+use libsail::index::Reader;
+use libsail::seq::p7hmm::leng_of;
 
 use util::ledger::{self, Ledger};
 use util::set::Set;
@@ -289,17 +290,32 @@ impl Queries {
             .with_context(|| format!("failed to stat {}", path.display()))?
             .len();
 
-        let models = IndexedHmm::open(path)
-            .with_context(|| format!("failed to index {}", path.display()))?;
+        // one streaming pass over the framed bytes: a name and a LENG are
+        // both read off a model's text, and parsing 20,795 of them to reach
+        // two fields allocates every match, insert and transition row on the
+        // way past
+        let file = std::fs::File::open(path)
+            .with_context(|| format!("failed to open {}", path.display()))?;
+        let mut models = Reader::new(std::io::BufReader::new(file), Format::Hmm);
 
-        let mut names: Vec<String> = Vec::with_capacity(models.len());
+        let mut names: Vec<String> = Vec::new();
         let mut residues = 0u64;
 
-        for model in models.iter() {
-            names.push(model.header.name.clone());
+        while models
+            .advance()
+            .with_context(|| format!("failed to read {}", path.display()))?
+        {
+            let model = models.record();
+
+            let name = libsail::seq::name_of(Format::Hmm, model)
+                .with_context(|| format!("a model in {} has no NAME", path.display()))?;
+            names.push(String::from_utf8_lossy(name).into_owned());
+
             // LENG is the query axis of a search's matrix, and so the honest
             // measure of how much work the set is
-            residues += model.header.leng as u64;
+            residues += leng_of(model)
+                .with_context(|| format!("a model in {} has no LENG", path.display()))?
+                as u64;
         }
 
         let size = Size {

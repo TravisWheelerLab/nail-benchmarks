@@ -352,7 +352,12 @@ fn cells(args: CellsArgs) -> anyhow::Result<()> {
     let query_lens: HashMap<String, usize> = Hmm::open(inputs::query_hmm())
         .with_context(|| format!("failed to parse {}", inputs::query_hmm().display()))?
         .iter()
-        .map(|model| (model.header.name.clone(), model.header.leng))
+        .map(|model| {
+            (
+                String::from_utf8_lossy(&model.header.name).into_owned(),
+                model.header.leng,
+            )
+        })
         .collect();
 
     let mut target_lens: HashMap<String, usize> = HashMap::new();

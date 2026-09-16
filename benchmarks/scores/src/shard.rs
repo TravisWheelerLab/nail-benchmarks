@@ -30,7 +30,8 @@ use libsail::tbl::nail::NailTable;
 
 use util::manifest;
 
-use crate::scan::{self, Lines};
+use crate::scan;
+use libsail::lines::Rows as TableRows;
 use crate::{Column, Cutoffs, Queries, Tool};
 
 /// How many bits of a key the target holds.
@@ -360,7 +361,8 @@ impl Rows<'_> {
         let mut lines = open(path)?;
         let mut checked = false;
 
-        while let Some((at, line)) = lines.next()? {
+        while lines.advance()? {
+            let (at, line) = (lines.line(), lines.row());
             if !checked {
                 if !scan::fits::<C>(line) {
                     bail!(
@@ -390,7 +392,8 @@ impl Rows<'_> {
         let mut lines = open(path)?;
         let mut checked = false;
 
-        while let Some((at, line)) = lines.next()? {
+        while lines.advance()? {
+            let (at, line) = (lines.line(), lines.row());
             if !checked {
                 if !scan::fits::<HmmerTable>(line) {
                     bail!(
@@ -494,7 +497,8 @@ fn seeds(
     let mut lines = open(path)?;
     let mut last: Option<(Vec<u8>, u32)> = None;
 
-    while let Some((at, line)) = lines.next()? {
+    while lines.advance()? {
+        let (at, line) = (lines.line(), lines.row());
         let Some([query, target]) = scan::fields(line, [0, 1]) else {
             bail!(
                 "{}:{at} has {} fields, a seed list is a query and a target",
@@ -544,7 +548,8 @@ fn doms(
     let mut last: Option<(Vec<u8>, u32)> = None;
     let mut ord = 0u32;
 
-    while let Some((at, line)) = lines.next()? {
+    while lines.advance()? {
+        let (at, line) = (lines.line(), lines.row());
         if !checked {
             if !scan::fits::<HmmerDomTable>(line) {
                 bail!(
@@ -604,9 +609,16 @@ fn doms(
     Ok(true)
 }
 
-fn open(path: &Path) -> anyhow::Result<Lines<File>> {
+fn open(path: &Path) -> anyhow::Result<TableRows<File>> {
     let file = File::open(path).with_context(|| format!("failed to open {}", path.display()))?;
-    Ok(Lines::new(file))
+
+    // a comment, and a line with nothing but spaces on it. Rows drops an empty
+    // line on its own, and judges the rest on the first byte: no hit table
+    // here opens a row with whitespace, so rejecting one is the blank-line
+    // skip this reader has always had
+    Ok(TableRows::new(file, |b| {
+        b == b'#' || b.is_ascii_whitespace()
+    }))
 }
 
 // --------------------------------------------------------------------- keys

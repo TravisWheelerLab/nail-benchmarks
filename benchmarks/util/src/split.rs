@@ -1,7 +1,6 @@
 //! Cutting a query set into files a batch of jobs can search in parallel.
 
 use std::borrow::Borrow;
-use std::cmp::Reverse;
 use std::fmt::Display;
 use std::fs::File;
 use std::io::{BufWriter, Write};
@@ -52,29 +51,29 @@ pub fn write_splits(
         Kind::Hmm => {
             let c = IndexedHmm::open(path).with_context(opened)?;
             ensure!(!c.is_empty(), empty());
-            deal(c, n, out_dir, kind.extension(), |rec| rec.header.leng)
+            deal(c, n, out_dir, kind.extension(), |rec| rec.header.leng as u64)
         }
         Kind::Fasta => {
             let c = IndexedFasta::open(path).with_context(opened)?;
             ensure!(!c.is_empty(), empty());
-            deal(c, n, out_dir, kind.extension(), |rec| rec.seq.len())
+            deal(c, n, out_dir, kind.extension(), |rec| rec.seq.len() as u64)
         }
     }
 }
 
-/// Deal `c` into `n` files, `<i>.<ext>` for `i` in `0..n`, heaviest record
-/// first onto whichever part is lightest so far.
+/// Deal `c` into `n` files, `<i>.<ext>` for `i` in `0..n`.
 //
 // weight rather than count: a model's length and a sequence's residues are
 // what a search against it costs, and the parts go to jobs whose slowest one
 // is the wall time this repo reports. round robin over the same order leaves
-// more of the work on one part as the part count grows; this keeps it level
+// more of the work on one part as the part count grows; split_weighted is
+// longest-processing-time, which keeps it level
 fn deal<C>(
     c: C,
     n: usize,
     out_dir: &Path,
     ext: &str,
-    weight: impl Fn(&C::Record) -> usize,
+    weight: impl FnMut(&C::Record) -> u64,
 ) -> anyhow::Result<Vec<PathBuf>>
 where
     C: Indexable,
@@ -83,42 +82,23 @@ where
     std::fs::create_dir_all(out_dir)
         .with_context(|| format!("failed to create {}", out_dir.display()))?;
 
-    // descending, so the walk below is longest-processing-time order and each
-    // record's own weight is in hand when its part is chosen
-    let sorted = c.sort_by_key(|rec| Reverse(weight(rec)));
-    let parts = n.min(sorted.len());
+    // split_weighted always answers with n parts, empty ones included, and a
+    // job handed an empty query file is a job that does nothing: number the
+    // files over the parts that have something in them
+    let mut written = Vec::with_capacity(n);
 
-    let mut writers = Vec::with_capacity(parts);
-    let mut written = Vec::with_capacity(parts);
-
-    for i in 0..parts {
-        let path = out_dir.join(format!("{i}.{ext}"));
+    for part in c.split_weighted(n, weight).iter().filter(|p| !p.is_empty()) {
+        let path = out_dir.join(format!("{}.{ext}", written.len()));
         let file = File::create(&path)
             .with_context(|| format!("failed to create {}", path.display()))?;
 
-        writers.push(BufWriter::new(file));
-        written.push(path);
-    }
-
-    let mut loads = vec![0usize; parts];
-
-    for rec in sorted.iter() {
-        let rec = rec.borrow();
-
-        // ties to the earlier part, so a given input deals the same way twice
-        let lightest = loads
-            .iter()
-            .enumerate()
-            .min_by_key(|(i, load)| (**load, *i))
-            .map(|(i, _)| i)
-            .expect("at least one part");
-
-        loads[lightest] += weight(rec);
-        write!(writers[lightest], "{rec}")?;
-    }
-
-    for mut w in writers {
+        let mut w = BufWriter::new(file);
+        for rec in part.iter() {
+            write!(w, "{}", rec.borrow())?;
+        }
         w.flush()?;
+
+        written.push(path);
     }
 
     Ok(written)
@@ -205,7 +185,7 @@ mod tests {
         assert_eq!(back.len(), 1);
 
         let rec = back.cloned(0).unwrap();
-        assert_eq!(rec.header.name, "solo");
+        assert_eq!(rec.header.name_str().unwrap(), "solo");
         assert_eq!(rec.header.leng, 4);
         assert_eq!(rec.model.match_emissions.len(), 4 * 2);
 

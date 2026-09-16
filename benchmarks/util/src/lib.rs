@@ -42,27 +42,6 @@ pub mod tbl;
 pub mod time;
 pub mod tools;
 
-/// Replace every byte that is not part of a valid UTF-8 sequence with `?`.
-//
-// Pfam's SEED alignments carry author names in Latin-1: `pfam.sto` holds an
-// `ô` as a single byte in a `#=GF RA` line, and libsail requires a record to
-// be text. those bytes sit in `#=GF` metadata rather than in an alignment row
-// or a sequence, so replacing them costs nothing any benchmark reads
-pub fn repair_utf8(bytes: &mut [u8]) {
-    let mut from = 0;
-
-    while let Err(e) = std::str::from_utf8(&bytes[from..]) {
-        let bad = from + e.valid_up_to();
-
-        // None is a sequence cut off by the end of the input, so there is
-        // nothing past it to resume from
-        let len = e.error_len().unwrap_or(bytes.len() - bad);
-
-        bytes[bad..bad + len].fill(b'?');
-        from = bad + len;
-    }
-}
-
 /// A profile of `leng` nodes over a two-symbol alphabet, which is the smallest
 /// thing libsail's parser accepts.
 //

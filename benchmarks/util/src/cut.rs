@@ -17,11 +17,8 @@ use std::path::Path;
 
 use anyhow::{Context, bail};
 use libsail::collection::{Indexable, Iterable};
-use libsail::index::build_index;
-use libsail::parse::Parse;
 use libsail::seq::p7hmm::IndexedHmm;
-use libsail::seq::stockholm::{StockholmDelimiter, StockholmParser, StockholmRecord};
-use libsail::source::{FileSource, Source};
+use libsail::seq::stockholm::{IndexedStockholm, StockholmRecord};
 
 /// Copy the first `n` models of `src` into `dst`, returning their names.
 pub fn subset_hmm(
@@ -51,7 +48,7 @@ pub fn subset_hmm(
 
     // take before iter, so only the models that travel are parsed
     for model in models.take(n).iter() {
-        names.insert(model.header.name.clone());
+        names.insert(model.header.name_str()?.to_string());
         model.write_to(&mut writer)?;
     }
 
@@ -81,11 +78,12 @@ pub fn scatter_hmm(
     let mut kept = 0usize;
 
     for model in models.iter() {
-        if !names.contains(&model.header.name) {
+        let name = model.header.name_str()?;
+        if !names.contains(name) {
             continue;
         }
 
-        write_one(&dst_dir.join(&model.header.name).join("query.hmm"), |w| {
+        write_one(&dst_dir.join(name).join("query.hmm"), |w| {
             model.write_to(w).map_err(Into::into)
         })?;
 
@@ -134,7 +132,9 @@ pub fn scatter_sto(
     check_file_names(names)?;
 
     for_each_named(src.as_ref(), names, |rec| {
-        let id = rec.id().expect("named by the walk that selected it");
+        let id = rec
+            .id_str()?
+            .expect("named by the walk that selected it");
 
         write_one(&dst_dir.join(id).join("query.sto"), |w| {
             rec.write_to(w).map_err(Into::into)
@@ -144,39 +144,21 @@ pub fn scatter_sto(
 
 /// Hand `f` each alignment of `src` whose `#=GF ID` is in `names`, stopping
 /// once every name has been seen.
-//
-// framed and read through libsail, but parsed a range at a
-// time rather than through IndexedStockholm: a record that
-// will not parse has to be repaired and parsed again, and
-// Indexable::get drops both the bytes and the reason -- it
-// answers None, which every combinator reads as a broken
-// contract and panics on
 fn for_each_named<F>(src: &Path, names: &HashSet<String>, mut f: F) -> anyhow::Result<usize>
 where
     F: FnMut(&StockholmRecord) -> anyhow::Result<()>,
 {
-    let source =
-        FileSource::open(src).with_context(|| format!("failed to open {}", src.display()))?;
-    let offsets = build_index::<_, StockholmDelimiter>(source.file())
+    let alignments = IndexedStockholm::open(src)
         .with_context(|| format!("failed to index {}", src.display()))?;
 
     let mut kept = 0usize;
 
-    for (n, offset) in offsets.iter().enumerate() {
-        let bytes = source.range(offset.start, offset.n_bytes)?;
+    for n in 0..alignments.len() {
+        let rec = alignments
+            .try_get(n)?
+            .with_context(|| format!("record {n} of {} will not parse", src.display()))?;
 
-        let rec = match StockholmParser::parse(&bytes) {
-            Ok(rec) => rec,
-            Err(_) => {
-                let mut repaired = bytes.into_owned();
-                crate::repair_utf8(&mut repaired);
-
-                StockholmParser::parse(&repaired)
-                    .with_context(|| format!("record {n} of {} will not parse", src.display()))?
-            }
-        };
-
-        if !rec.id().is_some_and(|id| names.contains(id)) {
+        if !rec.id_str()?.is_some_and(|id| names.contains(id)) {
             continue;
         }
 
@@ -271,10 +253,19 @@ s3 WWWWWWWW
                     .names
                     .iter()
                     .zip(&rec.seqs)
-                    .map(|(name, seq)| format!("{name} {}", String::from_utf8_lossy(seq)))
+                    .map(|(name, seq)| {
+                        format!(
+                            "{} {}",
+                            String::from_utf8_lossy(name),
+                            String::from_utf8_lossy(seq)
+                        )
+                    })
                     .collect();
 
-                (rec.id().unwrap().to_string(), rows)
+                (
+                    String::from_utf8_lossy(rec.id().unwrap()).into_owned(),
+                    rows,
+                )
             })
             .collect()
     }
@@ -294,7 +285,7 @@ s3 WWWWWWWW
         assert_eq!(back.len(), 1);
 
         let rec = back.cloned(0).unwrap();
-        assert_eq!(rec.header.name, "alpha");
+        assert_eq!(rec.header.name_str().unwrap(), "alpha");
         assert_eq!(rec.header.leng, 4);
 
         std::fs::remove_dir_all(src.parent().unwrap()).ok();
@@ -324,7 +315,7 @@ s3 WWWWWWWW
         assert_eq!(back.len(), 1);
 
         let rec = back.cloned(0).unwrap();
-        assert_eq!(rec.header.name, "beta");
+        assert_eq!(rec.header.name_str().unwrap(), "beta");
         assert_eq!(rec.header.leng, 6);
 
         std::fs::remove_dir_all(src.parent().unwrap()).ok();
@@ -407,7 +398,8 @@ s3 WWWWWWWW
     }
 
     /// A latin-1 byte in an author name is what pfam.sto actually holds. The
-    /// family still travels, and its alignment is untouched.
+    /// family travels and so does the byte: a record is bytes, so nothing has
+    /// to be replaced to get it through.
     #[test]
     fn an_alignment_that_is_not_utf8_still_travels() {
         let mut body = TWO_ALIGNMENTS.as_bytes().to_vec();
@@ -425,9 +417,14 @@ s3 WWWWWWWW
         assert_eq!(got[0].0, "gamma");
         assert_eq!(got[0].1, vec!["s4 WWWWAAAA"], "the alignment is untouched");
 
-        // only the offending byte is replaced
-        let text = std::fs::read_to_string(&dst).unwrap();
-        assert!(text.contains("Ant?nio RV;"), "got: {text}");
+        // the byte is carried through rather than repaired
+        let written = std::fs::read(&dst).unwrap();
+        let want: &[u8] = b"Ant\xf4nio RV;";
+        assert!(
+            written.windows(want.len()).any(|w| w == want),
+            "got: {}",
+            String::from_utf8_lossy(&written)
+        );
 
         std::fs::remove_dir_all(src.parent().unwrap()).ok();
     }

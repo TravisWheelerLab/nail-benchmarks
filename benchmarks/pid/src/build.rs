@@ -277,7 +277,7 @@ fn assemble(
 
     // one family's kept target rows, applied after the loop that reads them:
     // narrowing target_sto in place would need it borrowed both ways at once
-    let mut kept: HashMap<String, HashSet<String>> = HashMap::new();
+    let mut kept: HashMap<String, HashSet<Vec<u8>>> = HashMap::new();
 
     for fam in query_sto.keys() {
         let src_rec = src_sto
@@ -304,7 +304,7 @@ fn assemble(
         let mut keep = HashSet::new();
         for (t_name, t_seq) in target_seqs.iter() {
             let mut best_pid = 0.0;
-            let mut best_query = "";
+            let mut best_query: &[u8] = b"";
             for (q_name, q_seq) in query_seqs.iter() {
                 let pid = compute_pid(t_seq, q_seq);
 
@@ -312,9 +312,11 @@ fn assemble(
                 // similar means the split did not do what we asked
                 if pid > 0.5 {
                     bail!(
-                        "unexpected {:.0}% identity between {t_name} and {q_name} in {fam}; \
+                        "unexpected {:.0}% identity between {} and {} in {fam}; \
                          check the profmark train/test split",
-                        pid * 100.0
+                        pid * 100.0,
+                        String::from_utf8_lossy(t_name),
+                        String::from_utf8_lossy(q_name),
                     );
                 }
 
@@ -333,8 +335,8 @@ fn assemble(
                     .push(Pair {
                         pid: bin,
                         family: fam.clone(),
-                        query: best_query.to_string(),
-                        target: t_name.to_string(),
+                        query: String::from_utf8_lossy(best_query).into_owned(),
+                        target: String::from_utf8_lossy(t_name).into_owned(),
                     })
             }
         }
@@ -384,7 +386,7 @@ fn assemble(
 
     let extract = |fams: &IndexMap<String, StockholmRecord>, fam: &str, seq: &str| {
         fams.get(fam)
-            .and_then(|r| r.get(seq))
+            .and_then(|r| r.get(seq.as_bytes()))
             .map(ungap)
             .context("failed to extract sequence from stockholm")
     };
@@ -457,7 +459,9 @@ fn assemble(
             writeln!(afa_writer)?;
 
             rows.try_for_each(|(name, seq)| -> anyhow::Result<()> {
-                writeln!(afa_writer, ">{name}")?;
+                afa_writer.write_all(b">")?;
+                afa_writer.write_all(name)?;
+                writeln!(afa_writer)?;
                 afa_writer.write_all(seq)?;
                 writeln!(afa_writer)?;
                 Ok(())
@@ -486,11 +490,8 @@ fn assemble(
 /// A Stockholm file keyed by family, which is what `#=GF ID` holds in
 /// everything this benchmark reads.
 fn families(path: &Path) -> anyhow::Result<IndexMap<String, StockholmRecord>> {
-    // repaired in place rather than through from_utf8_lossy, which would hold
-    // a second copy of the whole file
-    let mut bytes =
+    let bytes =
         std::fs::read(path).with_context(|| format!("failed to read {}", path.display()))?;
-    util::repair_utf8(&mut bytes);
 
     let sto = libsail::seq::stockholm::Stockholm::new(&bytes[..])
         .with_context(|| format!("failed to parse {}", path.display()))?;
@@ -500,6 +501,9 @@ fn families(path: &Path) -> anyhow::Result<IndexMap<String, StockholmRecord>> {
         let id = rec
             .id()
             .with_context(|| format!("a record in {} has no #=GF ID", path.display()))?;
+
+        let id = std::str::from_utf8(id)
+            .with_context(|| format!("a #=GF ID in {} is not text", path.display()))?;
 
         out.insert(id.to_string(), rec.clone());
     }
@@ -512,7 +516,7 @@ fn families(path: &Path) -> anyhow::Result<IndexMap<String, StockholmRecord>> {
 ///
 /// A fresh record rather than an edit in place: `row` is the only thing that
 /// keeps the name index true, and it only ever appends.
-fn keep_rows(rec: &StockholmRecord, keep: &HashSet<String>) -> StockholmRecord {
+fn keep_rows(rec: &StockholmRecord, keep: &HashSet<Vec<u8>>) -> StockholmRecord {
     let mut out = StockholmRecord::default();
 
     out.gf = rec.gf.clone();

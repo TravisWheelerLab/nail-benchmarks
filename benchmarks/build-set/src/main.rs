@@ -37,7 +37,7 @@ use clap::Parser;
 use serde::Deserialize;
 use libsail::collection::{Aggregate, Indexable, Iterable};
 use libsail::format::{self, Format};
-use libsail::index::Index;
+use libsail::index::{self, Index};
 use libsail::seq::fasta::{DEFAULT_LINE_WIDTH, IndexedFasta};
 use libsail::seq::p7hmm::IndexedHmm;
 use rand::SeedableRng;
@@ -840,8 +840,8 @@ impl Sources {
 ///
 /// The index is kept beside each file as `<name>.saidx`, so the pass over
 /// every byte of the collection happens on the first build and not on the ones
-/// after it. `Index::load` stamps the source's length and modification time
-/// into the index and refuses one that no longer matches, so a re-downloaded
+/// after it. The index stamps the source's length and modification time, and
+/// `index::is_current` refuses one that no longer matches, so a re-downloaded
 /// shard is rebuilt rather than read through a stale map.
 fn collection_at(dir: &Path) -> anyhow::Result<Aggregate<IndexedFasta>> {
     let paths = fastas(dir)?;
@@ -856,20 +856,30 @@ fn collection_at(dir: &Path) -> anyhow::Result<Aggregate<IndexedFasta>> {
     Ok(Aggregate::new(parts))
 }
 
-/// One fasta, through its index on disk: loaded if there is a current one,
+/// One fasta, through its index on disk: opened if there is a current one,
 /// built and written down if not.
+///
+/// Opened rather than read: `Index::open` takes the header and leaves the
+/// offsets in the file, answering one at a time out of a `pread`. A draw of a
+/// few hundred sequences touches a few hundred offsets, and reading the table
+/// for every record of a 37 GB collection to reach them is the cost this
+/// avoids.
 ///
 /// A failure to write is a warning rather than an error. The index is a cache,
 /// and a read-only or full source directory should cost the next build its
 /// scan rather than this one its draw.
 fn indexed(path: &Path) -> anyhow::Result<IndexedFasta> {
-    if let Ok(index) = Index::load(path) {
+    let at = index::path_for(path);
+
+    if index::is_current(&at, path).unwrap_or(false)
+        && let Ok(index) = Index::open(&at)
+    {
         return Ok(IndexedFasta::with_index(path, index)?);
     }
 
     let index = Index::build(File::open(path)?, Format::Fasta)?;
 
-    if let Err(e) = index.save(path) {
+    if let Err(e) = index.write(&at, path) {
         eprintln!("warning: could not write an index beside {}: {e}", path.display());
     }
 
