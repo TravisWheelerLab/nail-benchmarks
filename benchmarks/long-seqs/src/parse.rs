@@ -130,8 +130,13 @@ fn searches(out: &Path, run: &str) -> anyhow::Result<Vec<(String, PathBuf)>> {
 /// Cell fraction of the last hit in a nail table, which is the one these
 /// single-pair searches are about.
 fn last_cell_frac(path: &Path) -> anyhow::Result<f64> {
-    util::nail::cell_fracs(path)?
-        .last()
-        .map(|h| h.cell_frac)
+    use libsail::collection::Indexable;
+
+    let rows = libsail::tbl::NailRows::open(path)?;
+
+    rows.len()
+        .checked_sub(1)
+        .and_then(|last| rows.get(last))
+        .map(|row| row.cell_fraction as f64)
         .context("no hits in table")
 }

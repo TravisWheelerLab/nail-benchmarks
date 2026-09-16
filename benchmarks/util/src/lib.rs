@@ -22,10 +22,9 @@
 //! Where the programs being benchmarked and the sequence data they run on were
 //! put is [`tools`].
 //!
-//! Two smaller things are shared for want of a second home: [`nail`], which
-//! reads the one column of nail's table that libsail's layout does not carry,
-//! and the pair that cut a query set up: [`split`] by weight, for a batch of
-//! jobs, and [`cut`] by name, for a subset or a file per record. [`time`] is
+//! Two smaller things are shared for want of a second home: the pair that cut
+//! a query set up, [`split`] by weight, for a batch of jobs, and [`cut`] by
+//! name, for a subset or a file per record. [`time`] is
 //! for the other way a run can be recorded: timed by a shell rather than by a
 //! pipeline, on a machine this workspace never sees.
 //!
@@ -36,7 +35,6 @@ pub mod clean;
 pub mod cut;
 pub mod ledger;
 pub mod manifest;
-pub mod nail;
 pub mod paths;
 pub mod set;
 pub mod split;

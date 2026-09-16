@@ -217,7 +217,7 @@ pub fn hmmer_hit(line: &[u8]) -> Option<[&[u8]; 4]> {
 /// file and no others. What it catches is a table of the wrong tool, where
 /// reading field 6 as a score would otherwise give a number.
 pub fn fits<C: HitColumns>(line: &[u8]) -> bool {
-    count(line) >= C::N_FIELDS
+    count(line) >= C::N_COLUMNS
 }
 
 /// One score field, or `None` where it is not a number a cutoff can be applied

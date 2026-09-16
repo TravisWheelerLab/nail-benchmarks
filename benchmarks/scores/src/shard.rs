@@ -367,7 +367,7 @@ impl Rows<'_> {
                         "{}:{at} has {} fields, this layout writes {}",
                         path.display(),
                         scan::count(line),
-                        C::N_FIELDS
+                        C::N_COLUMNS
                     );
                 }
                 checked = true;
@@ -397,7 +397,7 @@ impl Rows<'_> {
                         "{}:{at} has {} fields, hmmer's --tblout writes {}",
                         path.display(),
                         scan::count(line),
-                        HmmerTable::N_FIELDS
+                        HmmerTable::N_COLUMNS
                     );
                 }
                 checked = true;
@@ -551,7 +551,7 @@ fn doms(
                     "{}:{at} has {} fields, hmmer's --domtblout writes {}",
                     path.display(),
                     scan::count(line),
-                    HmmerDomTable::N_FIELDS
+                    HmmerDomTable::N_COLUMNS
                 );
             }
             checked = true;

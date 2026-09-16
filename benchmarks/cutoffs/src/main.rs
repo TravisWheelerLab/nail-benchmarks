@@ -47,7 +47,7 @@ use libsail::seq::fasta::{DEFAULT_LINE_WIDTH, IndexedFasta};
 use libsail::tbl::blast::BlastTable;
 use libsail::tbl::hmmer::HmmerTable;
 use libsail::tbl::nail::NailTable;
-use libsail::tbl::{Hit, HitColumns, Table};
+use libsail::tbl::{Hit, HitColumns, HitParser, Table};
 use michi::{Cmd as PCmd, PipelineBuilder, Progress, Step, Table as PTable};
 use util::tools::{hmmsearch, mmseqs, nail};
 use util::{manifest, tbl};
@@ -679,12 +679,12 @@ fn decoys(args: DecoysArgs, paths: &Paths) -> anyhow::Result<()> {
                     let mut map: HashMap<String, Vec<String>> = HashMap::new();
 
                     let path = manifest::table_path(&recruit_results, NAIL, shard);
-                    let tbl = Table::<NailTable>::open(&path)
+                    let tbl = Table::<HitParser<NailTable>>::open(&path)
                         .with_context(|| format!("failed to read {}", path.display()))?;
                     collect(&tbl, &mut map);
 
                     let path = manifest::table_path(&recruit_results, MMSEQS, shard);
-                    let tbl = Table::<BlastTable>::open(&path)
+                    let tbl = Table::<HitParser<BlastTable>>::open(&path)
                         .with_context(|| format!("failed to read {}", path.display()))?;
                     collect(&tbl, &mut map);
 
@@ -846,7 +846,7 @@ fn decoys(args: DecoysArgs, paths: &Paths) -> anyhow::Result<()> {
 }
 
 /// Fold a hit table into a family to target-name map.
-fn collect<C: HitColumns>(tbl: &Table<C>, map: &mut HashMap<String, Vec<String>>) {
+fn collect<C: HitColumns>(tbl: &Table<HitParser<C>>, map: &mut HashMap<String, Vec<String>>) {
     for hit in tbl.iter() {
         map.entry(hit.query.clone())
             .or_default()
@@ -1256,9 +1256,9 @@ where
         return Ok(None);
     }
 
-    let fwd = Table::<T>::open(&fwd_path)
+    let fwd = Table::<HitParser<T>>::open(&fwd_path)
         .with_context(|| format!("failed to read {}", fwd_path.display()))?;
-    let rev = Table::<T>::open(&rev_path)
+    let rev = Table::<HitParser<T>>::open(&rev_path)
         .with_context(|| format!("failed to read {}", rev_path.display()))?;
 
     let real: HashSet<(&str, &str)> = fwd

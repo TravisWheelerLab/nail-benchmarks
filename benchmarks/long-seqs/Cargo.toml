@@ -8,6 +8,7 @@ name = "long-seqs"
 path = "src/main.rs"
 
 [dependencies]
+libsail = { workspace = true }
 michi = { workspace = true }
 serde = { workspace = true }
 util = { workspace = true }

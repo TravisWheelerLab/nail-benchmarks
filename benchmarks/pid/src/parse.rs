@@ -23,7 +23,7 @@ use libsail::seq::p7hmm::Hmm;
 use libsail::tbl::blast::BlastTable;
 use libsail::tbl::hmmer::HmmerTable;
 use libsail::tbl::nail::NailTable;
-use libsail::tbl::{Hit, HitColumns, Table};
+use libsail::tbl::{Hit, HitColumns, HitParser, Table};
 
 use anyhow::{Context, bail};
 use clap::{Parser, Subcommand};
@@ -309,7 +309,7 @@ fn score(args: ScoreArgs) -> anyhow::Result<()> {
 
     let read = |name: &str| -> anyhow::Result<HashMap<(String, String), f32>> {
         let path = manifest::table_path(&results, name, "");
-        let tbl = Table::<NailTable>::open(&path)
+        let tbl = Table::<HitParser<NailTable>>::open(&path)
             .with_context(|| format!("failed to open {}", path.display()))?;
 
         // one entry per pair; a repeated pair keeps its last row
@@ -343,7 +343,7 @@ fn score(args: ScoreArgs) -> anyhow::Result<()> {
 fn cells(args: CellsArgs) -> anyhow::Result<()> {
     let table = manifest::table_path(&inputs::outputs().join("results"), &args.run, "");
 
-    let hits = util::nail::cell_fracs(&table)
+    let hits = libsail::tbl::NailRows::open(&table)
         .with_context(|| format!("failed to read {}", table.display()))?;
 
     // read out of the files rather than shelled out to hmmstat and
@@ -384,7 +384,7 @@ fn cells(args: CellsArgs) -> anyhow::Result<()> {
             .with_context(|| format!("no target len for: {}", h.target))?;
 
         let x = (qlen * tlen) as f64;
-        let y = h.cell_frac;
+        let y = h.cell_fraction;
 
         if h.target.starts_with("decoy") {
             writeln!(decoy_out, "{x},{y}")?;
@@ -564,7 +564,7 @@ impl Run {
 
 /// Every row of a table read as layout `C`.
 fn read_hits<C: HitColumns>(path: &Path) -> libsail::Result<Vec<Hit>> {
-    Ok(Table::<C>::open(path)?.iter().cloned().collect())
+    Ok(Table::<HitParser<C>>::open(path)?.iter().cloned().collect())
 }
 
 /// The runs a pipeline finished, in the order it declared them.

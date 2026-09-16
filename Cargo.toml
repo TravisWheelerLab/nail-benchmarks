@@ -27,7 +27,7 @@ clap = { version = "4.5.53", features = ["derive"] }
 feisty = "0.1.0"
 glob = "0.3.3"
 indexmap = { version = "2.13.0", features = ["serde"] }
-libsail = "0.1.0"
+libsail = "0.2.0"
 memchr = "2.7.6"
 michi = "0.1.0"
 rand = "0.10.2"

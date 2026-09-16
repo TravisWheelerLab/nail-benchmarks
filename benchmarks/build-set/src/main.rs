@@ -36,6 +36,8 @@ use anyhow::{Context, bail, ensure};
 use clap::Parser;
 use serde::Deserialize;
 use libsail::collection::{Aggregate, Indexable, Iterable};
+use libsail::format::Format;
+use libsail::index::Index;
 use libsail::seq::fasta::{DEFAULT_LINE_WIDTH, IndexedFasta};
 use libsail::seq::p7hmm::IndexedHmm;
 use rand::SeedableRng;
@@ -558,20 +560,14 @@ fn fastas(dir: &Path) -> anyhow::Result<Vec<PathBuf>> {
     Ok(out)
 }
 
-/// How many records a fasta holds and how many residues, counted rather than
-/// indexed: these files are one sequence each.
+/// How many records a fasta holds and how many residues.
 fn measure(path: &Path) -> anyhow::Result<(usize, u64)> {
-    let text = std::fs::read_to_string(path)
+    let fa = libsail::seq::fasta::Fasta::open(path)
         .with_context(|| format!("failed to read {}", path.display()))?;
 
-    let seqs = text.lines().filter(|l| l.starts_with('>')).count();
-    let residues = text
-        .lines()
-        .filter(|l| !l.starts_with('>'))
-        .map(|l| l.trim().len() as u64)
-        .sum();
+    let residues = fa.iter().map(|rec| rec.seq.len() as u64).sum();
 
-    Ok((seqs, residues))
+    Ok((fa.len(), residues))
 }
 
 // ------------------------------------------------------------------- ladder
@@ -804,8 +800,11 @@ impl Sources {
 
 /// Every fasta in `dir`, indexed and addressed as one collection.
 ///
-/// Nothing is kept between runs, so this is a pass over every byte of MGnify on
-/// every build -- a run that suddenly goes quiet for hours is this.
+/// The index is kept beside each file as `<name>.saidx`, so the pass over
+/// every byte of the collection happens on the first build and not on the ones
+/// after it. `Index::load` stamps the source's length and modification time
+/// into the index and refuses one that no longer matches, so a re-downloaded
+/// shard is rebuilt rather than read through a stale map.
 fn collection_at(dir: &Path) -> anyhow::Result<Aggregate<IndexedFasta>> {
     let mut paths: Vec<std::path::PathBuf> = std::fs::read_dir(dir)
         .with_context(|| format!("failed to read {}", dir.display()))?
@@ -829,12 +828,31 @@ fn collection_at(dir: &Path) -> anyhow::Result<Aggregate<IndexedFasta>> {
     let mut parts = Vec::with_capacity(paths.len());
     for path in &paths {
         parts.push(
-            IndexedFasta::open(path)
-                .with_context(|| format!("failed to index {}", path.display()))?,
+            indexed(path).with_context(|| format!("failed to index {}", path.display()))?,
         );
     }
 
     Ok(Aggregate::new(parts))
+}
+
+/// One fasta, through its index on disk: loaded if there is a current one,
+/// built and written down if not.
+///
+/// A failure to write is a warning rather than an error. The index is a cache,
+/// and a read-only or full source directory should cost the next build its
+/// scan rather than this one its draw.
+fn indexed(path: &Path) -> anyhow::Result<IndexedFasta> {
+    if let Ok(index) = Index::load(path) {
+        return Ok(IndexedFasta::with_index(path, index)?);
+    }
+
+    let index = Index::build(File::open(path)?, Format::Fasta)?;
+
+    if let Err(e) = index.save(path) {
+        eprintln!("warning: could not write an index beside {}: {e}", path.display());
+    }
+
+    Ok(IndexedFasta::with_index(path, index)?)
 }
 
 /// Refuse to build over an input set that is already there.
