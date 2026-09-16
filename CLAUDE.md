@@ -53,7 +53,7 @@ benchmarks/store/         what can be done to the store: import | clean
 benchmarks/recall/        recall against prefilter sensitivity   [fixed]
 benchmarks/cloud-search/  the (A, B) pruning surface             [fixed]
 benchmarks/hit-loss/      where hmmer's hits get lost            [fixed]
-benchmarks/calibrate/     what a search costs, and what a run will  [ladder, on ice]
+benchmarks/calibrate/     what a run will cost  [ladder]  ON ICE, see below
 benchmarks/cutoffs/       per-family score cutoffs from decoys    [fixed]
 benchmarks/long-seqs/     how the tools scale with length         [pairs]
 benchmarks/pid/           recall against percent identity, over a profmark split
@@ -63,9 +63,10 @@ One binary per benchmark, and the shape in brackets is the set it reads. Three
 libraries sit under them, and two binaries that belong to no benchmark:
 `build-set` makes the sets, `store` handles what a run left behind.
 
-`benchmarks/mgy/` holds no code. It is the `inputs/` and `outputs/` trees the
-old `mgy` crate wrote before the store existed, about 3.5 TB of cluster results
-that nothing here can reproduce. Nothing reads or writes it. Leave it alone.
+`benchmarks/mgy/` is empty. It held the `inputs/` and `outputs/` trees the old
+`mgy` crate wrote before the store existed, and those moved into the store on
+16 September 2026 -- see the warning under **What is tracked**, which is the
+one thing in this file to read before running anything near `store/`.
 
 ### How much of the libraries is actually shared
 
@@ -154,7 +155,8 @@ usual reason; `build` and `cutoffs` have no such flag and never had one.
 `store clean --paths <crate>/paths.toml --in <label>` removes what that label
 names as produced -- the run, the analysis and the scratch -- after printing how
 many files and how many bytes are about to go and waiting for a `y`. The set
-goes only with `--all`, since a build is expensive. pid keeps its
+goes only with `--all`, since a build is expensive. Never point it at recall's
+`real` label: see **What is tracked**. pid keeps its
 own `inputs/`, `outputs/` and `profmark/` and its own `clean`: it has not moved
 to the store, because its benchmark carries a truth table and an identity axis
 the manifest does not describe yet.
@@ -572,11 +574,15 @@ them and nothing commits them, so the copy builds its own. Without the exclude,
 real tree has nothing there to match it. long-seqs' set is checked in under
 `data/long-seqs/`, which is a link, so the copy reads the real one.
 
-`/benchmarks/mgy/inputs/` is excluded for a different reason, and dropping it
-is expensive rather than wrong. Nothing writes there any more -- it is the tree
-mgy built before the store -- but a checkout that has one holds about 495 GB,
-and rsync will copy every byte of it into the sandbox. `outputs/` is already
-caught by the bare `outputs/` pattern; `inputs/` needs naming.
+`/store` is the exclude that matters most, and dropping it is expensive rather
+than wrong: a checkout that has the mgy results holds about 3.5 TB there, and
+rsync will copy every byte of it into the sandbox. That has happened once
+already, from dropping a single exclude line, and it took the home filesystem
+to 84% full. Check this list against what is on disk before running the recipe.
+
+`/benchmarks/mgy/inputs/` is still excluded and now costs nothing, since that
+tree is empty. It is kept so that a checkout made before the move syncs the
+same way.
 
 Edit in the real tree and re-sync, never in the sandbox: an edit in the copy is
 gone at the next sync. To check an analysis against a run that finished
@@ -586,10 +592,21 @@ there.
 ## What is tracked
 
 The downloads under `data/` and the builds under `tools/bin/` are not, and
-neither is anything under `store/`: a set, a run and an analysis are all things
-this repository can make again. `benchmarks/mgy/` is ignored too, and is the one
-tree here that is none of those: the results the old crate wrote, which nothing
-can reproduce. Two exceptions are committed on purpose:
+neither is anything under `store/`: a set, a run and an analysis are usually
+things this repository can make again.
+
+**`store/sets/recall-real/` is the exception, and it is not backed up by being
+reproducible.** It holds about 3.5 TB of results searched on a cluster -- the
+hmmer set alone is 1000 shards representing some 21,926 hours of wall clock --
+and nothing here can produce them again. It is ignored by git like the rest of
+the store, so the only thing protecting it is that nobody deletes it. Read it,
+never write it, and never point `store clean`, an `rsync --delete` or a
+`build-set --rebuild` at that label. Its `set.tbl` was reconstructed from the
+shard sizes the old harness left, and says so in its `#= imported` line: the
+deal predates `set.tbl`, so the set cannot be rebuilt from its own manifest
+either.
+
+Two exceptions are committed on purpose:
 `data/long-seqs/`, because nothing fetches it and ignoring it would empty a
 fresh clone, and `data/mgy-cutoffs.tbl`, because learning it is a calibration
 run rather than a download.
