@@ -1,16 +1,16 @@
 # Where hit-loss reads and writes. Paths only, relative to this file.
 #
-# A set and everything derived from it share a directory, so a run against the
-# toy set sits beside the toy set rather than in a tree of its own.
+# Its own two sets: sharing one with another benchmark would hide what this one
+# actually reads. A set and everything derived from it share a directory.
 
 [toy]
-set      = "../../store/sets/toy/inputs"
-run      = "../../store/sets/toy/outputs/hit-loss"
-analysis = "../../store/sets/toy/analysis/hit-loss"
-tmp      = "../../store/sets/toy/tmp/hit-loss"
+set      = "../../store/sets/hit-loss-toy/inputs"
+run      = "../../store/sets/hit-loss-toy/outputs/hit-loss"
+analysis = "../../store/sets/hit-loss-toy/analysis/hit-loss"
+tmp      = "../../store/sets/hit-loss-toy/tmp/hit-loss"
 
-[full]
-set      = "../../store/sets/mgy-fixed/inputs"
-run      = "../../store/sets/mgy-fixed/outputs/hit-loss"
-analysis = "../../store/sets/mgy-fixed/analysis/hit-loss"
-tmp      = "../../store/sets/mgy-fixed/tmp/hit-loss"
+[real]
+set      = "../../store/sets/hit-loss-real/inputs"
+run      = "../../store/sets/hit-loss-real/outputs/hit-loss"
+analysis = "../../store/sets/hit-loss-real/analysis/hit-loss"
+tmp      = "../../store/sets/hit-loss-real/tmp/hit-loss"

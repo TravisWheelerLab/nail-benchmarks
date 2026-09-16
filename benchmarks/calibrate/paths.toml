@@ -1,7 +1,16 @@
 # Where calibrate reads and writes. Paths only, relative to this file.
+#
+# Its own two sets: sharing one with another benchmark would hide what this one
+# actually reads. A set and everything derived from it share a directory.
 
-[full]
-set      = "../../store/sets/mgy-ladder/inputs"
-run      = "../../store/sets/mgy-ladder/outputs/calibrate"
-analysis = "../../store/sets/mgy-ladder/analysis/calibrate"
-tmp      = "../../store/sets/mgy-ladder/tmp/calibrate"
+[toy]
+set      = "../../store/sets/calibrate-toy/inputs"
+run      = "../../store/sets/calibrate-toy/outputs/calibrate"
+analysis = "../../store/sets/calibrate-toy/analysis/calibrate"
+tmp      = "../../store/sets/calibrate-toy/tmp/calibrate"
+
+[real]
+set      = "../../store/sets/calibrate-real/inputs"
+run      = "../../store/sets/calibrate-real/outputs/calibrate"
+analysis = "../../store/sets/calibrate-real/analysis/calibrate"
+tmp      = "../../store/sets/calibrate-real/tmp/calibrate"

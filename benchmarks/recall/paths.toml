@@ -1,16 +1,16 @@
 # Where recall reads and writes. Paths only, relative to this file.
 #
-# A set and everything derived from it share a directory, so a run against the
-# toy set sits beside the toy set rather than in a tree of its own.
+# Its own two sets: sharing one with another benchmark would hide what this one
+# actually reads. A set and everything derived from it share a directory.
 
 [toy]
-set      = "../../store/sets/toy/inputs"
-run      = "../../store/sets/toy/outputs/recall"
-analysis = "../../store/sets/toy/analysis/recall"
-tmp      = "../../store/sets/toy/tmp/recall"
+set      = "../../store/sets/recall-toy/inputs"
+run      = "../../store/sets/recall-toy/outputs/recall"
+analysis = "../../store/sets/recall-toy/analysis/recall"
+tmp      = "../../store/sets/recall-toy/tmp/recall"
 
-[full]
-set      = "../../store/sets/mgy-fixed/inputs"
-run      = "../../store/sets/mgy-fixed/outputs/recall"
-analysis = "../../store/sets/mgy-fixed/analysis/recall"
-tmp      = "../../store/sets/mgy-fixed/tmp/recall"
+[real]
+set      = "../../store/sets/recall-real/inputs"
+run      = "../../store/sets/recall-real/outputs/recall"
+analysis = "../../store/sets/recall-real/analysis/recall"
+tmp      = "../../store/sets/recall-real/tmp/recall"

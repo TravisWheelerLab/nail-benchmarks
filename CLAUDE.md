@@ -165,6 +165,11 @@ builder stamps `#= shape` and the benchmark names the one it reads, and
 | `pairs` | `query_fa`, `target` | `pair`, `query_residues`, `residues` | long-seqs |
 | `decoys` | `query_hmm`, `query_sto`, `target` | `family`, `direction` | cutoffs, over what it built |
 
+`pairs` is the one shape with no draw in it. Its two sources are separate
+directories of fasta, so a sequence is never on both sides, and pair `i` is the
+`i`th file of each in name order. These are pairs somebody chose for their
+length, so the recipe selects and places them rather than sampling.
+
 They live in `util::set::shape` rather than with a benchmark, because a shape is
 the agreement between a builder and a reader and neither side owns it. `fixed`
 carries `seqs`/`residues`/`bytes` because the analyses read them: a shape is
@@ -190,9 +195,18 @@ tmp      = "../../store/sets/toy/tmp/recall"
 
 A label is a whole set of paths under one name, so a toy run and a real run
 differ by a word: `recall run --in toy`. Running a tool without `--in` prints
-the labels its file holds. Relative paths resolve against the file's own
-directory, which is why a crate needs no notion of a repository, and an absolute
-path is left alone -- a set on a scratch disk is one line.
+the labels its file holds.
+
+Every benchmark has exactly two, `toy` and `real`, over two sets of its own:
+`build-set` names them `<benchmark>-toy` and `<benchmark>-real`. A benchmark
+sharing a set with another needs a reason, because a shared set hides what a
+benchmark reads. cloud-search and hit-loss search a single unit, and they did
+that by opening shard 1 of recall's thousand, so their real sets are one shard
+the size of one of recall's rather than a thousand of them.
+
+Relative paths resolve against the file's own directory, which is why a crate
+needs no notion of a repository, and an absolute path is left alone -- a set on
+a scratch disk is one line.
 
 **What may go in one of these: paths, and for a tool that makes a dataset, how
 much of it to make.** `build-set`'s labels carry `shards`, `seqs` and rungs,
@@ -420,10 +434,12 @@ into the tables the plot scripts read, and `plot` draws them.
 How each tool's runtime scales as sequences get longer. Six paired
 query/target files, where `run` searches each query against its pair and
 `parse` turns that into the plot scripts' tables. Its inputs are small and
-checked in under `data/long-seqs/`, and so is their `set.tbl`: a set that ships
-with the repository is data rather than an artifact, so it sits with the data
-instead of under the store. Its queries are sequences rather than profiles,
-which is what the manifest's `query_fa` column is for.
+checked in under `data/long-seqs/`, and `build-set --in long-seqs-toy` or
+`--in long-seqs-real` cuts them into a set the same way every other benchmark
+gets one. Its queries are sequences rather than profiles, which is what the
+manifest's `query_fa` column is for, and its shape is `pairs`: one query
+against one target, with the two sources separate directories so a sequence is
+never on both sides.
 
 ## Testing behaviour: work in your own copy
 

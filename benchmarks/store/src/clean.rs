@@ -5,8 +5,10 @@
 //! scratch. The set is left alone -- a build is expensive, and nothing here
 //! knows whether it can be made again.
 
+use std::collections::BTreeMap;
 use std::path::PathBuf;
 
+use anyhow::bail;
 use clap::Parser;
 use serde::Deserialize;
 
@@ -25,14 +27,18 @@ pub struct Args {
     all: bool,
 }
 
-/// The keys this needs of a label. A benchmark's own type may name more; the
-/// ones not here are no business of a clean.
+/// What a label names, split the one way a clean cares about.
+///
+/// Every path in a label is something the benchmark produced, except the set,
+/// which it reads. That rule needs no vocabulary, which is what lets this
+/// clean up after cutoffs -- whose labels name a decoy set and two stage
+/// directories rather than the `run` every other benchmark writes.
 #[derive(Deserialize, Debug)]
 struct Produced {
-    set: PathBuf,
-    run: PathBuf,
-    analysis: PathBuf,
-    tmp: PathBuf,
+    set: Option<PathBuf>,
+
+    #[serde(flatten)]
+    made: BTreeMap<String, PathBuf>,
 }
 
 pub fn main(args: Args) -> anyhow::Result<()> {
@@ -51,14 +57,18 @@ pub fn main(args: Args) -> anyhow::Result<()> {
 
     let p: Produced = file.get(&label)?;
 
-    let mut targets = vec![
-        ("run", file.at(p.run)),
-        ("analysis", file.at(p.analysis)),
-        ("tmp", file.at(p.tmp)),
-    ];
+    // leaked so the names can borrow for the length of the call, which is the
+    // whole program: a label's keys are whatever the benchmark chose
+    let mut targets: Vec<(&str, PathBuf)> = p
+        .made
+        .into_iter()
+        .map(|(key, path)| (&*key.leak(), file.at(path)))
+        .collect();
 
-    if args.all {
-        targets.push(("set", file.at(p.set)));
+    match (args.all, p.set) {
+        (true, Some(set)) => targets.push(("set", file.at(set))),
+        (true, None) => bail!("label {label:?} names no set to remove"),
+        (false, _) => {}
     }
 
     util::clean::run(file.path().parent().unwrap_or(std::path::Path::new(".")), &targets)

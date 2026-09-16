@@ -32,7 +32,7 @@ use std::io::{BufWriter, Write};
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 
-use anyhow::{Context, bail};
+use anyhow::{Context, bail, ensure};
 use clap::Parser;
 use serde::Deserialize;
 use libsail::collection::{Aggregate, Indexable, Iterable};
@@ -93,6 +93,21 @@ enum Recipe {
         #[serde(default = "default_seed")]
         seed: u64,
     },
+    /// One query against one target, paired rather than crossed.
+    ///
+    /// The two sources are separate directories of fasta, so a sequence is
+    /// never on both sides: pair `i` is the `i`th file of each, in name order.
+    /// Nothing is drawn -- these are pairs somebody chose, and the recipe
+    /// selects and places them.
+    Pairs {
+        queries: PathBuf,
+        targets: PathBuf,
+        out: PathBuf,
+        /// How many of the pairs to take, in name order. All of them when
+        /// absent.
+        #[serde(default)]
+        pairs: Option<usize>,
+    },
     /// Nested rungs on both axes, each a prefix of the one above.
     Ladder {
         queries: PathBuf,
@@ -114,6 +129,7 @@ impl Recipe {
     fn shape(&self) -> &'static str {
         match self {
             Recipe::Fixed { .. } => "fixed",
+            Recipe::Pairs { .. } => "pairs",
             Recipe::Ladder { .. } => "ladder",
         }
     }
@@ -155,6 +171,17 @@ fn main() -> anyhow::Result<()> {
             fams,
             seed,
         ),
+        Recipe::Pairs {
+            queries,
+            targets,
+            out,
+            pairs,
+        } => make_pairs(
+            paths.at(queries),
+            paths.at(targets),
+            paths.at(out),
+            pairs,
+        ),
         Recipe::Ladder {
             queries,
             alignments,
@@ -180,6 +207,10 @@ fn listing(paths: &paths::File) -> anyhow::Result<String> {
 
     let mut out = format!("labels in {}\n\n", paths.path().display());
 
+    // the longest label sets the column, so the shapes and sizes line up
+    // however the labels are named
+    let width = paths.labels().map(str::len).max().unwrap_or(0);
+
     for label in paths.labels() {
         let recipe: Recipe = paths.get(label)?;
         let (shape, size, dst) = match &recipe {
@@ -188,10 +219,19 @@ fn listing(paths: &paths::File) -> anyhow::Result<String> {
             } => (
                 recipe.shape(),
                 format!(
-                    "{shards} shards, {} seqs, {} families",
+                    "{shards} {}, {} seqs, {} families",
+                    plural(*shards, "shard"),
                     count(*seqs),
                     count(*fams)
                 ),
+                out,
+            ),
+            Recipe::Pairs { out, pairs, .. } => (
+                recipe.shape(),
+                match pairs {
+                    Some(n) => format!("{n} {}", plural(*n, "pair")),
+                    None => "every pair".to_string(),
+                },
                 out,
             ),
             Recipe::Ladder {
@@ -202,15 +242,21 @@ fn listing(paths: &paths::File) -> anyhow::Result<String> {
             } => (
                 recipe.shape(),
                 format!(
-                    "{} query rungs x {} target rungs",
+                    "{} query {} x {} target {}",
                     query_rungs.len(),
-                    target_rungs.len()
+                    plural(query_rungs.len(), "rung"),
+                    target_rungs.len(),
+                    plural(target_rungs.len(), "rung")
                 ),
                 out,
             ),
         };
 
-        let _ = writeln!(out, "  {label:<12} {shape:<7} {size:<34} -> {}", dst.display());
+        let _ = writeln!(
+            out,
+            "  {label:<width$}  {shape:<6}  {size:<34}  -> {}",
+            dst.display()
+        );
     }
 
     let _ = write!(out, "\nusage: {USAGE}");
@@ -221,6 +267,13 @@ fn count(n: Option<usize>) -> String {
     match n {
         Some(n) => n.to_string(),
         None => "all".to_string(),
+    }
+}
+
+fn plural(n: usize, word: &str) -> String {
+    match n {
+        1 => word.to_string(),
+        _ => format!("{word}s"),
     }
 }
 
@@ -388,7 +441,116 @@ fn deal(
         .collect()
 }
 
-// ------------------------------------------------------------------- ladder
+// -------------------------------------------------------------------- pairs
+
+/// Pairs the `i`th query file with the `i`th target file, in name order.
+///
+/// A pair is the unit on both sides, so there is no draw and no seed: the two
+/// directories already say what goes with what, and this copies them in and
+/// writes down what each came to.
+fn make_pairs(
+    queries: PathBuf,
+    targets: PathBuf,
+    root: PathBuf,
+    take: Option<usize>,
+) -> anyhow::Result<()> {
+    claim(&root)?;
+
+    let (q, t) = (fastas(&queries)?, fastas(&targets)?);
+
+    ensure!(
+        q.len() == t.len(),
+        "{} holds {} fasta files and {} holds {}; a pair needs one of each",
+        queries.display(),
+        q.len(),
+        targets.display(),
+        t.len()
+    );
+
+    let take = take.unwrap_or(q.len());
+    ensure!(
+        take <= q.len(),
+        "asked for {take} pairs but there are {}",
+        q.len()
+    );
+
+    let (q_dir, t_dir) = (root.join(QUERIES), root.join(TARGETS));
+    std::fs::create_dir_all(&q_dir)?;
+    std::fs::create_dir_all(&t_dir)?;
+
+    let mut rows = Vec::new();
+    for (pair, (from_q, from_t)) in q.iter().zip(&t).take(take).enumerate() {
+        let pair = pair + 1;
+        let (to_q, to_t) = (
+            q_dir.join(format!("{pair}.fa")),
+            t_dir.join(format!("{pair}.fa")),
+        );
+
+        std::fs::copy(from_q, &to_q)
+            .with_context(|| format!("failed to copy {}", from_q.display()))?;
+        std::fs::copy(from_t, &to_t)
+            .with_context(|| format!("failed to copy {}", from_t.display()))?;
+
+        let (q_size, t_size) = (measure(&to_q)?, measure(&to_t)?);
+
+        rows.push(
+            set::Row::new(pair.to_string(), format!("{TARGETS}/{pair}.fa"))
+                .query_fa(format!("{QUERIES}/{pair}.fa"))
+                .attr("pair", pair)
+                .attr("query_residues", q_size.1)
+                .attr("residues", t_size.1)
+                .attr("seqs", t_size.0)
+                .attr("bytes", std::fs::metadata(&to_t)?.len()),
+        );
+    }
+
+    Set::new(&root, rows)
+        .says("shape", set::shape::PAIRS.name)
+        .says("recipe", "pairs")
+        .says("queries", queries.display())
+        .says("targets", targets.display())
+        .save()?;
+
+    println!("\nbuilt {}", root.display());
+    Ok(())
+}
+
+/// The fasta files in a directory, in name order.
+fn fastas(dir: &Path) -> anyhow::Result<Vec<PathBuf>> {
+    let mut out: Vec<PathBuf> = std::fs::read_dir(dir)
+        .with_context(|| format!("failed to read {}", dir.display()))?
+        .filter_map(|e| e.ok().map(|e| e.path()))
+        .filter(|p| {
+            p.extension()
+                .and_then(|x| x.to_str())
+                .is_some_and(|x| FASTA_EXTENSIONS.contains(&x.to_ascii_lowercase().as_str()))
+        })
+        .collect();
+
+    out.sort();
+
+    if out.is_empty() {
+        bail!("no {} files in {}", FASTA_EXTENSIONS.join("/"), dir.display());
+    }
+
+    Ok(out)
+}
+
+/// How many records a fasta holds and how many residues, counted rather than
+/// indexed: these files are one sequence each.
+fn measure(path: &Path) -> anyhow::Result<(usize, u64)> {
+    let text = std::fs::read_to_string(path)
+        .with_context(|| format!("failed to read {}", path.display()))?;
+
+    let seqs = text.lines().filter(|l| l.starts_with('>')).count();
+    let residues = text
+        .lines()
+        .filter(|l| !l.starts_with('>'))
+        .map(|l| l.trim().len() as u64)
+        .sum();
+
+    Ok((seqs, residues))
+}
 
 // ------------------------------------------------------------------- ladder
 

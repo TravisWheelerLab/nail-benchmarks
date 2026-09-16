@@ -4,32 +4,138 @@
 # it goes. Nothing about a search belongs here -- no tools, no flags, no
 # sensitivities, no threads. Paths are relative to this file.
 #
+# Every benchmark gets its own two sets. Sharing one would hide what a
+# benchmark actually reads: cloud-search and hit-loss search a single unit, and
+# for a long time they did that by opening shard 1 of recall's thousand.
+#
 # A set and everything derived from it share a directory, so `out` is the
-# `inputs/` of one: a run against it writes its siblings.
+# `inputs/` of one and a run against it writes its siblings.
 
-[toy]
+# ------------------------------------------------------------------- recall
+
+# Every shard, swept. The only benchmark here that reads a whole collection.
+[recall-toy]
 shape      = "fixed"
 queries    = "../../data/pfam.hmm"
 alignments = "../../data/pfam.sto"
 targets    = "../../data/mgnify"
-out        = "../../store/sets/toy/inputs"
+out        = "../../store/sets/recall-toy/inputs"
 shards     = 2
 seqs       = 400
 fams       = 5
 
-[mgy-fixed]
+[recall-real]
 shape      = "fixed"
 queries    = "../../data/pfam.hmm"
 alignments = "../../data/pfam.sto"
 targets    = "../../data/mgnify"
-out        = "../../store/sets/mgy-fixed/inputs"
+out        = "../../store/sets/recall-real/inputs"
 shards     = 1000
 
-[mgy-ladder]
+# ------------------------------------------------- cloud-search and hit-loss
+
+# One unit each, so one shard is the whole set. Its size matches one of
+# recall-real's thousand, which is what keeps a cell's cost readable against a
+# recall column.
+[cloud-search-toy]
+shape      = "fixed"
+queries    = "../../data/pfam.hmm"
+alignments = "../../data/pfam.sto"
+targets    = "../../data/mgnify"
+out        = "../../store/sets/cloud-search-toy/inputs"
+shards     = 1
+seqs       = 400
+fams       = 5
+
+[cloud-search-real]
+shape      = "fixed"
+queries    = "../../data/pfam.hmm"
+alignments = "../../data/pfam.sto"
+targets    = "../../data/mgnify"
+out        = "../../store/sets/cloud-search-real/inputs"
+shards     = 1
+seqs       = 2455939
+
+[hit-loss-toy]
+shape      = "fixed"
+queries    = "../../data/pfam.hmm"
+alignments = "../../data/pfam.sto"
+targets    = "../../data/mgnify"
+out        = "../../store/sets/hit-loss-toy/inputs"
+shards     = 1
+seqs       = 400
+fams       = 5
+
+[hit-loss-real]
+shape      = "fixed"
+queries    = "../../data/pfam.hmm"
+alignments = "../../data/pfam.sto"
+targets    = "../../data/mgnify"
+out        = "../../store/sets/hit-loss-real/inputs"
+shards     = 1
+seqs       = 2455939
+
+# ------------------------------------------------------------------ cutoffs
+
+# Reverses every shard and recruits decoys across all of them, so the decoys
+# are drawn from the population the searches they gate are run against.
+[cutoffs-toy]
+shape      = "fixed"
+queries    = "../../data/pfam.hmm"
+alignments = "../../data/pfam.sto"
+targets    = "../../data/mgnify"
+out        = "../../store/sets/cutoffs-toy/inputs"
+shards     = 2
+seqs       = 400
+fams       = 5
+
+[cutoffs-real]
+shape      = "fixed"
+queries    = "../../data/pfam.hmm"
+alignments = "../../data/pfam.sto"
+targets    = "../../data/mgnify"
+out        = "../../store/sets/cutoffs-real/inputs"
+shards     = 1000
+
+# ---------------------------------------------------------------- calibrate
+
+# One query rung and only one: calibrate holds the query at all of Pfam and
+# moves the target, so a ladder with two would be refused. The target rungs
+# double from 1,000 to 128,000, with a rung of one sequence at the bottom to
+# measure the fixed cost on its own.
+[calibrate-toy]
 shape        = "ladder"
 queries      = "../../data/pfam.hmm"
 alignments   = "../../data/pfam.sto"
 targets      = "../../data/mgnify"
-out          = "../../store/sets/mgy-ladder/inputs"
-query-rungs  = [10, 100, 1000, 10000, 100000]
-target-rungs = [1000, 10000, 100000]
+out          = "../../store/sets/calibrate-toy/inputs"
+query-rungs  = [5]
+target-rungs = [1, 100, 200, 400]
+
+[calibrate-real]
+shape        = "ladder"
+queries      = "../../data/pfam.hmm"
+alignments   = "../../data/pfam.sto"
+targets      = "../../data/mgnify"
+out          = "../../store/sets/calibrate-real/inputs"
+query-rungs  = [20795]
+target-rungs = [1, 1000, 2000, 4000, 8000, 16000, 32000, 64000, 128000]
+
+# ---------------------------------------------------------------- long-seqs
+
+# Pairs rather than a cross: one query against one target, and the two sources
+# are separate directories so a sequence is never on both sides. These are
+# pairs somebody chose for their length, so nothing is drawn -- the recipe
+# selects and places them.
+[long-seqs-toy]
+shape   = "pairs"
+queries = "../../data/long-seqs/query"
+targets = "../../data/long-seqs/target"
+out     = "../../store/sets/long-seqs-toy/inputs"
+pairs   = 2
+
+[long-seqs-real]
+shape   = "pairs"
+queries = "../../data/long-seqs/query"
+targets = "../../data/long-seqs/target"
+out     = "../../store/sets/long-seqs-real/inputs"

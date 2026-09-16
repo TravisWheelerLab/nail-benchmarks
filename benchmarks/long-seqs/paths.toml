@@ -1,10 +1,17 @@
 # Where long-seqs reads and writes. Paths only, relative to this file.
 #
-# Its set ships with the repository rather than being built, so `set` points
-# into data/ while everything derived from it goes where the others go.
+# Its sets are pairs rather than a cross, built by `build-set --in
+# long-seqs-toy|long-seqs-real` out of the sequences checked in under
+# data/long-seqs/.
 
-[full]
-set      = "../../data/long-seqs"
-run      = "../../store/sets/long-seqs/outputs/long-seqs"
-analysis = "../../store/sets/long-seqs/analysis/long-seqs"
-tmp      = "../../store/sets/long-seqs/tmp/long-seqs"
+[toy]
+set      = "../../store/sets/long-seqs-toy/inputs"
+run      = "../../store/sets/long-seqs-toy/outputs/long-seqs"
+analysis = "../../store/sets/long-seqs-toy/analysis/long-seqs"
+tmp      = "../../store/sets/long-seqs-toy/tmp/long-seqs"
+
+[real]
+set      = "../../store/sets/long-seqs-real/inputs"
+run      = "../../store/sets/long-seqs-real/outputs/long-seqs"
+analysis = "../../store/sets/long-seqs-real/analysis/long-seqs"
+tmp      = "../../store/sets/long-seqs-real/tmp/long-seqs"
