@@ -1,17 +1,18 @@
 [package]
-name = "long-seqs"
+name = "build-set"
 version = "0.1.0"
 edition = "2024"
 
 [[bin]]
-name = "long-seqs"
+name = "build-set"
 path = "src/main.rs"
 
 [dependencies]
 libsail = { workspace = true }
 michi = { workspace = true }
-serde = { workspace = true }
 util = { workspace = true }
 
 anyhow = { workspace = true }
 clap = { workspace = true }
+rand = { workspace = true }
+serde = { workspace = true }

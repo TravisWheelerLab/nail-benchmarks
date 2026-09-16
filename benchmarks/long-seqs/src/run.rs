@@ -18,7 +18,7 @@ use util::ledger;
 use util::manifest;
 use util::tools::nail;
 
-use crate::inputs;
+use util::set::Set;
 
 /// The name every pair's hit table and manifest row is filed under. One tool,
 /// one setting, so every pair is the same run against a different target.
@@ -32,12 +32,11 @@ pub struct Dirs {
 }
 
 impl Dirs {
-    pub fn new(root: impl Into<PathBuf>) -> Dirs {
-        let root = root.into();
+    pub fn new(run: &std::path::Path, tmp: &std::path::Path) -> Dirs {
         Dirs {
-            results: root.join("results"),
-            tmp: inputs::tmp().join("run"),
-            root,
+            results: run.join("results"),
+            tmp: tmp.to_owned(),
+            root: run.to_owned(),
         }
     }
 
@@ -51,9 +50,9 @@ pub struct Args {
     #[arg(short, long, default_value_t = 24)]
     pub threads: usize,
 
-    /// Where the results and the manifest go. Defaults to outputs/
-    #[arg(long, value_name = "dir")]
-    pub out: Option<PathBuf>,
+    /// Which label of paths.toml to run under. Omit to list them
+    #[arg(long = "in", value_name = "label")]
+    pub label: Option<String>,
 
     #[arg(long)]
     pub tmp: Option<PathBuf>,
@@ -62,11 +61,13 @@ pub struct Args {
     pub dry_run: bool,
 }
 
-pub fn main(args: Args) -> anyhow::Result<()> {
-    let mut dirs = Dirs::new(args.out.unwrap_or_else(inputs::outputs));
+pub fn main(args: Args, paths: &crate::Paths) -> anyhow::Result<()> {
+    let mut dirs = Dirs::new(&paths.run, &paths.tmp);
     if let Some(tmp) = args.tmp {
         dirs.tmp = tmp;
     }
+
+    let set = Set::load_as(&paths.set, &util::set::shape::PAIRS)?;
 
     let nail_bin = nail()?;
 
@@ -77,7 +78,9 @@ pub fn main(args: Args) -> anyhow::Result<()> {
             .path(&dirs.results),
     );
 
-    for pair in inputs::pairs()? {
+    for unit in set.units() {
+        let pair = unit.name().to_string();
+
         pl = pl.step(
             Step::serial([Cmd::new(&nail_bin)
                 .sub("search")
@@ -87,8 +90,8 @@ pub fn main(args: Args) -> anyhow::Result<()> {
                 // widens the sparse band enough that these pairs align at all
                 .arg("--f32-p", 5)
                 .arg("--tbl-out", dirs.table(&pair))
-                .path(inputs::query(&pair))
-                .path(inputs::target(&pair))
+                .path(unit.query_fa()?)
+                .path(unit.target()?)
                 .field(manifest::NAME, RUN_NAME)
                 .field(manifest::TOOL, "nail")
                 .field(manifest::SHARD, &pair)])

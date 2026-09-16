@@ -5,8 +5,6 @@
 //! checked into git, so this benchmark has no build step -- [`inputs`] is where
 //! they are, not how they were made.
 
-mod clean;
-mod inputs;
 mod parse;
 mod run;
 
@@ -26,14 +24,55 @@ enum Command {
     /// Turn results into the tables the plot scripts consume.
     #[command(subcommand)]
     Parse(parse::Cmd),
-    /// Remove the run's outputs and the scratch. The inputs are checked in.
-    Clean,
 }
 
+/// Where this benchmark reads and writes, as one label of `paths.toml` names
+/// them.
+#[derive(serde::Deserialize, Debug)]
+#[serde(deny_unknown_fields)]
+pub struct Paths {
+    pub set: std::path::PathBuf,
+    pub run: std::path::PathBuf,
+    pub analysis: std::path::PathBuf,
+    pub tmp: std::path::PathBuf,
+}
+
+impl Paths {
+    pub fn open(label: &str) -> anyhow::Result<Paths> {
+        let file = util::paths::File::open(env!("CARGO_MANIFEST_DIR"))?;
+        let p: Paths = file.get(label)?;
+
+        Ok(Paths {
+            set: file.at(p.set),
+            run: file.at(p.run),
+            analysis: file.at(p.analysis),
+            tmp: file.at(p.tmp),
+        })
+    }
+
+    pub fn listing(usage: &str) -> anyhow::Result<String> {
+        Ok(util::paths::File::open(env!("CARGO_MANIFEST_DIR"))?.listing(usage))
+    }
+}
+
+const USAGE: &str = "long-seqs <run|parse> --in <label>";
+
 fn main() -> anyhow::Result<()> {
-    match Cli::parse().command {
-        Command::Run(args) => run::main(args),
-        Command::Parse(cmd) => parse::main(cmd),
-        Command::Clean => clean::main(),
+    let cmd = Cli::parse().command;
+
+    let label = match &cmd {
+        Command::Run(a) => a.label.as_deref(),
+        Command::Parse(parse::Cmd::Cells(a)) => a.label.as_deref(),
+    };
+
+    let Some(label) = label else {
+        println!("{}", Paths::listing(USAGE)?);
+        return Ok(());
+    };
+    let paths = Paths::open(label)?;
+
+    match cmd {
+        Command::Run(args) => run::main(args, &paths),
+        Command::Parse(cmd) => parse::main(cmd, &paths),
     }
 }

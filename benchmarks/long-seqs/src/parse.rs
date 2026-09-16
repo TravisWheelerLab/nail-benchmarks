@@ -11,13 +11,12 @@ use std::path::{Path, PathBuf};
 
 use anyhow::{Context, bail, ensure};
 use clap::{Parser, Subcommand};
-use libsail::collection::Indexable;
-use libsail::seq::fasta::Fasta;
 
 use util::ledger::{self, Ledger};
 use util::manifest;
 
-use crate::inputs;
+use util::set::Set;
+
 use crate::run::RUN_NAME;
 
 /// Analysis subcommands for this benchmark.
@@ -42,17 +41,23 @@ pub struct CellsArgs {
     /// Which run's tables to read cell fractions from
     #[arg(long, value_name = "NAME", default_value = RUN_NAME)]
     run: String,
+
+    /// Which label of paths.toml to read. Omit to list them
+    #[arg(long = "in", value_name = "label")]
+    pub label: Option<String>,
 }
 
-pub fn main(cmd: Cmd) -> anyhow::Result<()> {
+pub fn main(cmd: Cmd, paths: &crate::Paths) -> anyhow::Result<()> {
     match cmd {
-        Cmd::Cells(args) => cells(args),
+        Cmd::Cells(args) => cells(args, paths),
     }
 }
 
-fn cells(args: CellsArgs) -> anyhow::Result<()> {
-    let out = args.out.unwrap_or_else(inputs::outputs);
-    let figures = args.figures.unwrap_or_else(|| out.join("figures"));
+fn cells(args: CellsArgs, paths: &crate::Paths) -> anyhow::Result<()> {
+    let out = args.out.unwrap_or_else(|| paths.run.clone());
+    let figures = args.figures.unwrap_or_else(|| paths.analysis.clone());
+
+    let set = Set::load_as(&paths.set, &util::set::shape::PAIRS)?;
 
     let searches = searches(&out, &args.run)?;
 
@@ -68,8 +73,14 @@ fn cells(args: CellsArgs) -> anyhow::Result<()> {
         let cell_frac = last_cell_frac(&table)
             .with_context(|| format!("failed to read a hit from {}", table.display()))?;
 
-        let q_len = residue_len(&inputs::query(&pair))?;
-        let t_len = residue_len(&inputs::target(&pair))?;
+        // the lengths the set wrote down, rather than the files read again
+        let unit = set
+            .units()
+            .find(|u| u.name() == pair)
+            .with_context(|| format!("the set has no unit {pair:?}"))?;
+
+        let q_len = unit.number("query_residues")?;
+        let t_len = unit.number("residues")?;
 
         writeln!(file, "{},{:.5}", q_len * t_len, cell_frac)?;
     }
@@ -123,18 +134,4 @@ fn last_cell_frac(path: &Path) -> anyhow::Result<f64> {
         .last()
         .map(|h| h.cell_frac)
         .context("no hits in table")
-}
-
-/// Residue count of a fasta holding exactly one sequence.
-fn residue_len(path: &Path) -> anyhow::Result<usize> {
-    let fa = Fasta::open(path).with_context(|| format!("failed to parse {}", path.display()))?;
-
-    ensure!(
-        fa.len() == 1,
-        "expected exactly one sequence in {}, found {}",
-        path.display(),
-        fa.len()
-    );
-
-    Ok(fa.get(0).expect("one record").seq.len())
 }

@@ -35,7 +35,7 @@ bin=$target/release/$name
 if [[ ! -f $crate/Cargo.toml ]]; then
     echo "no crate at $crate" >&2
     echo "this runs as one of the per-benchmark links, and the name on the" >&2
-    echo "link is the crate it builds: benchmarks/mgy/mgy, and so on" >&2
+    echo "link is the crate it builds: benchmarks/recall/recall, and so on" >&2
     exit 2
 fi
 

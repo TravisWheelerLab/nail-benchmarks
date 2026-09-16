@@ -1,0 +1,7 @@
+# Where calibrate reads and writes. Paths only, relative to this file.
+
+[full]
+set      = "../../store/sets/mgy-ladder/inputs"
+run      = "../../store/sets/mgy-ladder/outputs/calibrate"
+analysis = "../../store/sets/mgy-ladder/analysis/calibrate"
+tmp      = "../../store/sets/mgy-ladder/tmp/calibrate"

@@ -2,13 +2,23 @@
 resolver = "2"
 
 members = [
+    "benchmarks/build-set",
+    "benchmarks/calibrate",
+    "benchmarks/cloud-search",
+    "benchmarks/cutoffs",
+    "benchmarks/hit-loss",
     "benchmarks/long-seqs",
-    "benchmarks/mgy",
     "benchmarks/pid",
+    "benchmarks/recall",
+    "benchmarks/scores",
+    "benchmarks/store",
+    "benchmarks/search",
     "benchmarks/util",
 ]
 
 [workspace.dependencies]
+scores = { path = "benchmarks/scores" }
+search = { path = "benchmarks/search" }
 util = { path = "benchmarks/util" }
 tabl = { path = "../tabl" }
 

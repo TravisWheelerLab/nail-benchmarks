@@ -1,0 +1,20 @@
+# Where cutoffs reads and writes. Paths only, relative to this file.
+#
+# It reads one set and builds another: `decoys` is a set in its own right, so
+# it gets an `inputs/` like any other.
+
+[toy]
+set      = "../../store/sets/toy/inputs"
+decoys   = "../../store/sets/toy-decoys/inputs"
+recruit  = "../../store/sets/toy/outputs/cutoffs-recruit"
+search   = "../../store/sets/toy-decoys/outputs/cutoffs-search"
+analysis = "../../store/sets/toy-decoys/analysis/cutoffs"
+tmp      = "../../store/sets/toy-decoys/tmp/cutoffs"
+
+[full]
+set      = "../../store/sets/mgy-fixed/inputs"
+decoys   = "../../store/sets/mgy-decoys/inputs"
+recruit  = "../../store/sets/mgy-fixed/outputs/cutoffs-recruit"
+search   = "../../store/sets/mgy-decoys/outputs/cutoffs-search"
+analysis = "../../store/sets/mgy-decoys/analysis/cutoffs"
+tmp      = "../../store/sets/mgy-decoys/tmp/cutoffs"

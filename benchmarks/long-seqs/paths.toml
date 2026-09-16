@@ -1,0 +1,10 @@
+# Where long-seqs reads and writes. Paths only, relative to this file.
+#
+# Its set ships with the repository rather than being built, so `set` points
+# into data/ while everything derived from it goes where the others go.
+
+[full]
+set      = "../../data/long-seqs"
+run      = "../../store/sets/long-seqs/outputs/long-seqs"
+analysis = "../../store/sets/long-seqs/analysis/long-seqs"
+tmp      = "../../store/sets/long-seqs/tmp/long-seqs"

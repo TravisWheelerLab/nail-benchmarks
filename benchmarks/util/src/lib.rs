@@ -1,15 +1,31 @@
 //! What the benchmarks in this repo agree on.
 //!
-//! Each benchmark asks its own question and keeps its own analyses. Two things
-//! are the same for all of them. The first is the shape of the record a run
-//! leaves behind: a `michi::Table` sink writes `manifest.tbl`, [`ledger`]
-//! distills the part an analysis needs out of it, and whatever the analysis
-//! works out gets written through [`tbl`]. The second is where the programs being benchmarked and the sequence
-//! data they run on were put, which is [`tools`].
+//! Each benchmark asks its own question and keeps its own analyses. What is
+//! the same for all of them is the shape of the record each stage leaves
+//! behind, and where that record goes.
 //!
-//! Two smaller things are shared for want of a second home: [`split`], which
-//! cuts a query set up for a batch of jobs, and [`nail`], which reads the one
-//! column of nail's table that libsail's layout does not carry. [`time`] is
+//! A build describes what it produced in [`set`], one row per search unit. A
+//! run is recorded by a `michi::Table` sink as `manifest.tbl`, which [`ledger`]
+//! distills into the part an analysis needs. What the analysis works out gets
+//! written through [`tbl`], which is the format all three ride on.
+//!
+//! Nothing here decides where any of that goes. [`paths`] reads the file each
+//! tool keeps beside its own source, naming what it reads and what it writes,
+//! so a location is something a tool is told rather than something a library
+//! knows.
+//!
+//! [`set`] and [`ledger`] are the same bargain at two seams: a fixed spine plus
+//! an open map, written by the producer in the pass that produces the artifact.
+//! That is what lets a search read a set without knowing which recipe built it,
+//! and an analysis read a run without knowing which pipeline ran it.
+//!
+//! Where the programs being benchmarked and the sequence data they run on were
+//! put is [`tools`].
+//!
+//! Two smaller things are shared for want of a second home: [`nail`], which
+//! reads the one column of nail's table that libsail's layout does not carry,
+//! and the pair that cut a query set up: [`split`] by weight, for a batch of
+//! jobs, and [`cut`] by name, for a subset or a file per record. [`time`] is
 //! for the other way a run can be recorded: timed by a shell rather than by a
 //! pipeline, on a machine this workspace never sees.
 //!
@@ -17,9 +33,12 @@
 //! benchmark answers differently, and it stays with the benchmark.
 
 pub mod clean;
+pub mod cut;
 pub mod ledger;
 pub mod manifest;
 pub mod nail;
+pub mod paths;
+pub mod set;
 pub mod split;
 pub mod tbl;
 pub mod time;

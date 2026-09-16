@@ -1,0 +1,35 @@
+# What build-set can make, and out of what.
+#
+# A table describes a dataset: where it comes from, how much of it, and where
+# it goes. Nothing about a search belongs here -- no tools, no flags, no
+# sensitivities, no threads. Paths are relative to this file.
+#
+# A set and everything derived from it share a directory, so `out` is the
+# `inputs/` of one: a run against it writes its siblings.
+
+[toy]
+shape      = "fixed"
+queries    = "../../data/pfam.hmm"
+alignments = "../../data/pfam.sto"
+targets    = "../../data/mgnify"
+out        = "../../store/sets/toy/inputs"
+shards     = 2
+seqs       = 400
+fams       = 5
+
+[mgy-fixed]
+shape      = "fixed"
+queries    = "../../data/pfam.hmm"
+alignments = "../../data/pfam.sto"
+targets    = "../../data/mgnify"
+out        = "../../store/sets/mgy-fixed/inputs"
+shards     = 1000
+
+[mgy-ladder]
+shape        = "ladder"
+queries      = "../../data/pfam.hmm"
+alignments   = "../../data/pfam.sto"
+targets      = "../../data/mgnify"
+out          = "../../store/sets/mgy-ladder/inputs"
+query-rungs  = [10, 100, 1000, 10000, 100000]
+target-rungs = [1000, 10000, 100000]

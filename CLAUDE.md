@@ -35,19 +35,44 @@ second rather than a twentieth.
 ## Layout
 
 ```
-Makefile               downloads data, builds tools, nothing else
-data/                  what the Makefile downloaded
-tools/bin/             what the Makefile built
-benchmarks/shim        the build-and-run shim every benchmark links to
-benchmarks/util/       what the benchmarks share
-benchmarks/mgy/        Pfam against MGnify
-benchmarks/pid/        recall against percent identity, over a profmark split
-benchmarks/long-seqs/  how the tools scale with sequence length
+Makefile                  downloads data, builds tools, nothing else
+data/                     what the Makefile downloaded
+tools/bin/                what the Makefile built
+store/                    what a build, a run or an analysis produced
+benchmarks/shim           the build-and-run shim every binary links to
+
+benchmarks/util/          set, store, ledger, tbl, tools, split, cut, ...
+benchmarks/search/        the tool command builders every pipeline composes
+benchmarks/scores/        the pair tables, the analyses, and parse
+
+benchmarks/build-set/     cuts sources into a set: fixed | ladder
+benchmarks/store/         what can be done to the store: import | clean
+
+benchmarks/recall/        recall against prefilter sensitivity   [fixed]
+benchmarks/cloud-search/  the (A, B) pruning surface             [fixed]
+benchmarks/hit-loss/      where hmmer's hits get lost            [fixed]
+benchmarks/calibrate/     what a search costs, and what a run will  [ladder]
+benchmarks/cutoffs/       per-family score cutoffs from decoys    [fixed]
+benchmarks/long-seqs/     how the tools scale with length         [pairs]
+benchmarks/pid/           recall against percent identity, over a profmark split
 ```
+
+One binary per benchmark, and the shape in brackets is the set it reads. Three
+libraries sit under them, and two binaries that belong to no benchmark:
+`build-set` makes the sets, `store` handles what a run left behind.
+
+`benchmarks/mgy/` holds no code. It is the `inputs/` and `outputs/` trees the
+old `mgy` crate wrote before the store existed, about 3.5 TB of cluster results
+that nothing here can reproduce. Nothing reads or writes it. Leave it alone.
 
 No benchmark looks on `PATH`. `util::tools` holds the path to every binary and
 every download, and a benchmark reads it rather than guessing, so a run uses
 whichever `hmmsearch` was built for this repo.
+
+`pid` is the one benchmark still outside all of this. It keeps its own
+`inputs/`, `outputs/` and `profmark/`, its own `build`/`run`/`parse`, and its
+own copy of the command builders, because its benchmark carries a record-level
+truth table that `set.tbl` cannot describe -- see the pid section.
 
 ## External crates
 
@@ -61,33 +86,132 @@ whichever `hmmsearch` was built for this repo.
 
 ## The shape a benchmark has
 
-An input set under `inputs/`, one directory per pipeline under `outputs/`, and
-the scratch off to one side:
+Three stages, joined by data rather than by code, and one tree holding what
+each of them produced. Where an artifact lives follows from what it is, not
+from which crate made it, so a set built by one benchmark is readable by
+another without either naming the other's directory.
+
+A set and everything derived from it share a directory, so what a run was
+searched against is the directory it sits in:
 
 ```
-inputs/<set>/                    what a run reads
-outputs/<pipeline>/
-├── manifest.tbl                 every command, its wall clock, its exit code
-├── ledger.tbl                   one row per run per shard, and what it cost
-└── results/<run>.<shard>.tbl    one hit table per run, per target shard
-tmp/<pipeline>/                  scratch, and nothing worth keeping
+store/sets/<set>/
+├── inputs/
+│   ├── set.tbl                  one row per search unit, and what it is made of
+│   └── ...                      the queries and targets it names
+├── outputs/<run>/
+│   ├── manifest.tbl             every command, its wall clock, its exit code
+│   ├── ledger.tbl               one row per run per shard, and what it cost
+│   └── results/<run>.<shard>.tbl   one hit table per run, per target shard
+├── analysis/<run>/              what parse worked out, and the figures
+└── tmp/<run>/                   scratch, and nothing worth keeping
 ```
 
-The scratch sits at the crate root rather than inside the pipeline's output
-directory, one subdirectory per pipeline: `mgy/tmp/recall`,
-`mgy/tmp/cloud-search`, `mgy/tmp/cutoffs/<calibration>/<stage>`, and
-`mgy/tmp/build` for what `build` writes on the way. So `outputs/<pipeline>/`
-holds the record and only the record, and the whole of `tmp/` can go at any
-time without touching it. The six search pipelines still take `--tmp` to put
-their own scratch somewhere else, a scratch disk being the usual reason;
-`build` and `cutoffs` have no such flag and never had one.
+Nothing in the code knows that layout. It is what the `paths.toml` files happen
+to say, and moving a set to a scratch disk is editing a line rather than
+changing anything that compiles.
 
-`<benchmark> clean` removes `inputs/`, `outputs/` and `tmp/`, after printing
-how many files and how many bytes are about to go and waiting for a `y`. The
-two expensive trees outside those names, mgy's `cutoffs/` and pid's
-`profmark/`, go only with `--all`. long-seqs' `inputs/` are symlinks to what
-is checked in under `data/long-seqs/`, so its clean leaves them where they
-are.
+The scratch sits beside the record rather than inside it, so
+`outputs/<run>/` holds the record and only the record, and the whole of `tmp/`
+can go at any time without touching it. The search pipelines still
+take `--tmp` to put their own scratch somewhere else, a scratch disk being the
+usual reason; `build` and `cutoffs` have no such flag and never had one.
+
+`store clean --paths <crate>/paths.toml --in <label>` removes what that label
+names as produced -- the run, the analysis and the scratch -- after printing how
+many files and how many bytes are about to go and waiting for a `y`. The set
+goes only with `--all`, since a build is expensive. pid keeps its
+own `inputs/`, `outputs/` and `profmark/` and its own `clean`: it has not moved
+to the store, because its benchmark carries a truth table and an identity axis
+the manifest does not describe yet.
+
+### set.tbl, and why it looks like ledger.tbl
+
+`set.tbl` is what makes a pipeline independent of the recipe that built what it
+searches. One row per search unit -- one query-and-target pair a tool will be
+asked to run -- with a fixed spine of `unit`, `query_hmm`, `query_sto`,
+`query_fa`, `query_db` and `target`, and every other column an attribute the
+recipe wrote down: a shard number, a rung, a family, a residue count. Paths are
+relative to the set's own directory, so a set is one tree that can be moved or
+linked without rewriting the table. An empty cell means the builder did not
+produce that representation, and asking for it fails naming the set rather than
+failing later on a path that was never there.
+
+That is the same bargain `ledger.tbl` strikes one seam later, and deliberately
+so. A ledger row is a spine plus an open map of settings, which is what lets an
+analysis read a run's shape out of the table rather than out of the filenames.
+A set row is a spine plus an open map of attributes, which is what lets a search
+read a set's shape the same way. `fixed` and `ladder` produce the same table
+with different attribute columns, and a pipeline reading it does not learn which
+one ran.
+
+Both are written by the producer in the pass that produces the artifact, and
+nothing else ever writes them. That discipline is the whole defence against a
+manifest that says one thing while the directory says another.
+
+### The shapes
+
+An open manifest lets one format describe a deal of shards and a nest of rungs.
+The cost is that a set and the benchmark reading it can disagree with nothing
+saying so, and a `ladder` searched as if it were `fixed` is a sweep over the
+product of both axes reported as a list of targets. A shape closes that: the
+builder stamps `#= shape` and the benchmark names the one it reads, and
+`Set::load_as` holds them to each other before a tool runs.
+
+| shape | representations | attributes | read by |
+|---|---|---|---|
+| `fixed` | `query_hmm`, `query_sto`, `query_db`, `target` | `shard`, `seqs`, `residues`, `bytes` | recall, cloud-search, hit-loss, cutoffs |
+| `ladder` | the same | `query_rung`, `target_rung`, `query_residues`, `target_residues` | calibrate |
+| `pairs` | `query_fa`, `target` | `pair`, `query_residues`, `residues` | long-seqs |
+| `decoys` | `query_hmm`, `query_sto`, `target` | `family`, `direction` | cutoffs, over what it built |
+
+They live in `util::set::shape` rather than with a benchmark, because a shape is
+the agreement between a builder and a reader and neither side owns it. `fixed`
+carries `seqs`/`residues`/`bytes` because the analyses read them: a shape is
+what a whole benchmark needs, run and parse together, not what its first stage
+opens.
+
+A set built before shapes existed says nothing about itself, and is then checked
+on its columns alone.
+
+## paths.toml
+
+No crate resolves a location. A tool is told where its inputs are and where its
+outputs go, and the telling is a `paths.toml` in the tool's own crate directory,
+one table per label:
+
+```toml
+[toy]
+set      = "../../store/sets/toy/inputs"
+run      = "../../store/sets/toy/outputs/recall"
+analysis = "../../store/sets/toy/analysis/recall"
+tmp      = "../../store/sets/toy/tmp/recall"
+```
+
+A label is a whole set of paths under one name, so a toy run and a real run
+differ by a word: `recall run --in toy`. Running a tool without `--in` prints
+the labels its file holds. Relative paths resolve against the file's own
+directory, which is why a crate needs no notion of a repository, and an absolute
+path is left alone -- a set on a scratch disk is one line.
+
+**What may go in one of these: paths, and for a tool that makes a dataset, how
+much of it to make.** `build-set`'s labels carry `shards`, `seqs` and rungs,
+because a toy set is defined by being small and a size is not a path. Nothing
+about a search belongs in any of them -- no tools, no flags, no sensitivities,
+no threads, no name templates.
+
+That line is drawn where it is because of what the last generation of these
+files did. They built argv out of templates:
+
+```toml
+args = "--allow-overwrite --mmseqs-s {s} --seed-mode prog -E {evalue}"
+```
+
+which made the file the thing that decided what ran, turned the Rust into an
+interpreter for it, and left the real logic in strings nothing type-checked.
+Every value read now is deserialized into a typed field with
+`deny_unknown_fields`, so a key that does not belong is a parse error naming the
+label rather than something silently ignored.
 
 `ledger.tbl` is what the analyses read, and `parse` reads a pipeline's shape
 out of it rather than out of the filenames. That is what keeps the analyses
@@ -112,6 +236,15 @@ reads those. It is the only command that writes a ledger by hand.
 
 ## benchmarks/util
 
+- `cut` cuts an hmm file and its alignments by name: `subset_*` into one file,
+  `scatter_*` into one file per record. The sibling of `split`, which cuts the
+  same files by weight.
+- `paths` reads the `paths.toml` a tool keeps beside its own source: the labels
+  it can run under, and what each names as input and output. Nothing else in
+  this workspace resolves a location.
+- `set` holds the shape a pipeline reads: one row per search unit, with the
+  query, the target and whatever the recipe wrote down about each. It reads and
+  writes `set.tbl`.
 - `manifest` reads back the table `michi`'s sink wrote, and builds the
   `results/` paths from it.
 - `ledger` holds the shape the analyses read: one row per run per shard, with
@@ -129,35 +262,37 @@ reads those. It is the only command that writes a ledger by hand.
 - `time` reads the `.time` file of a run made outside the harness, in any of
   the six formats a `time` command might have written.
 
-## benchmarks/mgy
+## The Pfam-against-MGnify benchmarks
 
 Pfam profiles against MGnify metagenomic sequences, and the largest of the
-three. `mgy build` cuts the sources into an input set: `fixed` is one query set
-against target shards of equal size, `ladder` is nested rungs on both axes,
-each a prefix of the one above.
+three. `build-set` cuts the sources into a set under `store/sets/`: `fixed` is
+one query set against target shards of equal size, `ladder` is nested rungs on
+both axes, each a prefix of the one above. Both write a `set.tbl`, and every
+pipeline here takes `--in <label>` to say which one to search.
 
 Three benchmarks. `recall` searches every shard while sweeping nail's and
 MMseqs2's prefilter sensitivity. `cloud-search` seeds once, then searches every
 `(A, B)` pruning cell off those same seeds, so the pruning parameters are the
 only thing moving. `hit-loss` follows where the hits HMMER finds get lost.
 
-`mgy build` writes `sizes.tbl` beside the target shards as it deals them:
-counting a thousand shards afterwards is the whole deal read again, and the
-count is only a metadata line. `mgy build sizes` writes one for a set dealt
-before that.
+`build-set` counts each shard as it deals it and writes the counts into
+`set.tbl`: counting a thousand shards afterwards is the whole deal read again,
+and the count is only a metadata line. There used to be two `sizes.tbl`
+formats, one per recipe, and a `build-set --in <label>` to backfill the fixed one.
+All three are gone: residues are a column on the manifest like any other.
 
 There are two table grammars, and which one a pipeline gets is settled by
 whether it moves one tool's parameters in a way that changes what that tool
 scores a pair.
 
-`mgy parse scores` reads recall into `scores.tbl`: one row per query/target
+`recall parse scores --in <label>` reads recall into `scores.tbl`: one row per query/target
 pair, one score column per tool, and a `pass` string holding one character
 per run. A prefilter sweep changes which pairs a tool reports, not what it
 scores them, so one column per tool is the honest shape and the cheap one --
 six runs over a thousand shards is four billion rows, and a column per run is
 what made an earlier grammar write 700 GB.
 
-`mgy parse runs` reads cloud-search and hit-loss into `runs.tbl`: one score
+`cloud-search parse runs --in <label>` reads cloud-search and hit-loss into `runs.tbl`: one score
 column per run, plus a `seeded` column where the pipeline kept a seed list.
 `-A` and `-B` constrain the dynamic programming, so two cells can score one
 pair differently, and that is what the sweep measures.
@@ -182,7 +317,7 @@ run -- `--full-dp`, which records no `-A` and no `-B` and so sits off the grid
 Three things sit outside the shape above, and none of them asks what was
 found.
 
-`mgy calibrate` asks what a run will cost. `calibrate run` times the searches
+`calibrate` asks what a run will cost. `calibrate run` times the searches
 the benchmarks are built out of -- nail's seeding, the alignment off those
 seeds, `mmseqs search` and `hmmsearch` -- over the target rungs of the ladder,
 building every command through the same `search` helpers the benchmarks use,
@@ -238,25 +373,32 @@ reads as an upper bound. The alignments are the rows to trust: their cost is
 almost all target work, and they are the only ones the ladder pinned to better
 than 3%.
 
-`mgy cutoffs` is the other calibration, and the words do not mean the same
-thing: cutoffs calibrates scores, calibrate calibrates cost. It is a
-calibration rather than a benchmark: five stages that reverse the targets, recruit decoys per
-family, search each family against its own decoys forward and reversed, and
-learn the per-family score cutoffs every hit is then held against. It keeps its
-own directory tree, and produces `data/mgy-cutoffs.tbl`, which is committed and
-promoted by hand.
+`cutoffs` is the other calibration, and the words do not mean the same
+thing: cutoffs calibrates scores, calibrate calibrates cost. Five stages that
+reverse the targets, recruit decoys per family, search each family against its
+own decoys forward and reversed, and learn the per-family score cutoffs every
+hit is then held against.
 
-`mgy import` writes a `ledger.tbl` for result tables produced
-elsewhere, out of the `.time` files that came back with them, which turns a
-search run on a cluster into an ordinary pipeline directory.
-`benchmarks/mgy/scripts/rename-old-results.sh` renames the older harness's
+It is three things wearing one name, and the store is where that shows. The
+first stages build a decoy set, which goes where sets go, at
+`store/sets/<name>-decoys/`, naming in its own `set.tbl` the set it was drawn
+from. `search` is then an ordinary run over that set, and `learn` an analysis
+over that run. Nothing about it is a special kind of artifact; what makes it a
+calibration rather than a benchmark is that its product,
+`data/mgy-cutoffs.tbl`, is committed and promoted by hand.
+
+`store import` writes a `ledger.tbl` for result tables produced elsewhere, out of
+the `.time` files that came back with them, which turns a search run on a
+cluster into an ordinary run directory in the store. It takes `--set` so it can
+check the shards it was handed against the ones the build made.
+`benchmarks/store/scripts/rename-old-results.sh` renames the older harness's
 files into the names it expects.
 
 Two dev tools sit beside all of that and belong to no pipeline.
-`src/bin/synth_results.rs` writes a recall directory of the right shape and
+`benchmarks/scores/src/bin/synth_results.rs` writes a recall directory of the right shape and
 size without a search behind it, so `parse scores` can be timed against one the
 size of a real run; it is the crate's second binary, and the shim does not run
-it. `scripts/compare-scores.py` reduces a `scores.tbl` and one in the older
+it. `benchmarks/scores/scripts/compare-scores.py` reduces a `scores.tbl` and one in the older
 shape to the same sets of pairs, tool scores and pass flags, and says where
 they differ.
 
@@ -278,15 +420,18 @@ into the tables the plot scripts read, and `plot` draws them.
 How each tool's runtime scales as sequences get longer. Six paired
 query/target files, where `run` searches each query against its pair and
 `parse` turns that into the plot scripts' tables. Its inputs are small and
-checked in under `data/long-seqs/`, so only its `outputs/` is ignored.
+checked in under `data/long-seqs/`, and so is their `set.tbl`: a set that ships
+with the repository is data rather than an artifact, so it sits with the data
+instead of under the store. Its queries are sequences rather than profiles,
+which is what the manifest's `query_fa` column is for.
 
 ## Testing behaviour: work in your own copy
 
 This working tree belongs to whoever is at the keyboard. A pipeline writes into
-`benchmarks/*/outputs/`, a `build` subcommand rewrites `inputs/`, and when two
-people write there at once neither can tell which results are theirs. So run
-nothing here. Copy the source into `tmp-claude/sandbox/`, link the expensive
-directories, and work in the copy.
+`store/`, a `build` subcommand writes a set there, and when two people write
+there at once neither can tell which results are theirs. So run nothing here.
+Copy the source into `tmp-claude/sandbox/`, link the expensive directories, and
+work in the copy.
 
 ```bash
 ROOT=$(git rev-parse --show-toplevel)
@@ -295,6 +440,7 @@ SB=$ROOT/tmp-claude/sandbox
 rsync -a --delete \
   --exclude '.git/' --exclude 'target/' --exclude 'tmp-claude/' \
   --exclude '/data' --exclude '/tools' --exclude '/benchmarks/pid/profmark' \
+  --exclude '/store' \
   --exclude 'outputs/' --exclude 'tmp/' \
   --exclude '/benchmarks/mgy/inputs/' --exclude '/benchmarks/pid/inputs/' \
   "$ROOT/" "$SB/"
@@ -310,18 +456,24 @@ ln -sfn "$(dirname "$ROOT")/tabl" "$ROOT/tmp-claude/tabl"
 Run that before testing anything, and again after every edit: a copy goes
 stale, and a result from stale source is worth nothing. `--delete` is what
 keeps it current, and it drops what was deleted from the source without
-touching the sandbox's own `inputs/`, `outputs/`, `target/` or links, since
-rsync leaves excluded paths on the receiving side alone. The three link paths are excluded
-without a trailing slash on purpose: a pattern ending in `/` matches only a
-directory, and on the receiving side these are symlinks, so `--delete` removes
-them. It copies uncommitted edits, which is the point: what wants testing is
-usually not committed yet.
+touching the sandbox's own `store/`, `target/`, pid `inputs/` or links, since
+rsync leaves excluded paths on the receiving side alone. The link paths and
+`/store` are excluded without a trailing slash on purpose: a pattern ending in
+`/` matches only a directory, and on the receiving side three of these are
+symlinks, so `--delete` removes them. It copies uncommitted edits, which is the
+point: what wants testing is usually not committed yet.
 
-Then run inside `$SB`, through its own shims, which build there and run what
-they built. Every path these crates resolve comes from their own
-`CARGO_MANIFEST_DIR` (`util/src/tools.rs:18`, `mgy/src/main.rs:84`, and the
-same in pid and long-seqs), so a build in the sandbox reads the sandbox's
-`data/` and `tools/` links and writes the sandbox's `outputs/`. Re-syncing an
+The sandbox gets its own `store/`, which is what makes a build or a run in the
+copy safe: `util::tools::repo()` resolves from `util`'s own
+`CARGO_MANIFEST_DIR`, so a build inside the copy resolves the copy's root and
+writes the copy's store.
+
+Then run inside `$SB`, through its own shims. Every binary links to the same
+`benchmarks/shim`, which builds the crate the link is named after and runs what
+it built: `benchmarks/recall/recall run --set mgy-fixed`, and so on. Every path these crates resolve comes from a
+`CARGO_MANIFEST_DIR` (`util/src/tools.rs:18` for the repo root, and pid's own
+for its tree), so a build in the sandbox reads the sandbox's `data/` and
+`tools/` links and writes the sandbox's `store/`. Re-syncing an
 existing copy is near instant, and the build from cold takes about fifteen
 seconds.
 
@@ -332,24 +484,32 @@ reads all three; nothing in it should write them, so do not run `make data` or
 built from wherever that link points, so an edit to it reaches the sandbox
 without a sync.
 
-mgy's and pid's `inputs/` are excluded for the same reason `outputs/` is: a
-build writes them and nothing commits them, so the copy builds its own. Without
-the exclude, `--delete` removes the set a `mgy build` in the sandbox just
-wrote, since the real tree has nothing there to match it. long-seqs' `inputs/`
-are two checked-in symlinks into `data/`, so they are copied like any other
-tracked file.
+`/store` and pid's `inputs/` are excluded for the same reason: a build writes
+them and nothing commits them, so the copy builds its own. Without the exclude,
+`--delete` removes the set a `mgy build` in the sandbox just wrote, since the
+real tree has nothing there to match it. long-seqs' set is checked in under
+`data/long-seqs/`, which is a link, so the copy reads the real one.
+
+`/benchmarks/mgy/inputs/` is excluded for a different reason, and dropping it
+is expensive rather than wrong. Nothing writes there any more -- it is the tree
+mgy built before the store -- but a checkout that has one holds about 495 GB,
+and rsync will copy every byte of it into the sandbox. `outputs/` is already
+caught by the bare `outputs/` pattern; `inputs/` needs naming.
 
 Edit in the real tree and re-sync, never in the sandbox: an edit in the copy is
 gone at the next sync. To check an analysis against a run that finished
-elsewhere, copy that run's `outputs/<pipeline>/` into the sandbox and parse it
+elsewhere, copy that run's `store/runs/<run>/` into the sandbox and parse it
 there.
 
 ## What is tracked
 
 The downloads under `data/` and the builds under `tools/bin/` are not, and
-neither are the generated input sets or any pipeline's output. Two exceptions
-are committed on purpose: `data/long-seqs/`, because nothing fetches it and
-ignoring it would empty a fresh clone, and `data/mgy-cutoffs.tbl`, because
-learning it is a calibration run rather than a download.
+neither is anything under `store/`: a set, a run and an analysis are all things
+this repository can make again. `benchmarks/mgy/` is ignored too, and is the one
+tree here that is none of those: the results the old crate wrote, which nothing
+can reproduce. Two exceptions are committed on purpose:
+`data/long-seqs/`, because nothing fetches it and ignoring it would empty a
+fresh clone, and `data/mgy-cutoffs.tbl`, because learning it is a calibration
+run rather than a download.
 
 Plotting is Python and matplotlib, under each benchmark's `scripts/`.

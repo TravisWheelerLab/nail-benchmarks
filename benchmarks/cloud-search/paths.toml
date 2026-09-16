@@ -1,0 +1,16 @@
+# Where cloud-search reads and writes. Paths only, relative to this file.
+#
+# A set and everything derived from it share a directory, so a run against the
+# toy set sits beside the toy set rather than in a tree of its own.
+
+[toy]
+set      = "../../store/sets/toy/inputs"
+run      = "../../store/sets/toy/outputs/cloud-search"
+analysis = "../../store/sets/toy/analysis/cloud-search"
+tmp      = "../../store/sets/toy/tmp/cloud-search"
+
+[full]
+set      = "../../store/sets/mgy-fixed/inputs"
+run      = "../../store/sets/mgy-fixed/outputs/cloud-search"
+analysis = "../../store/sets/mgy-fixed/analysis/cloud-search"
+tmp      = "../../store/sets/mgy-fixed/tmp/cloud-search"

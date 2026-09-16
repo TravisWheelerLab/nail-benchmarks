@@ -6,3 +6,5 @@ edition = "2024"
 [dependencies]
 anyhow = { workspace = true }
 libsail = { workspace = true }
+serde = { workspace = true }
+toml = { workspace = true }

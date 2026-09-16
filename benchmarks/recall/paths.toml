@@ -1,0 +1,16 @@
+# Where recall reads and writes. Paths only, relative to this file.
+#
+# A set and everything derived from it share a directory, so a run against the
+# toy set sits beside the toy set rather than in a tree of its own.
+
+[toy]
+set      = "../../store/sets/toy/inputs"
+run      = "../../store/sets/toy/outputs/recall"
+analysis = "../../store/sets/toy/analysis/recall"
+tmp      = "../../store/sets/toy/tmp/recall"
+
+[full]
+set      = "../../store/sets/mgy-fixed/inputs"
+run      = "../../store/sets/mgy-fixed/outputs/recall"
+analysis = "../../store/sets/mgy-fixed/analysis/recall"
+tmp      = "../../store/sets/mgy-fixed/tmp/recall"

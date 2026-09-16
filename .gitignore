@@ -13,15 +13,20 @@
 # matters, or this also swallows the benchmarks/ source tree.
 **/benchmark-*/
 **/benchmark/
-# every benchmark keeps what it was given under inputs/ and what it produced
-# under outputs/. mgy's and pid's inputs are generated, so both halves are
-# ignored; long-seqs' are checked in, so only its outputs are.
+# everything mgy and long-seqs build, run or work out goes in one tree at the
+# root, so one line covers the sets, the runs, the analyses and the scratch.
+# long-seqs' set ships with the repo rather than being built, so it sits under
+# data/ and is tracked like the pairs it describes
+/store/
+# pid still keeps its own, since it has not moved to the store
+/benchmarks/pid/inputs/
+/benchmarks/pid/outputs/
+# what the mgy crate wrote before the store. that crate is gone and nothing
+# reads these, but a checkout that has them holds about 3.5 TB of results
+# nothing can reproduce, so they stay ignored rather than offered to a commit
 /benchmarks/mgy/inputs/
 /benchmarks/mgy/outputs/
 /benchmarks/mgy/cutoffs/
-/benchmarks/pid/inputs/
-/benchmarks/pid/outputs/
-/benchmarks/long-seqs/outputs/
 **/figures*/
 **/profmark/
 **/results/

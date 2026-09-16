@@ -1,0 +1,237 @@
+//! How much of what hmmer finds nail and mmseqs find, as their prefilter
+//! sensitivity moves.
+//!
+//! This is the one pipeline that searches the whole target set rather than a
+//! single shard, and the one that runs mmseqs. A shard is a unit of work
+//! rather than a variable: every tool sees all of them, and a run's column in
+//! the scores table spans the lot.
+//!
+//! hmmer is a column like nail and mmseqs. What makes it the thing the others
+//! are measured against is the analysis holding them to it, not anything about
+//! how it is run or recorded.
+
+use std::path::PathBuf;
+
+use anyhow::{Context, ensure};
+use clap::Parser;
+
+use michi::{Cmd, PipelineBuilder, Progress, Step, Table};
+
+use search::sweeps::{MMSEQS_MAX_SEQS, MMSEQS_S, NAIL_S, SEED_MODE};
+use search::{self, Bins, Dirs, Split};
+use util::ledger;
+use util::manifest;
+use util::set::{Set, Unit};
+
+/// The column hmmer's run becomes, which the other two are measured against.
+const HMMER: &str = "hmmer";
+
+#[derive(Parser, Debug)]
+pub struct Args {
+    /// Which label of paths.toml to run under. Omit to list them
+    #[arg(long = "in", value_name = "label")]
+    pub label: Option<String>,
+
+    /// Search only the first N shards. Every shard by default
+    #[arg(short = 'n', long, value_name = "N")]
+    shards: Option<usize>,
+
+    /// nail's --mmseqs-s values to sweep
+    #[arg(
+        long,
+        value_delimiter = ',',
+        default_value = NAIL_S,
+        value_name = "X,X,..."
+    )]
+    nail_s: Vec<f32>,
+
+    /// mmseqs' -s values to sweep
+    #[arg(
+        long,
+        value_delimiter = ',',
+        default_value = MMSEQS_S,
+        value_name = "X,X,..."
+    )]
+    mmseqs_s: Vec<f32>,
+
+    #[arg(short, long, default_value_t = 8)]
+    threads: usize,
+
+    #[arg(long)]
+    tmp: Option<PathBuf>,
+
+    #[arg(long)]
+    dry_run: bool,
+}
+
+pub fn main(args: Args, paths: &crate::Paths) -> anyhow::Result<()> {
+    ensure!(
+        args.threads.is_multiple_of(search::HMMER_CPU),
+        "--threads needs to be a multiple of {} (for hmmer)",
+        search::HMMER_CPU
+    );
+    ensure!(!args.nail_s.is_empty(), "--nail-s needs at least one value");
+    ensure!(
+        !args.mmseqs_s.is_empty(),
+        "--mmseqs-s needs at least one value"
+    );
+
+    let bins = Bins::find()?;
+
+    let mut dirs = Dirs::new(&paths.run, &paths.tmp);
+    if let Some(tmp) = args.tmp {
+        dirs.tmp = tmp;
+    }
+
+    let set = Set::load_as(&paths.set, crate::SHAPE)?;
+
+    let mut units: Vec<Unit<'_>> = set.units().collect();
+    if let Some(n) = args.shards {
+        ensure!(n > 0, "-n 0 would leave nothing to search");
+        if n > units.len() {
+            eprintln!(
+                "warning: asked for {n} shards but the set holds {}; using all of them",
+                units.len()
+            );
+        }
+        units.truncate(n);
+    }
+
+    // one query across every unit is what makes a shard a unit of work rather
+    // than a variable, and what lets the hmmer split be cut once. a set that
+    // moves the query is a different question, and the sweep would be reading
+    // it as if it were this one
+    let query_hmm = units[0].query_hmm()?;
+    let query_db = units[0].query_db()?;
+
+    ensure!(
+        units.iter().all(|u| u.query_hmm().ok() == Some(query_hmm.clone())),
+        "{} moves the query between units; recall searches one query set",
+        paths.set.display()
+    );
+
+    // split once rather than once per shard: the parts don't depend on the
+    // target, and whatever a previous run left would be searched as if it
+    // belonged
+    let split = Split::new(
+        &query_hmm,
+        dirs.tmp.join("hmmer-query"),
+        search::jobs(args.threads),
+    );
+
+    let mut pl = PipelineBuilder::new().step(dirs.mkdir()).step(split.step(&[]));
+
+    for unit in &units {
+        let shard = unit.name().to_string();
+        let target = &unit.target()?;
+        let scratch = dirs.tmp.join(format!("shard-{shard}"));
+        let target_db = scratch.join("targetDB/targetDB");
+
+        pl = pl.step(
+            Step::serial([
+                args.mmseqs_s.iter().fold(
+                    Cmd::new("mkdir")
+                        .name("dirs")
+                        .flag("-p")
+                        .path(scratch.join("targetDB")),
+                    |cmd, s| cmd.path(scratch.join(format!("alnDB-s{s:.1}"))),
+                ),
+                search::createdb(&bins.mmseqs, target, &target_db, &shard, args.threads),
+            ])
+            .name(format!("prep.{shard}")),
+        );
+
+        // ---- nail
+
+        pl = pl.step(
+            Step::serial(args.nail_s.iter().map(|&s| {
+                let name = format!("nail-s{s:.1}");
+
+                Cmd::new(&bins.nail)
+                    .sub("search")
+                    .arg("--mmseqs-path", &bins.mmseqs)
+                    .arg("-t", args.threads)
+                    .arg("--tmp-dir", scratch.join(&name))
+                    .arg("--mmseqs-s", format!("{s:.1}"))
+                    .arg("--seed-mode", SEED_MODE)
+                    .arg("-E", search::EVALUE)
+                    .arg("--tbl-out", dirs.table(&name, &shard))
+                    .flag("--allow-overwrite")
+                    .path(&query_hmm)
+                    .path(target)
+                    .field(manifest::NAME, &name)
+                    .field(manifest::TOOL, "nail")
+                    .field(manifest::SHARD, &shard)
+                    .field("s", format!("{s:.1}"))
+            }))
+            .name(format!("nail.{shard}"))
+            .cores(args.threads),
+        );
+
+        // ---- mmseqs
+
+        pl = pl.step(
+            Step::serial(
+                args.mmseqs_s
+                    .iter()
+                    .flat_map(|&s| {
+                        let name = format!("mmseqs-s{s:.1}-ms{MMSEQS_MAX_SEQS}");
+
+                        let cmds = search::Mmseqs {
+                            bin: &bins.mmseqs,
+                            query_db: &query_db,
+                            target_db: &target_db,
+                            aln_db: scratch.join(format!("alnDB-s{s:.1}/alnDB")),
+                            work: scratch.join(format!("work-s{s:.1}")),
+                            out: dirs.table(&name, &shard),
+                            threads: args.threads,
+                            s: Some(format!("{s:.1}")),
+                            max_seqs: Some(MMSEQS_MAX_SEQS),
+                        }
+                        .cmds();
+
+                        // only the search is named, so the column's wall clock
+                        // is the search alone
+                        [
+                            cmds.search
+                                .field(manifest::NAME, &name)
+                                .field(manifest::TOOL, "mmseqs")
+                                .field(manifest::SHARD, &shard)
+                                .field("s", format!("{s:.1}")),
+                            cmds.convert.field(manifest::SHARD, &shard),
+                        ]
+                    })
+                    .collect::<Vec<_>>(),
+            )
+            .name(format!("mmseqs.{shard}"))
+            .cores(args.threads),
+        );
+
+        // ---- hmmer
+
+        let hmmer = search::hmmer(&bins.hmmsearch, &split, &dirs, HMMER, &shard, target, &[]);
+        pl = pl.step(hmmer.search).step(hmmer.cat);
+
+        // only this shard's scratch: the query splits live on for the shards
+        // that follow
+        pl = pl.step(Cmd::new("rm").name("clean").flag("-rf").path(&scratch));
+    }
+
+    let pipeline = pl
+        .stderr_dir(dirs.tmp.join("stderr"))
+        .sink(Progress::new())
+        .sink(Table::new(dirs.root.join("manifest.tbl")))
+        .build()
+        .context("failed to build the run")?;
+
+    if args.dry_run {
+        pipeline.dry_run();
+        return Ok(());
+    }
+
+    // the ledger describes the results this run is about to replace, so it
+    // goes before the run rather than after the failure of one
+    ledger::clear(&dirs.root);
+    pipeline.run()?;
+    ledger::record(&dirs.root)
+}
