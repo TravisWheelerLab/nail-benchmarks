@@ -19,7 +19,7 @@ shape      = "fixed"
 queries    = "../../data/pfam.hmm"
 alignments = "../../data/pfam.sto"
 targets    = "../../data/mgnify"
-out        = "../../store/sets/recall-toy/inputs"
+out        = "../../store/recall-toy/inputs"
 shards     = 2
 seqs       = 400
 fams       = 5
@@ -29,7 +29,7 @@ shape      = "fixed"
 queries    = "../../data/pfam.hmm"
 alignments = "../../data/pfam.sto"
 targets    = "../../data/mgnify"
-out        = "../../store/sets/recall-real/inputs"
+out        = "../../store/recall-real/inputs"
 shards     = 1000
 
 # ------------------------------------------------- cloud-search and hit-loss
@@ -42,7 +42,7 @@ shape      = "fixed"
 queries    = "../../data/pfam.hmm"
 alignments = "../../data/pfam.sto"
 targets    = "../../data/mgnify"
-out        = "../../store/sets/cloud-search-toy/inputs"
+out        = "../../store/cloud-search-toy/inputs"
 shards     = 1
 seqs       = 400
 fams       = 5
@@ -52,7 +52,7 @@ shape      = "fixed"
 queries    = "../../data/pfam.hmm"
 alignments = "../../data/pfam.sto"
 targets    = "../../data/mgnify"
-out        = "../../store/sets/cloud-search-real/inputs"
+out        = "../../store/cloud-search-real/inputs"
 shards     = 1
 seqs       = 2455939
 
@@ -61,7 +61,7 @@ shape      = "fixed"
 queries    = "../../data/pfam.hmm"
 alignments = "../../data/pfam.sto"
 targets    = "../../data/mgnify"
-out        = "../../store/sets/hit-loss-toy/inputs"
+out        = "../../store/hit-loss-toy/inputs"
 shards     = 1
 seqs       = 400
 fams       = 5
@@ -71,7 +71,7 @@ shape      = "fixed"
 queries    = "../../data/pfam.hmm"
 alignments = "../../data/pfam.sto"
 targets    = "../../data/mgnify"
-out        = "../../store/sets/hit-loss-real/inputs"
+out        = "../../store/hit-loss-real/inputs"
 shards     = 1
 seqs       = 2455939
 
@@ -87,7 +87,7 @@ shape      = "fixed"
 queries    = "../../data/pfam.hmm"
 alignments = "../../data/pfam.sto"
 targets    = "../../data/mgnify"
-out        = "../../store/sets/cutoffs-toy/inputs"
+out        = "../../store/cutoffs-toy/inputs"
 shards     = 2
 seqs       = 400
 fams       = 5
@@ -98,7 +98,7 @@ shape      = "fixed"
 queries    = "../../data/pfam.hmm"
 alignments = "../../data/pfam.sto"
 targets    = "../../data/mgnify"
-out        = "../../store/sets/cutoffs-real/inputs"
+out        = "../../store/cutoffs-real/inputs"
 shards     = 1000
 reversed   = true
 
@@ -113,7 +113,7 @@ shape        = "ladder"
 queries      = "../../data/pfam.hmm"
 alignments   = "../../data/pfam.sto"
 targets      = "../../data/mgnify"
-out          = "../../store/sets/calibrate-toy/inputs"
+out          = "../../store/calibrate-toy/inputs"
 query-rungs  = [5]
 target-rungs = [1, 100, 200, 400]
 
@@ -122,7 +122,7 @@ shape        = "ladder"
 queries      = "../../data/pfam.hmm"
 alignments   = "../../data/pfam.sto"
 targets      = "../../data/mgnify"
-out          = "../../store/sets/calibrate-real/inputs"
+out          = "../../store/calibrate-real/inputs"
 query-rungs  = [20795]
 target-rungs = [1, 1000, 2000, 4000, 8000, 16000, 32000, 64000, 128000]
 
@@ -136,11 +136,32 @@ target-rungs = [1, 1000, 2000, 4000, 8000, 16000, 32000, 64000, 128000]
 shape   = "pairs"
 queries = "../../data/long-seqs/query"
 targets = "../../data/long-seqs/target"
-out     = "../../store/sets/long-seqs-toy/inputs"
+out     = "../../store/long-seqs-toy/inputs"
 pairs   = 2
 
 [long-seqs-real]
 shape   = "pairs"
 queries = "../../data/long-seqs/query"
 targets = "../../data/long-seqs/target"
-out     = "../../store/sets/long-seqs-real/inputs"
+out     = "../../store/long-seqs-real/inputs"
+
+# ---------------------------------------------------------------------- pid
+
+# Recall against percent identity. The split is drawn once from Pfam's SEED and
+# shared by both labels: it depends only on the alignments and the split
+# parameters, and it is the expensive half. The true targets are hidden in a
+# Swissprot background, and truth.tbl records which pair is which.
+[pid-toy]
+shape      = "profmark"
+alignments = "../../data/pfam.sto"
+decoys     = "../../data/swissprot.fa"
+split      = "../pid/profmark"
+out        = "../../store/pid-toy/inputs"
+pairs      = 200
+
+[pid-real]
+shape      = "profmark"
+alignments = "../../data/pfam.sto"
+decoys     = "../../data/swissprot.fa"
+split      = "../pid/profmark"
+out        = "../../store/pid-real/inputs"

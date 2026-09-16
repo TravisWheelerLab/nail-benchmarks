@@ -73,6 +73,7 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "clap",
+ "indexmap",
  "libsail",
  "michi",
  "rand",
@@ -352,6 +353,7 @@ dependencies = [
  "michi",
  "rand",
  "regex",
+ "serde",
  "util",
 ]
 

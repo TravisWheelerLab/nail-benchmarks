@@ -1,0 +1,17 @@
+# Where pid reads and writes. Paths only, relative to this file.
+#
+# Its own two sets, built by `build-set --in pid-toy|pid-real`. The profmark
+# split they are drawn from is not named here: it is a source, and build-set's
+# recipe points at it.
+
+[toy]
+set      = "../../store/pid-toy/inputs"
+run      = "../../store/pid-toy/outputs/pid"
+analysis = "../../store/pid-toy/analysis/pid"
+tmp      = "../../store/pid-toy/tmp/pid"
+
+[real]
+set      = "../../store/pid-real/inputs"
+run      = "../../store/pid-real/outputs/pid"
+analysis = "../../store/pid-real/analysis/pid"
+tmp      = "../../store/pid-real/tmp/pid"

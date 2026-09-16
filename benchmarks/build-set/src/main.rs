@@ -1,7 +1,7 @@
 //! Cuts a query source and a target source into a set the benchmarks can
 //! search.
 //!
-//! A build produces one directory under `store/sets/`, holding the files and a
+//! A build produces one directory under `store/`, holding the files and a
 //! `set.tbl` describing them. Nothing downstream reads the directory layout:
 //! a pipeline loads the manifest and gets the query, the target and whatever
 //! the recipe wrote down about each unit, so a search does not learn which of
@@ -44,6 +44,8 @@ use rand::SeedableRng;
 use rand::rngs::StdRng;
 
 use michi::{Closure, Cmd as PCmd, PipelineBuilder, Progress, Step};
+mod profmark;
+
 use util::cut;
 use util::paths;
 use util::set::{self, Set};
@@ -117,6 +119,37 @@ enum Recipe {
         #[serde(default)]
         pairs: Option<usize>,
     },
+    /// One search over a profmark split, with a truth table beside it.
+    ///
+    /// The split is expensive and depends only on the alignments and the split
+    /// parameters, so it is drawn once into `split` and reused. The set itself
+    /// is one unit: every query against one target file, with `truth.tbl`
+    /// saying which pair is which and at what identity.
+    Profmark {
+        /// The alignments the split is drawn from, Pfam's SEED.
+        alignments: PathBuf,
+        /// The sequences the true targets are hidden among, Swissprot.
+        decoys: PathBuf,
+        /// Where the train/test split lives, built if it is not there.
+        split: PathBuf,
+        out: PathBuf,
+        /// A cap on the benchmark pairs. All that survive filtering when
+        /// absent; decoys go in on top of this.
+        #[serde(default)]
+        pairs: Option<usize>,
+        #[serde(default = "default_seed")]
+        seed: u64,
+        /// Maximum identity between the train and test halves.
+        #[serde(default = "default_train_test_id")]
+        train_test_id: f64,
+        #[serde(default = "default_min_test")]
+        min_test: usize,
+        #[serde(default = "default_max_test")]
+        max_test: usize,
+        /// Threads for hmmbuild.
+        #[serde(default = "default_threads")]
+        threads: usize,
+    },
     /// Nested rungs on both axes, each a prefix of the one above.
     Ladder {
         queries: PathBuf,
@@ -130,6 +163,22 @@ enum Recipe {
     },
 }
 
+fn default_train_test_id() -> f64 {
+    0.30
+}
+
+fn default_min_test() -> usize {
+    10
+}
+
+fn default_max_test() -> usize {
+    30
+}
+
+fn default_threads() -> usize {
+    8
+}
+
 fn default_seed() -> u64 {
     67779
 }
@@ -138,9 +187,10 @@ impl Recipe {
     /// Where this recipe puts what it makes.
     fn out(&self) -> &Path {
         match self {
-            Recipe::Fixed { out, .. } | Recipe::Pairs { out, .. } | Recipe::Ladder { out, .. } => {
-                out
-            }
+            Recipe::Fixed { out, .. }
+            | Recipe::Pairs { out, .. }
+            | Recipe::Ladder { out, .. }
+            | Recipe::Profmark { out, .. } => out,
         }
     }
 
@@ -150,6 +200,7 @@ impl Recipe {
             Recipe::Fixed { .. } => "fixed",
             Recipe::Pairs { .. } => "pairs",
             Recipe::Ladder { .. } => "ladder",
+            Recipe::Profmark { .. } => "profmark",
         }
     }
 }
@@ -216,6 +267,29 @@ fn main() -> anyhow::Result<()> {
             paths.at(out),
             pairs,
         ),
+        Recipe::Profmark {
+            alignments,
+            decoys,
+            split,
+            out,
+            pairs,
+            seed,
+            train_test_id,
+            min_test,
+            max_test,
+            threads,
+        } => make_profmark(
+            paths.at(alignments),
+            paths.at(decoys),
+            paths.at(split),
+            paths.at(out),
+            pairs,
+            seed,
+            train_test_id,
+            min_test,
+            max_test,
+            threads,
+        ),
         Recipe::Ladder {
             queries,
             alignments,
@@ -270,6 +344,14 @@ fn listing(paths: &paths::File) -> anyhow::Result<String> {
                 match pairs {
                     Some(n) => format!("{n} {}", plural(*n, "pair")),
                     None => "every pair".to_string(),
+                },
+                out,
+            ),
+            Recipe::Profmark { out, pairs, .. } => (
+                recipe.shape(),
+                match pairs {
+                    Some(n) => format!("{n} {}", plural(*n, "pair")),
+                    None => "every pair that survives".to_string(),
                 },
                 out,
             ),
@@ -891,6 +973,60 @@ fn indexed(path: &Path) -> anyhow::Result<IndexedFasta> {
 /// Rebuilding in place would leave whatever the last build wrote alongside
 /// whatever this one does, and the pipelines read a directory rather than a
 /// manifest, so the mixture would be searched as if it were one set.
+/// Assemble a profmark benchmark and stamp the set it produced.
+///
+/// One unit: every query against one target file. The truth is per pair rather
+/// than per unit, so `truth` names the file that carries it.
+#[allow(clippy::too_many_arguments)]
+fn make_profmark(
+    alignments: PathBuf,
+    decoys: PathBuf,
+    split: PathBuf,
+    out: PathBuf,
+    pairs: Option<usize>,
+    seed: u64,
+    train_test_id: f64,
+    min_test: usize,
+    max_test: usize,
+    threads: usize,
+) -> anyhow::Result<()> {
+    claim(&out)?;
+
+    profmark::build(
+        &alignments,
+        &decoys,
+        &split,
+        &out,
+        pairs,
+        seed,
+        train_test_id,
+        min_test,
+        max_test,
+        threads,
+        false,
+    )?;
+
+    let rows = vec![
+        set::Row::new("1", "target.fa")
+            .query_hmm("queries/query.hmm")
+            .query_sto("queries/query.sto")
+            .query_fa("queries/query.fa")
+            .attr("truth", "truth.tbl"),
+    ];
+
+    Set::new(&out, rows)
+        .says("shape", set::shape::PROFMARK.name)
+        .says("recipe", "profmark")
+        .says("seed", seed)
+        .says("alignments", alignments.display())
+        .says("decoys", decoys.display())
+        .says("split", split.display())
+        .save()?;
+
+    println!("\nbuilt {}", out.display());
+    Ok(())
+}
+
 fn claim(set: &Path) -> anyhow::Result<()> {
     if set.exists() {
         bail!(

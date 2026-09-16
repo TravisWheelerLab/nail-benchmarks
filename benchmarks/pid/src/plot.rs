@@ -16,7 +16,6 @@ use clap::Parser;
 
 use michi::{Cmd, PipelineBuilder, Progress, Step};
 
-use crate::inputs;
 
 /// A figure: which script draws it, and which of `parse`'s files it reads.
 ///
@@ -60,6 +59,10 @@ const FIGURES: &[Figure] = &[
 
 #[derive(Parser, Debug)]
 pub struct Args {
+    /// Which label of paths.toml to read. Omit to list them
+    #[arg(long = "in", value_name = "label")]
+    pub label: Option<String>,
+
     /// Where `parse` wrote its tables, and where the pdfs go. Defaults to
     /// figures/ beside the run
     #[arg(short, long, value_name = "dir")]
@@ -78,7 +81,7 @@ pub struct Args {
     dry_run: bool,
 }
 
-pub fn main(args: Args) -> anyhow::Result<()> {
+pub fn main(args: Args, paths: &crate::Paths) -> anyhow::Result<()> {
     let names: Vec<&'static str> = FIGURES.iter().map(|f| f.name).collect();
     for only in &args.only {
         if !names.contains(&only.as_str()) {
@@ -88,7 +91,8 @@ pub fn main(args: Args) -> anyhow::Result<()> {
 
     let dir = args
         .out
-        .unwrap_or_else(|| inputs::outputs().join("figures"));
+        .clone()
+        .unwrap_or_else(|| paths.analysis.join("figures"));
 
     if !dir.is_dir() {
         bail!(
@@ -97,7 +101,7 @@ pub fn main(args: Args) -> anyhow::Result<()> {
         );
     }
 
-    let scripts = inputs::root().join("scripts");
+    let scripts = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("scripts");
 
     // checked here rather than left to the pipeline, because a missing
     // matplotlib comes back as a python traceback in a stderr file rather than

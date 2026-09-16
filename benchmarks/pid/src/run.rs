@@ -10,7 +10,7 @@
 
 use std::path::PathBuf;
 
-use anyhow::{Context, bail, ensure};
+use anyhow::{Context, ensure};
 use clap::Parser;
 
 use michi::{Cmd, OnError, Output, PipelineBuilder, Progress, Step, Table};
@@ -18,11 +18,14 @@ use util::ledger;
 use util::manifest;
 use util::split::Kind;
 
-use crate::inputs;
 use crate::search::{self, Bins, Dirs, MODE, PRF, SEQ, Split};
 
 #[derive(Parser, Debug)]
 pub struct Args {
+    /// Which label of paths.toml to read. Omit to list them
+    #[arg(long = "in", value_name = "label")]
+    pub label: Option<String>,
+
     /// nail's --mmseqs-s values to sweep
     #[arg(
         long,
@@ -51,7 +54,7 @@ pub struct Args {
     pub dry_run: bool,
 }
 
-pub fn main(args: Args) -> anyhow::Result<()> {
+pub fn main(args: Args, paths: &crate::Paths) -> anyhow::Result<()> {
     ensure!(
         args.threads.is_multiple_of(search::HMMER_CPU),
         "--threads needs to be a multiple of {} (for hmmer)",
@@ -65,20 +68,18 @@ pub fn main(args: Args) -> anyhow::Result<()> {
 
     let bins = Bins::find()?;
 
-    if !inputs::exists() {
-        bail!(
-            "{} does not exist; run `pid build` first",
-            inputs::dir().display()
-        );
-    }
+    // Set::load_as is the check: it refuses a set that is not there and one
+    // that is the wrong shape, before any tool runs
+    let inp = crate::inputs::Inputs::open(&paths.set)?;
 
-    let mut dirs = Dirs::new();
+
+    let mut dirs = Dirs::new(&paths.run, &paths.tmp);
     if let Some(tmp) = args.tmp {
         dirs.tmp = tmp;
     }
 
-    let (query_hmm, query_fa) = (inputs::query_hmm(), inputs::query_fa());
-    let target_fa = inputs::target_fa();
+    let (query_hmm, query_fa) = (inp.query_hmm.clone(), inp.query_fa.clone());
+    let target_fa = inp.target_fa.clone();
 
     let mmseqs_dir = dirs.tmp.join("mmseqs");
     let target_db = mmseqs_dir.join("targetDB/targetDB");
@@ -118,7 +119,7 @@ pub fn main(args: Args) -> anyhow::Result<()> {
                 Cmd::new(&bins.mmseqs)
                     .name("convertmsa")
                     .sub("convertmsa")
-                    .path(inputs::query_sto())
+                    .path(&inp.query_sto)
                     .path(&msa_db)
                     .arg("--identifier-field", 0),
                 Cmd::new(&bins.mmseqs)
@@ -258,7 +259,7 @@ pub fn main(args: Args) -> anyhow::Result<()> {
     // invocation per family, output collected into a single table
     let blast_prf_tbl = dirs.table("blast.prf");
     pl = pl.step(
-        Step::serial(inputs::afa_files()?.iter().enumerate().map(|(i, msa)| {
+        Step::serial(inp.afa_files()?.iter().enumerate().map(|(i, msa)| {
             let cmd = Cmd::new(&bins.psiblast)
                 .name(
                     msa.file_stem()

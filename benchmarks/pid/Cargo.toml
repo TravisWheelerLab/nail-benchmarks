@@ -17,4 +17,5 @@ clap = { workspace = true }
 glob = { workspace = true }
 indexmap = { workspace = true }
 rand = { workspace = true }
+serde = { workspace = true }
 regex = { workspace = true }

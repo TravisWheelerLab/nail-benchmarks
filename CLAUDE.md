@@ -56,7 +56,7 @@ benchmarks/hit-loss/      where hmmer's hits get lost            [fixed]
 benchmarks/calibrate/     what a run will cost  [ladder]  ON ICE, see below
 benchmarks/cutoffs/       per-family score cutoffs from decoys    [fixed]
 benchmarks/long-seqs/     how the tools scale with length         [pairs]
-benchmarks/pid/           recall against percent identity, over a profmark split
+benchmarks/pid/           recall against percent identity          [profmark]
 ```
 
 One binary per benchmark, and the shape in brackets is the set it reads. Three
@@ -104,10 +104,11 @@ No benchmark looks on `PATH`. `util::tools` holds the path to every binary and
 every download, and a benchmark reads it rather than guessing, so a run uses
 whichever `hmmsearch` was built for this repo.
 
-`pid` is the one benchmark still outside all of this. It keeps its own
-`inputs/`, `outputs/` and `profmark/`, its own `build`/`run`/`parse`, and its
-own copy of the command builders, because its benchmark carries a record-level
-truth table that `set.tbl` cannot describe -- see the pid section.
+`pid` reads a set like everything else now. What kept it out was a
+record-level truth table, and the answer was for `set.tbl` to name the file
+rather than carry it -- see the `profmark` shape. It still keeps its own copy of
+the command builders in `src/search.rs`, and its `profmark/` split at the crate
+root.
 
 ## External crates
 
@@ -130,7 +131,7 @@ A set and everything derived from it share a directory, so what a run was
 searched against is the directory it sits in:
 
 ```
-store/sets/<set>/
+store/<set>/
 ├── inputs/
 │   ├── set.tbl                  one row per search unit, and what it is made of
 │   └── ...                      the queries and targets it names
@@ -156,10 +157,7 @@ usual reason; `build` and `cutoffs` have no such flag and never had one.
 names as produced -- the run, the analysis and the scratch -- after printing how
 many files and how many bytes are about to go and waiting for a `y`. The set
 goes only with `--all`, since a build is expensive. Never point it at recall's
-`real` label: see **What is tracked**. pid keeps its
-own `inputs/`, `outputs/` and `profmark/` and its own `clean`: it has not moved
-to the store, because its benchmark carries a truth table and an identity axis
-the manifest does not describe yet.
+`real` label: see **What is tracked**.
 
 ### set.tbl, and why it looks like ledger.tbl
 
@@ -200,6 +198,7 @@ builder stamps `#= shape` and the benchmark names the one it reads, and
 | `reversed` | the same as `fixed` | the same as `fixed` | cutoffs |
 | `ladder` | the same | `query_rung`, `target_rung`, `query_residues`, `target_residues` | calibrate |
 | `pairs` | `query_fa`, `target` | `pair`, `query_residues`, `residues` | long-seqs |
+| `profmark` | `query_hmm`, `query_sto`, `query_fa`, `target` | `truth` | pid |
 
 `reversed` is `fixed` written backwards: the same sources, the same seed and
 the same sharding, with each sequence reversed as it is dealt. Reversing keeps
@@ -207,6 +206,13 @@ a sequence's composition and destroys its homology, so the two sets hold the
 same draw and answer different questions, which is why the columns are
 identical and only the declared shape tells them apart. A `fixed` recipe earns
 it with `reversed = true`.
+
+`profmark` is one unit: every query against one target file, so the set has a
+single row. What tells a true pair from a decoy, and at what percent identity,
+is per pair rather than per unit, so it cannot be a column -- `truth` names the
+file that carries it, relative to the set root, the way the representation
+columns name theirs. The shape check sees that the file is named, not what is
+in it.
 
 `pairs` is the one shape with no draw in it. Its two sources are separate
 directories of fasta, so a sequence is never on both sides, and pair `i` is the
@@ -230,10 +236,10 @@ one table per label:
 
 ```toml
 [toy]
-set      = "../../store/sets/toy/inputs"
-run      = "../../store/sets/toy/outputs/recall"
-analysis = "../../store/sets/toy/analysis/recall"
-tmp      = "../../store/sets/toy/tmp/recall"
+set      = "../../store/toy/inputs"
+run      = "../../store/toy/outputs/recall"
+analysis = "../../store/toy/analysis/recall"
+tmp      = "../../store/toy/tmp/recall"
 ```
 
 A label is a whole set of paths under one name, so a toy run and a real run
@@ -323,7 +329,7 @@ hand.
 ## The Pfam-against-MGnify benchmarks
 
 Pfam profiles against MGnify metagenomic sequences, and the largest sets here
-by a long way. `build-set` cuts the sources into a set under `store/sets/`:
+by a long way. `build-set` cuts the sources into a set under `store/`:
 `fixed` is one query set against target shards of equal size, `ladder` is
 nested rungs on both axes, each a prefix of the one above. Each writes a
 `set.tbl`, and every pipeline here takes `--in <label>` to say which one to
@@ -486,15 +492,22 @@ where they differ.
 ## benchmarks/pid
 
 Recall as a function of the percent identity between a query and its target.
-`pid build` assembles the benchmark from a profmark split, holding both axes
-and the truth table together: `benchmark.tbl` records which pair is which and
-at what identity, and belongs to neither side. There is one benchmark, under
-`inputs/`, and `build` refuses to overwrite it. The profmark split itself sits
-at the crate root, since it is expensive, depends only on Pfam and the split
-parameters, and a rebuild draws from the same one.
+`build-set --in pid-toy|pid-real` assembles it from a profmark split: Pfam
+families divided by identity, their true targets hidden in a Swissprot decoy
+background, and `truth.tbl` recording which pair is which and at what identity.
 
-`pid run` searches every tool against the benchmark, `parse` turns the results
-into the tables the plot scripts read, and `plot` draws them.
+The whole benchmark is one search unit -- every query against one target file --
+so the set has one row, and the truth is per pair rather than per unit. That is
+why `truth` names a file instead of being a column: see the `profmark` shape.
+
+The split itself sits at `benchmarks/pid/profmark/` rather than in the set. It
+depends only on the alignments and the split parameters, both labels draw from
+the same one, and the recipe points at it. Drawing it costs about a minute with
+`create-profmark --onlysplit`; the assembly after it is seconds.
+
+`pid run` searches every tool against the set, `parse` turns the results into
+the tables the plot scripts read, and `plot` draws them. All three take
+`--in <label>`.
 
 ## benchmarks/long-seqs
 
@@ -595,7 +608,7 @@ The downloads under `data/` and the builds under `tools/bin/` are not, and
 neither is anything under `store/`: a set, a run and an analysis are usually
 things this repository can make again.
 
-**`store/sets/recall-real/` is the exception, and it is not backed up by being
+**`store/recall-real/` is the exception, and it is not backed up by being
 reproducible.** It holds about 3.5 TB of results searched on a cluster -- the
 hmmer set alone is 1000 shards representing some 21,926 hours of wall clock --
 and nothing here can produce them again. It is ignored by git like the rest of

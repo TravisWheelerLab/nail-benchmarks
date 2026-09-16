@@ -4,13 +4,13 @@
 # actually reads. A set and everything derived from it share a directory.
 
 [toy]
-set      = "../../store/sets/calibrate-toy/inputs"
-run      = "../../store/sets/calibrate-toy/outputs/calibrate"
-analysis = "../../store/sets/calibrate-toy/analysis/calibrate"
-tmp      = "../../store/sets/calibrate-toy/tmp/calibrate"
+set      = "../../store/calibrate-toy/inputs"
+run      = "../../store/calibrate-toy/outputs/calibrate"
+analysis = "../../store/calibrate-toy/analysis/calibrate"
+tmp      = "../../store/calibrate-toy/tmp/calibrate"
 
 [real]
-set      = "../../store/sets/calibrate-real/inputs"
-run      = "../../store/sets/calibrate-real/outputs/calibrate"
-analysis = "../../store/sets/calibrate-real/analysis/calibrate"
-tmp      = "../../store/sets/calibrate-real/tmp/calibrate"
+set      = "../../store/calibrate-real/inputs"
+run      = "../../store/calibrate-real/outputs/calibrate"
+analysis = "../../store/calibrate-real/analysis/calibrate"
+tmp      = "../../store/calibrate-real/tmp/calibrate"

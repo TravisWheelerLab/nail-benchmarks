@@ -6,17 +6,17 @@
 # recipe, and these come out of whatever recruit happened to score.
 
 [toy]
-set      = "../../store/sets/cutoffs-toy/inputs"
-recruit  = "../../store/sets/cutoffs-toy/outputs/recruit"
-decoys   = "../../store/sets/cutoffs-toy/outputs/decoys"
-search   = "../../store/sets/cutoffs-toy/outputs/search"
-analysis = "../../store/sets/cutoffs-toy/analysis/cutoffs"
-tmp      = "../../store/sets/cutoffs-toy/tmp/cutoffs"
+set      = "../../store/cutoffs-toy/inputs"
+recruit  = "../../store/cutoffs-toy/outputs/recruit"
+decoys   = "../../store/cutoffs-toy/outputs/decoys"
+search   = "../../store/cutoffs-toy/outputs/search"
+analysis = "../../store/cutoffs-toy/analysis/cutoffs"
+tmp      = "../../store/cutoffs-toy/tmp/cutoffs"
 
 [real]
-set      = "../../store/sets/cutoffs-real/inputs"
-recruit  = "../../store/sets/cutoffs-real/outputs/recruit"
-decoys   = "../../store/sets/cutoffs-real/outputs/decoys"
-search   = "../../store/sets/cutoffs-real/outputs/search"
-analysis = "../../store/sets/cutoffs-real/analysis/cutoffs"
-tmp      = "../../store/sets/cutoffs-real/tmp/cutoffs"
+set      = "../../store/cutoffs-real/inputs"
+recruit  = "../../store/cutoffs-real/outputs/recruit"
+decoys   = "../../store/cutoffs-real/outputs/decoys"
+search   = "../../store/cutoffs-real/outputs/search"
+analysis = "../../store/cutoffs-real/analysis/cutoffs"
+tmp      = "../../store/cutoffs-real/tmp/cutoffs"

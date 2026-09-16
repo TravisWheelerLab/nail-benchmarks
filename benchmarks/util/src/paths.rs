@@ -6,8 +6,8 @@
 //!
 //! ```toml
 //! [toy]
-//! set = "../../store/sets/toy/inputs"
-//! run = "../../store/sets/toy/outputs/recall"
+//! set = "../../store/toy/inputs"
+//! run = "../../store/toy/outputs/recall"
 //! ```
 //!
 //! A label is a whole set of paths under one name, so a toy run and a real run
@@ -115,7 +115,7 @@ impl File {
 // lexical rather than `canonicalize`, which needs the path to exist: most of
 // these name something a run is about to create. that makes it wrong for a
 // path crossing a symlink, which is a trade worth naming -- these are the
-// strings every message prints, and `benchmarks/recall/../../store/sets/toy`
+// strings every message prints, and `benchmarks/recall/../../store/toy`
 // is not a thing anyone should have to read
 fn tidy(path: &Path) -> PathBuf {
     use std::path::Component;

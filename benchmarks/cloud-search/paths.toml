@@ -4,13 +4,13 @@
 # actually reads. A set and everything derived from it share a directory.
 
 [toy]
-set      = "../../store/sets/cloud-search-toy/inputs"
-run      = "../../store/sets/cloud-search-toy/outputs/cloud-search"
-analysis = "../../store/sets/cloud-search-toy/analysis/cloud-search"
-tmp      = "../../store/sets/cloud-search-toy/tmp/cloud-search"
+set      = "../../store/cloud-search-toy/inputs"
+run      = "../../store/cloud-search-toy/outputs/cloud-search"
+analysis = "../../store/cloud-search-toy/analysis/cloud-search"
+tmp      = "../../store/cloud-search-toy/tmp/cloud-search"
 
 [real]
-set      = "../../store/sets/cloud-search-real/inputs"
-run      = "../../store/sets/cloud-search-real/outputs/cloud-search"
-analysis = "../../store/sets/cloud-search-real/analysis/cloud-search"
-tmp      = "../../store/sets/cloud-search-real/tmp/cloud-search"
+set      = "../../store/cloud-search-real/inputs"
+run      = "../../store/cloud-search-real/outputs/cloud-search"
+analysis = "../../store/cloud-search-real/analysis/cloud-search"
+tmp      = "../../store/cloud-search-real/tmp/cloud-search"

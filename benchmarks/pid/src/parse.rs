@@ -30,7 +30,6 @@ use clap::{Parser, Subcommand};
 use util::ledger::{self, Ledger};
 use util::manifest;
 
-use crate::inputs;
 use crate::search::MODE;
 
 const PRECISION: usize = 4;
@@ -51,21 +50,30 @@ pub struct Which {
 }
 
 impl Which {
-    fn out_dir(&self) -> PathBuf {
+    fn out_dir(&self, analysis: &Path) -> PathBuf {
+        let _ = analysis;
         self.out
             .clone()
-            .unwrap_or_else(|| inputs::outputs().join("figures"))
+            .unwrap_or_else(|| analysis.join("figures"))
     }
 }
 
 #[derive(Parser)]
 pub struct RecallArgs {
+    /// Which label of paths.toml to read. Omit to list them
+    #[arg(long = "in", value_name = "label")]
+    pub label: Option<String>,
+
     #[command(flatten)]
     which: Which,
 }
 
 #[derive(Parser)]
 pub struct CellsArgs {
+    /// Which label of paths.toml to read. Omit to list them
+    #[arg(long = "in", value_name = "label")]
+    pub label: Option<String>,
+
     #[command(flatten)]
     which: Which,
 
@@ -76,6 +84,10 @@ pub struct CellsArgs {
 
 #[derive(Parser)]
 pub struct ScoreArgs {
+    /// Which label of paths.toml to read. Omit to list them
+    #[arg(long = "in", value_name = "label")]
+    pub label: Option<String>,
+
     /// Two nail tables to correlate, by run name. There is no --full-dp run in
     /// the sweep today, so these are given rather than assumed
     #[arg(long, value_name = "NAME")]
@@ -90,6 +102,10 @@ pub struct ScoreArgs {
 
 #[derive(Parser)]
 pub struct TableArgs {
+    /// Which label of paths.toml to read. Omit to list them
+    #[arg(long = "in", value_name = "label")]
+    pub label: Option<String>,
+
     #[command(flatten)]
     which: Which,
 
@@ -110,35 +126,36 @@ pub enum Cmd {
     Table(TableArgs),
 }
 
-pub fn main(cmd: Cmd) -> anyhow::Result<()> {
+pub fn main(cmd: Cmd, paths: &crate::Paths) -> anyhow::Result<()> {
     match cmd {
         Cmd::Recall(args) => {
-            recall(args)?;
+            recall(args, paths)?;
         }
         Cmd::Cells(args) => {
-            cells(args)?;
+            cells(args, paths)?;
         }
         Cmd::Score(args) => {
-            score(args)?;
+            score(args, paths)?;
         }
         Cmd::Table(args) => {
-            table(args)?;
+            table(args, paths)?;
         }
     }
 
     Ok(())
 }
 
-fn table(args: TableArgs) -> anyhow::Result<()> {
-    let bm = Benchmark::new(inputs::benchmark_tbl())?;
+fn table(args: TableArgs, paths: &crate::Paths) -> anyhow::Result<()> {
+    let inp = crate::inputs::Inputs::open(&paths.set)?;
+    let bm = Benchmark::new(inp.truth)?;
 
-    let out_dir = args.which.out_dir();
+    let out_dir = args.which.out_dir(&paths.analysis);
     std::fs::create_dir_all(&out_dir)?;
     let mut out = BufWriter::new(File::create(out_dir.join("results.tbl"))?);
 
     let mut tuples = vec![];
 
-    for run in runs(&inputs::outputs())? {
+    for run in runs(&paths.run)? {
         fn true_hit_filter(hit: &Hit) -> bool {
             if hit.target.starts_with("decoy") {
                 return false;
@@ -304,8 +321,8 @@ fn table(args: TableArgs) -> anyhow::Result<()> {
     Ok(())
 }
 
-fn score(args: ScoreArgs) -> anyhow::Result<()> {
-    let results = inputs::outputs().join("results");
+fn score(args: ScoreArgs, paths: &crate::Paths) -> anyhow::Result<()> {
+    let results = paths.run.join("results");
 
     let read = |name: &str| -> anyhow::Result<HashMap<(String, String), f32>> {
         let path = manifest::table_path(&results, name, "");
@@ -327,7 +344,7 @@ fn score(args: ScoreArgs) -> anyhow::Result<()> {
         .filter(|k| sparse_tbl.contains_key(*k))
         .collect::<Vec<_>>();
 
-    let figures = args.which.out_dir();
+    let figures = args.which.out_dir(&paths.analysis);
     std::fs::create_dir_all(&figures)?;
 
     let mut out = BufWriter::new(File::create(figures.join("score.txt"))?);
@@ -340,8 +357,8 @@ fn score(args: ScoreArgs) -> anyhow::Result<()> {
     Ok(())
 }
 
-fn cells(args: CellsArgs) -> anyhow::Result<()> {
-    let table = manifest::table_path(&inputs::outputs().join("results"), &args.run, "");
+fn cells(args: CellsArgs, paths: &crate::Paths) -> anyhow::Result<()> {
+    let table = manifest::table_path(&paths.run.join("results"), &args.run, "");
 
     let hits = libsail::tbl::NailRows::open(&table)
         .with_context(|| format!("failed to read {}", table.display()))?;
@@ -349,8 +366,9 @@ fn cells(args: CellsArgs) -> anyhow::Result<()> {
     // read out of the files rather than shelled out to hmmstat and
     // esl-seqstat: neither is a dependency this benchmark declares, and both
     // were being found on PATH rather than through `tools`
-    let query_lens: HashMap<String, usize> = Hmm::open(inputs::query_hmm())
-        .with_context(|| format!("failed to parse {}", inputs::query_hmm().display()))?
+    let inp = crate::inputs::Inputs::open(&paths.set)?;
+    let query_lens: HashMap<String, usize> = Hmm::open(&inp.query_hmm)
+        .with_context(|| format!("failed to parse {}", inp.query_hmm.display()))?
         .iter()
         .map(|model| {
             (
@@ -361,13 +379,13 @@ fn cells(args: CellsArgs) -> anyhow::Result<()> {
         .collect();
 
     let mut target_lens: HashMap<String, usize> = HashMap::new();
-    let target_fa = IndexedFasta::open(inputs::target_fa())
-        .with_context(|| format!("failed to open {}", inputs::target_fa().display()))?;
+    let target_fa = IndexedFasta::open(&inp.target_fa)
+        .with_context(|| format!("failed to open {}", inp.target_fa.display()))?;
     for rec in target_fa.iter() {
         target_lens.insert(rec.name_str()?.to_string(), rec.seq.len());
     }
 
-    let figures = args.which.out_dir();
+    let figures = args.which.out_dir(&paths.analysis);
     std::fs::create_dir_all(&figures)?;
 
     let mut true_out = BufWriter::new(File::create(figures.join("cells.true.txt"))?);
@@ -401,13 +419,14 @@ fn cells(args: CellsArgs) -> anyhow::Result<()> {
     })
 }
 
-fn recall(args: RecallArgs) -> anyhow::Result<()> {
+fn recall(args: RecallArgs, paths: &crate::Paths) -> anyhow::Result<()> {
     let start = std::time::Instant::now();
 
-    let benchmark = Benchmark::new(inputs::benchmark_tbl())?;
-    let data = RecallData::new(&inputs::outputs(), &benchmark)?;
+    let inp = crate::inputs::Inputs::open(&paths.set)?;
+    let benchmark = Benchmark::new(inp.truth)?;
+    let data = RecallData::new(&paths.run, &benchmark)?;
 
-    let figures = args.which.out_dir();
+    let figures = args.which.out_dir(&paths.analysis);
     std::fs::create_dir_all(&figures)?;
 
     let mut roc_path = File::create(figures.join("roc.txt"))?;

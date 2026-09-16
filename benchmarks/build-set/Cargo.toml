@@ -14,5 +14,6 @@ util = { workspace = true }
 
 anyhow = { workspace = true }
 clap = { workspace = true }
+indexmap = { workspace = true }
 rand = { workspace = true }
 serde = { workspace = true }

@@ -13,10 +13,9 @@
 use std::collections::{HashMap, HashSet};
 use std::fs::{self, File};
 use std::io::{BufWriter, Write};
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use anyhow::{Context, bail};
-use clap::Parser;
 
 use indexmap::IndexMap;
 use libsail::collection::{Indexable, Iterable};
@@ -28,7 +27,6 @@ use rand::rngs::StdRng;
 use rand::seq::{IndexedRandom, SliceRandom};
 use rand::{RngExt, SeedableRng};
 
-use crate::inputs;
 
 /// Decoys per true pair in the target database.
 const DECOY_RATIO: usize = 100;
@@ -54,55 +52,81 @@ static AMINO: [bool; 256] = {
     t
 };
 
-#[derive(Parser, Debug)]
-pub struct Args {
-    /// Impose a limit on the number of benchmark pairs; the default keeps every
-    /// pair that survives filtering. Decoys are added to the target database on
-    /// top of this
-    #[arg(short, long, value_name = "N")]
-    pub pairs: Option<usize>,
-
-    /// Seed for pair sampling and decoy generation, and for the profmark split
-    #[arg(long, default_value_t = 67779, value_name = "N")]
-    pub seed: u64,
-
-    /// Maximum identity between the train and test halves of the split
-    #[arg(long, default_value_t = 0.30, value_name = "X")]
-    pub train_test_id: f64,
-
-    /// Minimum test sequences per family
-    #[arg(long, default_value_t = 10, value_name = "N")]
-    pub min_test: usize,
-
-    /// Maximum test sequences per family
-    #[arg(long, default_value_t = 30, value_name = "N")]
-    pub max_test: usize,
-
-    /// Rebuild the profmark train/test split even if it already exists
-    #[arg(long)]
-    pub refresh_profmark: bool,
-
-    /// Threads for hmmbuild
-    #[arg(short, long, default_value_t = 8, value_name = "N")]
-    pub threads: usize,
-
-    #[arg(long)]
-    pub dry_run: bool,
+/// Where a profmark build reads its split and writes its set.
+//
+// pid resolved these from its own CARGO_MANIFEST_DIR. a recipe is told
+// instead, so the same assembly can place a set anywhere a label names
+#[derive(Clone)]
+struct At {
+    split: PathBuf,
+    out: PathBuf,
 }
 
-pub fn main(args: Args) -> anyhow::Result<()> {
-    let src_sto = util::tools::pfam_sto()?;
-    let src_fa = util::tools::swissprot()?;
+impl At {
+    fn split_query(&self) -> PathBuf {
+        self.split.join("query.sto")
+    }
+    fn split_target(&self) -> PathBuf {
+        self.split.join("target.sto")
+    }
+    fn queries(&self) -> PathBuf {
+        self.out.join("queries")
+    }
+    fn query_hmm(&self) -> PathBuf {
+        self.queries().join("query.hmm")
+    }
+    fn query_fa(&self) -> PathBuf {
+        self.queries().join("query.fa")
+    }
+    fn query_sto(&self) -> PathBuf {
+        self.queries().join("query.sto")
+    }
+    fn query_cons(&self) -> PathBuf {
+        self.queries().join("query.cons.fa")
+    }
+    fn afa(&self) -> PathBuf {
+        self.queries().join("afa")
+    }
+    fn target_fa(&self) -> PathBuf {
+        self.out.join("target.fa")
+    }
+    /// Which pair is which, and at what identity. The benchmark's own notion
+    /// of truth: there is no calibration here and no tool is the reference.
+    fn truth(&self) -> PathBuf {
+        self.out.join("truth.tbl")
+    }
+}
+
+/// Assemble a profmark benchmark into `out`, building the split if it is not
+/// already there.
+#[allow(clippy::too_many_arguments)]
+pub fn build(
+    alignments: &Path,
+    decoys: &Path,
+    split_dir: &Path,
+    out: &Path,
+    pairs: Option<usize>,
+    seed: u64,
+    train_test_id: f64,
+    min_test: usize,
+    max_test: usize,
+    threads: usize,
+    dry_run: bool,
+) -> anyhow::Result<()> {
+    let at = At {
+        split: split_dir.to_path_buf(),
+        out: out.to_path_buf(),
+    };
+    let src_sto = alignments.to_path_buf();
+    let src_fa = decoys.to_path_buf();
 
     // resolved up front: the assembly takes long enough that finding out about
     // a missing hmmbuild afterwards would be miserable
     let hmmbuild = util::tools::hmmbuild()?;
     let hmmemit = util::tools::hmmemit()?;
 
-    let pm = inputs::profmark();
-    let split = args.refresh_profmark
-        || !inputs::profmark_query().exists()
-        || !inputs::profmark_target().exists();
+    let pm = at.split.clone();
+    let split = !at.split_query().exists() || !at.split_target().exists();
 
     if !split {
         println!("reusing the profmark split in {}", pm.display());
@@ -113,7 +137,7 @@ pub fn main(args: Args) -> anyhow::Result<()> {
             .name("dirs")
             .flag("-p")
             .path(&pm)
-            .path(inputs::afa()),
+            .path(at.afa()),
     );
 
     if split {
@@ -125,22 +149,25 @@ pub fn main(args: Args) -> anyhow::Result<()> {
             .step(
                 Step::serial([Cmd::new(util::tools::create_profmark()?)
                     .name("create-profmark")
-                    .arg("-S", args.seed)
-                    .arg("-1", format!("{:.2}", args.train_test_id))
+                    .arg("-S", seed)
+                    .arg("-1", format!("{:.2}", train_test_id))
                     .flag("--cluster")
                     .flag("--onlysplit")
-                    .arg("--mintest", args.min_test)
-                    .arg("--maxtest", args.max_test)
+                    .arg("--mintest", min_test)
+                    .arg("--maxtest", max_test)
                     .path(&stem)
                     .path(&src_sto)])
                 .name("profmark"),
             )
             .step(
-                Step::from_closures([Closure::new("rename", move || {
-                    fs::rename(stem.with_extension("train.msa"), inputs::profmark_query())?;
-                    fs::rename(stem.with_extension("test.msa"), inputs::profmark_target())?;
+                Step::from_closures([Closure::new("rename", {
+                    let at2 = at.clone();
+                    move || {
+                    fs::rename(stem.with_extension("train.msa"), at2.split_query())?;
+                    fs::rename(stem.with_extension("test.msa"), at2.split_target())?;
                     fs::remove_file(stem.with_extension("tbl")).ok();
                     Ok(())
+                    }
                 })])
                 .name("rename"),
             );
@@ -149,51 +176,39 @@ pub fn main(args: Args) -> anyhow::Result<()> {
     let pipeline = pl
         .step(
             Step::from_closures([Closure::new("assemble", {
-                let (pairs, seed) = (args.pairs, args.seed);
+                let at = at.clone();
 
-                move || assemble(&src_sto, &src_fa, pairs, seed)
+                move || assemble(&at, &src_sto, &src_fa, pairs, seed)
             })])
             .name("assemble"),
         )
         .step(
             Step::serial([Cmd::new(&hmmbuild)
                 .name("hmmbuild")
-                .arg("--cpu", args.threads)
-                .path(inputs::query_hmm())
-                .path(inputs::query_sto())])
+                .arg("--cpu", threads)
+                .path(at.query_hmm())
+                .path(at.query_sto())])
             .name("profiles"),
         )
         .step(
             Step::serial([Cmd::new(&hmmemit)
                 .name("hmmemit")
                 .flag("-c")
-                .path(inputs::query_hmm())
-                .stdout_to(inputs::query_cons())])
+                .path(at.query_hmm())
+                .stdout_to(at.query_cons())])
             .name("consensus"),
         )
-        .stderr_dir(inputs::tmp().join("build/stderr"))
+        .stderr_dir(at.out.join("stderr"))
         .sink(Progress::new())
         .build()
         .context("failed to build the assembly")?;
 
-    if args.dry_run {
+    if dry_run {
         pipeline.dry_run();
         return Ok(());
     }
 
-    // refused rather than cleared: there is one benchmark, assembling it is
-    // expensive, and a rebuild in place would leave the last assembly's
-    // families alongside this one's in afa/, which psiblast searches
-    if inputs::exists() {
-        bail!(
-            "{} already exists; remove it to rebuild",
-            inputs::dir().display()
-        );
-    }
-
     pipeline.run()?;
-
-    println!("\nbuilt {}", inputs::dir().display());
     Ok(())
 }
 
@@ -210,6 +225,7 @@ struct Pair {
 /// The RNG is seeded from the arguments rather than from entropy, so a given
 /// pair limit and seed reproduce the same benchmark.
 fn assemble(
+    at: &At,
     src_sto_path: &Path,
     src_fa_path: &Path,
     max_pairs: Option<usize>,
@@ -217,13 +233,13 @@ fn assemble(
 ) -> anyhow::Result<()> {
     println!("loading alignments...");
     let mut query_sto =
-        families(&inputs::profmark_query()).context("failed to parse the profmark query split")?;
-    let mut target_sto = families(&inputs::profmark_target())
+        families(&at.split_query()).context("failed to parse the profmark query split")?;
+    let mut target_sto = families(&at.split_target())
         .context("failed to parse the profmark target split")?;
     let src_sto = families(src_sto_path).context("failed to parse source sto")?;
     let src_fa = Fasta::open(src_fa_path).context("failed to parse source fasta")?;
 
-    let afa_dir = inputs::afa();
+    let afa_dir = at.afa();
 
     if target_sto.len() != query_sto.len() {
         bail!(
@@ -376,7 +392,7 @@ fn assemble(
     println!("{} benchmark pairs", pairs.len());
 
     let mut tbl_writer = BufWriter::new(
-        File::create(inputs::benchmark_tbl()).context("failed to open benchmark.tbl")?,
+        File::create(at.truth()).context("failed to open truth.tbl")?,
     );
     writeln!(tbl_writer, "#identity family target query")?;
 
@@ -416,13 +432,13 @@ fn assemble(
     }
 
     let mut target_writer =
-        BufWriter::new(File::create(inputs::target_fa()).context("failed to open target.fa")?);
+        BufWriter::new(File::create(at.target_fa()).context("failed to open target.fa")?);
     targets
         .iter()
         .try_for_each(|t| t.write_to(&mut target_writer, DEFAULT_LINE_WIDTH))?;
 
     let mut query_fa_writer =
-        BufWriter::new(File::create(inputs::query_fa()).context("failed to open query.fa")?);
+        BufWriter::new(File::create(at.query_fa()).context("failed to open query.fa")?);
 
     let mut queries = queries.into_iter().collect::<Vec<_>>();
     queries.sort_by(|a, b| a.name.cmp(&b.name));
@@ -431,7 +447,7 @@ fn assemble(
         .try_for_each(|q| q.write_to(&mut query_fa_writer, DEFAULT_LINE_WIDTH))?;
 
     let mut query_sto_writer =
-        BufWriter::new(File::create(inputs::query_sto()).context("failed to open query.sto")?);
+        BufWriter::new(File::create(at.query_sto()).context("failed to open query.sto")?);
     fs::create_dir_all(&afa_dir)?;
 
     let query_names = queries

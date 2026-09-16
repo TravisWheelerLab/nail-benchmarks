@@ -5,13 +5,13 @@
 # data/long-seqs/.
 
 [toy]
-set      = "../../store/sets/long-seqs-toy/inputs"
-run      = "../../store/sets/long-seqs-toy/outputs/long-seqs"
-analysis = "../../store/sets/long-seqs-toy/analysis/long-seqs"
-tmp      = "../../store/sets/long-seqs-toy/tmp/long-seqs"
+set      = "../../store/long-seqs-toy/inputs"
+run      = "../../store/long-seqs-toy/outputs/long-seqs"
+analysis = "../../store/long-seqs-toy/analysis/long-seqs"
+tmp      = "../../store/long-seqs-toy/tmp/long-seqs"
 
 [real]
-set      = "../../store/sets/long-seqs-real/inputs"
-run      = "../../store/sets/long-seqs-real/outputs/long-seqs"
-analysis = "../../store/sets/long-seqs-real/analysis/long-seqs"
-tmp      = "../../store/sets/long-seqs-real/tmp/long-seqs"
+set      = "../../store/long-seqs-real/inputs"
+run      = "../../store/long-seqs-real/outputs/long-seqs"
+analysis = "../../store/long-seqs-real/analysis/long-seqs"
+tmp      = "../../store/long-seqs-real/tmp/long-seqs"

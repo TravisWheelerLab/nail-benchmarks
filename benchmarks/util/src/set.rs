@@ -142,6 +142,18 @@ pub mod shape {
         attrs: &["pair", "query_residues", "residues"],
     };
 
+    /// One search over a profmark split, with a truth table beside it.
+    ///
+    /// The whole benchmark is one unit: every query is searched against one
+    /// target file. What tells a true pair from a decoy, and at what percent
+    /// identity, is per pair rather than per unit, so it cannot be a column
+    /// here -- `truth` names the file that carries it, relative to the set
+    /// root, the way the representation columns name theirs.
+    pub const PROFMARK: Shape = Shape {
+        name: "profmark",
+        needs: &[Rep::QueryHmm, Rep::QuerySto, Rep::QueryFa, Rep::Target],
+        attrs: &["truth"],
+    };
 }
 
 // ---
