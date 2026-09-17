@@ -230,6 +230,12 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "877a4ace8713b0bcf2a4e7eec82529c029f1d0619886d18145fea96c3ffe5c0f"
 
 [[package]]
+name = "feisty"
+version = "0.1.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "a2ec482947844e573844dd4f86e5670d0207fcef1f75619b1e9eb7b8b509d5c8"
+
+[[package]]
 name = "getrandom"
 version = "0.4.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -285,13 +291,13 @@ checksum = "3eaf3ede3fee6db1a4c2ee091bf8a8b4dccdc6d17f656fb07896ee72867612f2"
 
 [[package]]
 name = "libsail"
-version = "0.3.0"
+version = "0.4.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "98cfc5b579a261f63ceb64e9e3ff50428c340ceaa3caa04bc51e9cff9c1faa03"
+checksum = "c2a4898d97f65c2df4b7c08f3723b3173200cf7e625b89909eaf3bfbd8c533ca"
 dependencies = [
+ "feisty",
  "indexmap",
  "memchr",
- "rand",
 ]
 
 [[package]]

@@ -123,7 +123,13 @@ root.
   lease node-aware rather than adding `set_mempolicy`. It is not worth fixing
   today. Full write-up while it lasts: `tmp-claude/numaprobe/REPORT.md`.
 - `libsail` reads and writes the formats: FASTA, Stockholm, p7hmm, and the hit
-  tables nail, HMMER, MMseqs2 and BLAST produce.
+  tables nail, HMMER, MMseqs2 and BLAST produce. Since 0.4.0 it also draws the
+  samples `build-set` deals from: `sample_in_order(m, seed)` yields a uniform
+  draw in the order the file holds it, in constant memory, where the 0.3 line
+  built a vector of every index first -- 19.6 GB of them for MGnify's 2.4
+  billion records. The draw arriving in file order is why the deal shuffles
+  which shard each record lands in; a fixed round robin over an ascending draw
+  is a stride rather than a partition.
 - `tabl` writes the padded, `#`-headed tables. It is not published: the
   workspace takes it as a path dependency on a sibling checkout, `../tabl`.
 - `feisty` sits in `[workspace.dependencies]` and no member uses it.
@@ -611,14 +617,10 @@ extrapolation -- measure both on the same input.
 Leave it unimplemented until `fanout` and `union` have been timed side by side
 on real inputs.
 
-**Measuring MGnify's union need not wait.** Recruiting a single reversed shard
-and counting distinct recruits gives an estimate without building a full
-reversed set, which is otherwise blocked on libsail 0.4.0's sequential sampler.
-That sampler is the streaming `Selector` sketched in
-`tmp-claude/libsail-sampling-proposal.md` rather than the `Indexable::sample`
-that proposal leads with; combined with buffered per-shard output it should
-build a real MGnify set orders of magnitude faster than permuting 2.4 billion
-indices.
+**Measuring MGnify's union no longer waits on libsail.** 0.4.0 landed the
+sequential sampler and `build-set` deals through it, so a full reversed MGnify
+set is buildable rather than blocked. What it costs in practice has not been
+timed.
 
 `store import` writes a `ledger.tbl` for result tables produced elsewhere, out of
 the `.time` files that came back with them, which turns a search run on a

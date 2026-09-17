@@ -9,11 +9,11 @@ path = "src/main.rs"
 
 [dependencies]
 libsail = { workspace = true }
+rand = { workspace = true }
 michi = { workspace = true }
 util = { workspace = true }
 
 anyhow = { workspace = true }
 clap = { workspace = true }
 indexmap = { workspace = true }
-rand = { workspace = true }
 serde = { workspace = true }

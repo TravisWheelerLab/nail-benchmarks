@@ -35,13 +35,15 @@ use std::sync::{Arc, Mutex};
 use anyhow::{Context, bail, ensure};
 use clap::Parser;
 use serde::Deserialize;
+use rand::SeedableRng;
+use rand::rngs::StdRng;
+use rand::seq::SliceRandom;
+
 use libsail::collection::{Aggregate, Indexable, Iterable};
 use libsail::format::{self, Format};
 use libsail::index::{self, Index};
 use libsail::seq::fasta::{DEFAULT_LINE_WIDTH, IndexedFasta};
 use libsail::seq::p7hmm::IndexedHmm;
-use rand::SeedableRng;
-use rand::rngs::StdRng;
 
 use michi::{Closure, Cmd as PCmd, PipelineBuilder, Progress, Step};
 mod profmark;
@@ -513,6 +515,15 @@ struct Shard {
 ///
 /// The draw is a permutation, so plain round robin is enough to leave a shard
 /// with nothing of the collection's own order in it.
+/// How much of each shard is held in memory before it reaches the disk.
+///
+/// The draw now reads forwards, so the writes are what is left to be scattered:
+/// a record goes to whichever of a thousand files its shard is, and the default
+/// 8 KiB buffer would turn that into a flush every few records per file. A
+/// megabyte apiece costs a gigabyte at a thousand shards and makes each file's
+/// writes long and sequential.
+const SHARD_BUF: usize = 1 << 20;
+
 fn deal(
     seqs: &Aggregate<IndexedFasta>,
     n_seqs: usize,
@@ -529,18 +540,35 @@ fn deal(
         let path = out_dir.join(format!("{i}.fa"));
         let file =
             File::create(&path).with_context(|| format!("failed to create {}", path.display()))?;
-        writers.push(BufWriter::new(file));
+        writers.push(BufWriter::with_capacity(SHARD_BUF, file));
     }
 
+    // sample_in_order rather than a permutation: the draw is the same uniform
+    // draw either way, but this one yields in the order the file holds the
+    // records, so a source too large to cache pays ascending reads rather than
+    // scattered ones
+    let drawn = seqs.sample_in_order(n_seqs, seed);
+
+    // the draw arrives ascending, so where it lands has to carry the
+    // randomness the order no longer does. A fixed `i % shards` would give
+    // shard 1 every thousandth record from the front of the file and shard
+    // 1000 every thousandth from just behind it, which is a stride rather than
+    // a partition. Shuffling the shard order once per block of `shards`
+    // records keeps every shard exactly the same size and makes which one a
+    // record lands in uniform
     let mut rng = StdRng::seed_from_u64(seed);
-    let drawn = seqs.permute_with(&mut rng).take(n_seqs);
+    let mut order: Vec<usize> = (0..shards).collect();
 
     // counted as they are written: reading a thousand shards back to find out
     // how big they are is the whole deal again
     let mut counted = vec![(0usize, 0u64); shards];
 
-    for (i, mut rec) in drawn.iter().enumerate() {
+    for (i, mut rec) in drawn.enumerate() {
         let at = i % shards;
+        if at == 0 {
+            order.shuffle(&mut rng);
+        }
+        let at = order[at];
 
         // reversed as it is written rather than in a pass afterwards, so the
         // draw is the same one either way and a reversed set costs what a
@@ -842,8 +870,7 @@ fn deal_nested(
     let mut counted = vec![(0u64, 0u64); rungs.len()];
 
     let largest = rungs.last().copied().unwrap_or(0);
-    let mut rng = StdRng::seed_from_u64(seed);
-    let drawn = seqs.permute_with(&mut rng).take(largest);
+    let drawn = seqs.sample(largest, seed);
 
     // the rungs are ascending, so record i belongs to every rung past the first
     // one big enough to hold it, and that boundary only ever moves forward
@@ -1239,6 +1266,42 @@ mod tests {
                 "no records drawn from file {f}"
             );
         }
+
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn dealing_everything_partitions_it_differently_under_another_seed() {
+        // the draw arrives in file order, so with a fixed round robin a record's
+        // shard would follow from its position in the source and every seed
+        // would produce the same partition
+        let dir = collection("reseed", 3, 100);
+        let agg = collection_at(&dir).unwrap();
+
+        let of = |seed: u64| {
+            let out = dir.join(format!("out-{seed}"));
+            deal(&agg, 300, 7, seed, false, &out).unwrap();
+            (1..=7)
+                .map(|i| {
+                    std::fs::read_to_string(out.join(format!("{i}.fa")))
+                        .unwrap()
+                        .lines()
+                        .filter(|l| l.starts_with('>'))
+                        .map(|l| l[1..].split_whitespace().next().unwrap().to_string())
+                        .collect::<Vec<String>>()
+                })
+                .collect::<Vec<_>>()
+        };
+
+        let (a, b) = (of(67779), of(1));
+
+        let sorted = |s: &Vec<Vec<String>>| {
+            let mut all: Vec<String> = s.iter().flatten().cloned().collect();
+            all.sort();
+            all
+        };
+        assert_eq!(sorted(&a), sorted(&b), "both deals hold every record");
+        assert_ne!(a, b, "a second seed should partition them differently");
 
         std::fs::remove_dir_all(&dir).ok();
     }
