@@ -292,6 +292,13 @@ impl<R: Read> Frame<R> {
         );
 
         for (at, letter) in pass.iter().enumerate() {
+            // `-` is the one character that is not a tool's: it says the
+            // run's seeding never offered the pair, which is a different
+            // answer from the run having scored it badly
+            if *letter == b'-' {
+                continue;
+            }
+
             let tool = Tool::of_letter(*letter);
             ensure!(
                 tool == Some(self.meta.runs[at].tool),

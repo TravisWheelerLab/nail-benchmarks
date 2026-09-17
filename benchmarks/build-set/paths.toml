@@ -47,17 +47,17 @@ out   = "../../store/cloud-search-toy/inputs"
 name       = "pfam"
 hmm        = "../../data/pfam.hmm"
 alignments = "../../data/pfam.sto"
-fams       = 5
+fams       = 400
 
 [[cloud-search-toy.targets]]
 name = "mgnify"
 from = "../../data/mgnify"
-seqs = 400
+seqs = 50000
 
 [[cloud-search-toy.targets]]
 name = "swissprot"
 from = "../../data/swissprot.fa"
-seqs = 400
+seqs = 50000
 
 # 500,000 a side rather than the million loss-decomp draws: Swissprot holds
 # 570,420 sequences in total, and a target the size of most of its source is a
@@ -90,17 +90,17 @@ out   = "../../store/loss-decomp-toy/inputs"
 name       = "pfam"
 hmm        = "../../data/pfam.hmm"
 alignments = "../../data/pfam.sto"
-fams       = 5
+fams       = 400
 
 [[loss-decomp-toy.targets]]
 name = "mgnify"
 from = "../../data/mgnify"
-seqs = 400
+seqs = 50000
 
 [[loss-decomp-toy.targets]]
 name = "swissprot"
 from = "../../data/swissprot.fa"
-seqs = 400
+seqs = 50000
 
 # Where nail loses hmmer's hits is a question about the sequences being
 # searched, so it gets the same two kinds of target cloud-search does, at the

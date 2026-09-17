@@ -13,7 +13,7 @@
 //! #= format runs 1
 //! #= query <count> <residues> <bytes>
 //! #= target <shard> <count> <residues> <bytes>
-//! #= seed <shard> <wall_s>
+//! #= seed <seeding> <wall_s>
 //! #= cutoffs <path> c=<n>
 //! #= run <name> <tool> <wall_s> [k=v ...]
 //! #= pass <run name> ...
@@ -60,11 +60,8 @@ const TARGET: usize = 16;
 /// How wide a score is written: four digits, a point and a place.
 const SCORE: usize = 6;
 
-/// Where the score columns start: after query, target, pass and, where the
-/// pipeline seeded, `seeded`.
-fn scores_at(seeded: bool) -> usize {
-    3 + usize::from(seeded)
-}
+/// Where the score columns start: after query, target and pass.
+const SCORES_AT: usize = 3;
 
 pub struct Args<'a> {
     /// The pipeline directory: `ledger.tbl` and `results/`.
@@ -95,14 +92,28 @@ pub fn collect(args: Args<'_>) -> anyhow::Result<Count> {
     let shards = ran.shards();
     ensure!(!shards.is_empty(), "no shards in {}", args.dir.display());
 
-    // what the pipeline itself recorded about seeding: a stage row per shard.
-    // its presence is what says the seed lists are there to be read, so a
-    // pipeline that does not seed gets no column rather than an empty one
-    let seeds: Vec<(String, f64)> = ran
-        .stage("seed")
-        .map(|row| (row.shard.clone(), row.wall_s.unwrap_or_default()))
-        .collect();
-    let seeded = !seeds.is_empty();
+    // what the pipeline itself recorded about seeding: a stage row per seed
+    // list. Keyed by the list rather than by the shard, since a seeding sweep
+    // writes one per arm and the shard cannot tell them apart
+    // summed over the shards a seeding covered, the way a run's wall clock is:
+    // one line per seeding rather than one per seeding per shard
+    let seeds: Vec<(String, f64)> = {
+        let mut totals: Vec<(String, f64)> = Vec::new();
+        for row in ran.stage("seed") {
+            let name = row
+                .params
+                .get(util::manifest::SEEDS)
+                .cloned()
+                .unwrap_or_else(|| row.shard.clone());
+
+            let wall = row.wall_s.unwrap_or_default();
+            match totals.iter_mut().find(|(at, _)| *at == name) {
+                Some((_, total)) => *total += wall,
+                None => totals.push((name, wall)),
+            }
+        }
+        totals
+    };
 
     let queries = Queries::from_hmm(args.query_hmm)?;
     let cutoffs = Cutoffs::read(args.cutoffs, args.c, &queries)?;
@@ -121,7 +132,32 @@ pub fn collect(args: Args<'_>) -> anyhow::Result<Count> {
     // answer
     let hmmer = meta.hmmer()?;
 
-    let schema = schema(&meta, seeded);
+    // one entry per run, naming the seeding it replayed, and the distinct
+    // seedings behind them
+    let lists: Vec<String> = {
+        let mut seen: Vec<String> = Vec::new();
+        for column in &columns {
+            if let Some(name) = &column.run.seeds
+                && !seen.contains(name)
+            {
+                seen.push(name.clone());
+            }
+        }
+        seen
+    };
+
+    let seed_of: Vec<Option<usize>> = columns
+        .iter()
+        .map(|column| {
+            column
+                .run
+                .seeds
+                .as_ref()
+                .and_then(|name| lists.iter().position(|list| list == name))
+        })
+        .collect();
+
+    let schema = schema(&meta);
     let widths = schema.widths();
 
     let file = std::fs::File::create(args.out)
@@ -138,7 +174,8 @@ pub fn collect(args: Args<'_>) -> anyhow::Result<Count> {
         queries: &queries,
         cutoffs: &cutoffs,
         hmmer: Some(hmmer),
-        seeds: seeded,
+        seeds: &seed_of,
+        lists: &lists,
     };
 
     let job = Job {
@@ -180,13 +217,6 @@ fn block(
         line.bytes(pair.target)?;
         line.bytes(pair.pass)?;
 
-        if let Some(seeded) = pair.seeded {
-            line.text(match seeded {
-                true => "y",
-                false => "n",
-            })?;
-        }
-
         for score in pair.scores {
             match score {
                 Some(score) => line.num(*score as f64)?,
@@ -224,7 +254,7 @@ fn block(
 
 /// The table's columns, which are fixed before a row is read: a stream cannot
 /// widen a column once the header is out.
-fn schema(meta: &Meta, seeded: bool) -> Schema {
+fn schema(meta: &Meta) -> Schema {
     let mut columns = vec![
         // a query's rows are adjacent, so they line up with each other without
         // the column being padded to the widest family name in Pfam
@@ -232,10 +262,6 @@ fn schema(meta: &Meta, seeded: bool) -> Schema {
         Column::new("target").min_width(TARGET),
         Column::new("pass").min_width(meta.runs.len()),
     ];
-
-    if seeded {
-        columns.push(Column::new("seeded"));
-    }
 
     // named for the run rather than the tool: the
     // column header is what says which cell of the sweep a score came from
@@ -253,16 +279,14 @@ fn schema(meta: &Meta, seeded: bool) -> Schema {
 
 // -------------------------------------------------------------------- read
 
-/// Where this table's columns sit: query, target, pass, `seeded` where the
-/// pipeline kept one, one per run, inc, dom.
+/// Where this table's columns sit: query, target, pass, one per run, inc, dom.
 pub fn layout(meta: &Meta) -> Layout {
-    let scores = scores_at(!meta.seeds.is_empty());
     let runs = meta.runs.len();
 
     Layout {
-        fields: scores + runs + 2,
+        fields: SCORES_AT + runs + 2,
         pass: 2,
-        dom: scores + runs + 1,
+        dom: SCORES_AT + runs + 1,
     }
 }
 
@@ -270,7 +294,6 @@ pub struct Reader<R> {
     frame: Frame<R>,
     /// Where the first run's score column sits.
     scores: usize,
-    seeded: bool,
 }
 
 impl Reader<std::fs::File> {
@@ -292,17 +315,11 @@ impl<R: Read> Reader<R> {
             frame.file(),
         );
 
-        // the preamble says whether the pipeline seeded, so the column is
-        // placed by what the file declares rather than by counting its fields
-        let seeded = !frame.meta.seeds.is_empty();
-        let scores = scores_at(seeded);
-
         frame.layout(layout(&frame.meta));
 
         Ok(Reader {
             frame,
-            scores,
-            seeded,
+            scores: SCORES_AT,
         })
     }
 
@@ -321,13 +338,13 @@ impl<R: Read> Reader<R> {
         &self.frame
     }
 
-    /// Whether seeding found this pair, `None` where the pipeline kept no
-    /// seed list.
-    pub fn seeded(&self) -> Option<bool> {
-        match self.seeded {
-            true => Some(self.frame.field(3) == b"y"),
-            false => None,
-        }
+    /// Whether the seeding this run replayed offered the pair.
+    ///
+    /// True for a run that replayed no seed list: nothing was withheld from
+    /// it, which is a different answer from a seeding that looked and did not
+    /// find it, and the `-` is what carries that difference.
+    pub fn seeded(&self, run: usize) -> bool {
+        self.frame.pass().get(run) != Some(&b'-')
     }
 
     /// Whether one run reported the pair at all, at any score.
@@ -356,18 +373,18 @@ mod tests {
 #= format runs 1
 #= query 3 18 120
 #= target 1 3 12 40
-#= seed 1 4.0000
+#= seed once 4.0000
 #= cutoffs /x/cutoffs.tbl c=0
-#= run A2.0-B4.0 nail 3.0000 A=2.0 B=4.0
-#= run full nail 9.0000
+#= run A2.0-B4.0 nail 3.0000 seeds=once A=2.0 B=4.0
+#= run full nail 9.0000 seeds=once
 #= run hmmer hmmer 2.0000
 #= pass A2.0-B4.0 full hmmer
-# query target           pass seeded A2.0-B4.0 full   hmmer  inc dom
-# ----- ---------------- ---- ------ --------- ------ ------ --- ---
+# query target           pass A2.0-B4.0 full   hmmer  inc dom
+# ----- ---------------- ---- --------- ------ ------ --- ---
 #= shard 1
-alpha MGYP000000000001 NNH  y      24.0      25.0   24.0   1   24.0
-beta MGYP000000000002 nnH  y      -         -      30.0   1   30.0
-gamma MGYP000000000003 nnH  n      -         -      28.0   1   28.0
+alpha MGYP000000000001 NNH  24.0      25.0   24.0   1   24.0
+beta MGYP000000000002 nnH  -         -      30.0   1   30.0
+gamma MGYP000000000003 --H  -         -      28.0   1   28.0
 #= end 3
 ";
 
@@ -387,18 +404,20 @@ gamma MGYP000000000003 nnH  n      -         -      28.0   1   28.0
         let mut reader = Reader::new(FILE.as_bytes(), "test").unwrap();
 
         assert!(reader.step().unwrap());
-        assert_eq!(reader.seeded(), Some(true));
+        assert!(reader.seeded(0));
         assert!(reader.present(0));
 
         // seeded, and then lost between there and the table
         assert!(reader.step().unwrap());
-        assert_eq!(reader.seeded(), Some(true));
+        assert!(reader.seeded(0));
         assert!(!reader.present(0));
 
-        // never seeded at all, which is a different loss
+        // never seeded at all, which is a different loss. hmmer replayed no
+        // seed list, so its own character is untouched
         assert!(reader.step().unwrap());
-        assert_eq!(reader.seeded(), Some(false));
+        assert!(!reader.seeded(0));
         assert!(!reader.present(0));
+        assert!(reader.seeded(2));
 
         assert!(!reader.step().unwrap());
     }
@@ -410,19 +429,18 @@ gamma MGYP000000000003 nnH  n      -         -      28.0   1   28.0
     }
 
     #[test]
-    fn a_pipeline_that_never_seeded_has_no_column() {
+    fn a_run_that_replayed_no_seed_list_counts_as_offered_every_pair() {
+        // nothing was withheld from it, which is not the same answer as a
+        // seeding that looked and did not find the pair
         let text = FILE
-            .replace("#= seed 1 4.0000\n", "")
-            .replace(" pass seeded ", " pass ")
-            .replace(" ---- ------ ", " ---- ")
-            .replace("NNH  y      ", "NNH  ")
-            .replace("nnH  y      ", "nnH  ")
-            .replace("nnH  n      ", "nnH  ");
+            .replace("#= seed once 4.0000\n", "")
+            .replace(" seeds=once", "")
+            .replace("--H", "nnH");
 
         let mut reader = Reader::new(text.as_bytes(), "test").unwrap();
 
         assert!(reader.step().unwrap());
-        assert_eq!(reader.seeded(), None);
+        assert!(reader.seeded(0));
         assert_eq!(reader.score(1), Some(25.0));
     }
 }

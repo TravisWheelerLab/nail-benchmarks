@@ -119,12 +119,6 @@ pub struct Args {
     dry_run: bool,
 }
 
-/// What an arm's seed list is called, which has to carry the unit as well as
-/// the arm once a set holds more than one.
-fn seed_list(arm: &str, shard: &str) -> String {
-    format!("{arm}.{shard}")
-}
-
 pub fn main(args: Args, paths: &crate::Paths) -> anyhow::Result<()> {
     ensure!(
         args.threads.is_multiple_of(search::HMMER_CPU),
@@ -196,11 +190,14 @@ pub fn main(args: Args, paths: &crate::Paths) -> anyhow::Result<()> {
                     &query_hmm,
                     &target,
                     &shard,
-                    &dirs.seeds(&seed_list(&arm.name, &shard)),
+                    &dirs.seeds(&arm.name, &shard),
                     &dirs,
                     args.threads,
                     &arm.seeding,
-                    &[(manifest::STAGE, search::SEED.to_string())],
+                    &[
+                        (manifest::STAGE, search::SEED.to_string()),
+                        (manifest::SEEDS, arm.name.clone()),
+                    ],
                 )
                 .name(format!("seeds.{}.{shard}", arm.name)),
             );
@@ -217,7 +214,7 @@ pub fn main(args: Args, paths: &crate::Paths) -> anyhow::Result<()> {
                     // seeds and will never call it, and nothing here is on PATH
                     .arg("--mmseqs-path", &bins.mmseqs)
                     .arg("-t", args.threads)
-                    .arg("--seeds", dirs.seeds(&seed_list(&arm.name, &shard)))
+                    .arg("--seeds", dirs.seeds(&arm.name, &shard))
                     .arg("-E", args.nail_evalue)
                     .arg("--tmp-dir", dirs.tmp.join("align").join(&arm.name))
                     .arg("--tbl-out", dirs.table(&arm.name, &shard))
@@ -226,6 +223,8 @@ pub fn main(args: Args, paths: &crate::Paths) -> anyhow::Result<()> {
                     .path(&target)
                     .field(manifest::NAME, &arm.name)
                     .field(manifest::TOOL, "nail")
+                    // the arm is the seeding, so each replays its own list
+                    .field(manifest::SEEDS, &arm.name)
                     .field(manifest::SHARD, &shard)
                     .field("E", args.nail_evalue)])
                 .name(format!("{}.{shard}", arm.name))

@@ -182,12 +182,15 @@ enum Message {
 /// What a shard will take to collect: its tables, the hits they become, and
 /// the block they are rendered into.
 fn estimate(work: &Shard<'_>, shard: &str) -> u64 {
-    let seeds = match work.seeds {
-        true => std::fs::metadata(manifest::seeds_path(work.results, shard))
-            .map(|meta| meta.len())
-            .unwrap_or(0),
-        false => 0,
-    };
+    let seeds: u64 = work
+        .lists
+        .iter()
+        .map(|list| {
+            std::fs::metadata(manifest::seeds_path(work.results, list, shard))
+                .map(|meta| meta.len())
+                .unwrap_or(0)
+        })
+        .sum();
 
     let bytes: u64 = work
         .runs

@@ -206,6 +206,12 @@ pub struct Run {
     /// Whatever else the commands recorded -- the settings that tell this run
     /// apart from the others of the same tool.
     pub params: BTreeMap<String, String>,
+    /// Which seed list this run replayed, `None` where it did not replay one.
+    ///
+    /// Held apart from `params` because it says where to read something rather
+    /// than what was swept: as a setting it would become a column of every
+    /// summary and a term in every figure's parameter space, and it is neither.
+    pub seeds: Option<String>,
 }
 
 /// A run and the shards it covered, which is what collecting needs and what
@@ -244,12 +250,16 @@ pub fn runs(ran: &Ledger) -> anyhow::Result<Vec<Column>> {
                 ledger::EVERY_SHARD,
             );
 
+            let mut params = column.params;
+            let seeds = params.remove(util::manifest::SEEDS);
+
             Ok(Column {
                 run: Run {
                     name: column.name,
                     tool: Tool::parse(&column.tool)?,
                     wall_s: column.wall_s,
-                    params: column.params,
+                    params,
+                    seeds,
                 },
                 shards: column.shards,
             })
@@ -501,8 +511,8 @@ impl Meta {
             )?;
         }
 
-        for (shard, wall) in &self.seeds {
-            writeln!(out, "#= seed {} {wall:.4}", label(shard))?;
+        for (name, wall) in &self.seeds {
+            writeln!(out, "#= seed {} {wall:.4}", label(name))?;
         }
 
         writeln!(
@@ -513,10 +523,13 @@ impl Meta {
         )?;
 
         for run in &self.runs {
+            // written with the settings and read back out of them, so the
+            // line stays one shape and a reader needs no new field
             let params: String = run
-                .params
+                .seeds
                 .iter()
-                .map(|(k, v)| format!(" {k}={v}"))
+                .map(|name| format!(" {}={name}", util::manifest::SEEDS))
+                .chain(run.params.iter().map(|(k, v)| format!(" {k}={v}")))
                 .collect();
 
             writeln!(
@@ -659,14 +672,19 @@ fn run(fields: &[&str]) -> anyhow::Result<Run> {
         bail!("a `#= run` line wants a name, a tool and a wall time");
     };
 
+    let mut params: BTreeMap<String, String> = params
+        .iter()
+        .filter_map(|p| p.split_once('='))
+        .map(|(k, v)| (k.to_string(), v.to_string()))
+        .collect();
+
+    let seeds = params.remove(util::manifest::SEEDS);
+
     Ok(Run {
         name: name.to_string(),
         tool: Tool::parse(tool)?,
         wall_s: wall.parse()?,
-        params: params
-            .iter()
-            .filter_map(|p| p.split_once('='))
-            .map(|(k, v)| (k.to_string(), v.to_string()))
-            .collect(),
+        params,
+        seeds,
     })
 }

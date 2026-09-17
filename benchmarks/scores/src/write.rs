@@ -91,7 +91,8 @@ pub fn collect(args: Args<'_>) -> anyhow::Result<Count> {
         hmmer: Some(hmmer),
         // recall never seeds: nail's prefilter is part of its search, so
         // there is no seed list beside its results and no stage to time
-        seeds: false,
+        seeds: &vec![None; columns.len()],
+        lists: &[],
     };
 
     let job = Job {

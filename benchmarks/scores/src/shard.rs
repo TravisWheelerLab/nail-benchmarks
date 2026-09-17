@@ -59,14 +59,13 @@ pub struct Pair<'a> {
     pub query: u32,
     pub target: &'a [u8],
     /// One character per run, in ledger order: the tool's letter, uppercase
-    /// where that run reported the pair at or above its family's cutoff.
+    /// where that run reported the pair at or above its family's cutoff, and
+    /// `-` where the pair was not in that run's seed list at all. Not seeded
+    /// and seeded but unreported are different answers.
     pub pass: &'a [u8],
     /// One per run, in ledger order, `None` where that run did not report
     /// the pair.
     pub scores: &'a [Option<f32>],
-    /// Whether seeding found this pair, `None` where the pipeline kept no seed
-    /// list. Seeding nothing and never having seeded are different answers.
-    pub seeded: Option<bool>,
     /// hmmer's inclusion count, `None` where hmmer did not report the pair.
     pub inc: Option<u16>,
     /// hmmer's domain scores, in domtbl order.
@@ -99,7 +98,7 @@ pub struct Scratch {
     doms: Vec<Dom>,
     pass: Vec<u8>,
     scores: Vec<Option<f32>>,
-    seeds: Vec<u64>,
+    seeds: Vec<Vec<u64>>,
     dom_scores: Vec<f32>,
     name: Vec<u8>,
 }
@@ -113,13 +112,16 @@ pub struct Shard<'a> {
     /// Which run's `.domtbl` carries the domain breakdown, and the run whose
     /// pairs are kept regardless of cutoff.
     pub hmmer: Option<usize>,
-    /// Whether to read `results/seeds.<shard>` and say of each pair whether
-    /// seeding found it.
+    /// Which seed list each run replayed, as an index into [`Self::lists`],
+    /// and `None` for a run that replayed none.
     ///
-    /// The seed list is read for a flag on rows, not for rows of its own: a
-    /// pair nothing reported is not among the hits and so never reaches a
-    /// renderer, seeded or not.
-    pub seeds: bool,
+    /// Many runs to one list: a pruning sweep replays a single seeding into
+    /// every cell, a seeding sweep gives every arm its own. The seed list is
+    /// read for a character on rows, not for rows of its own -- a pair nothing
+    /// reported is not among the hits and never reaches a renderer.
+    pub seeds: &'a [Option<usize>],
+    /// The distinct seed lists, by the name a run's `seeds` setting gives.
+    pub lists: &'a [String],
 }
 
 impl Shard<'_> {
@@ -160,9 +162,11 @@ impl Shard<'_> {
         // pair any nail run could report, so a shard whose names will not key
         // as MGYP is detected here, and the retry re-reads one small file
         // than every table in the shard
-        if self.seeds {
-            let path = manifest::seeds_path(self.results, shard);
-            if !seeds(&path, &mut keys, self.queries, &mut scratch.seeds)? {
+        scratch.seeds.resize(self.lists.len(), Vec::new());
+        for (list, into) in self.lists.iter().zip(scratch.seeds.iter_mut()) {
+            into.clear();
+            let path = manifest::seeds_path(self.results, list, shard);
+            if !seeds(&path, &mut keys, self.queries, into)? {
                 return Ok(None);
             }
         }
@@ -209,8 +213,10 @@ impl Shard<'_> {
             for dom in &mut scratch.doms {
                 dom.key = rerank(dom.key, &rank);
             }
-            for key in &mut scratch.seeds {
-                *key = rerank(*key, &rank);
+            for list in &mut scratch.seeds {
+                for key in list.iter_mut() {
+                    *key = rerank(*key, &rank);
+                }
             }
         }
 
@@ -236,7 +242,9 @@ impl Shard<'_> {
 
         hits.sort_unstable_by_key(|hit| (hit.key, hit.run));
         doms.sort_unstable_by_key(|dom| (dom.key, dom.ord));
-        seeds.sort_unstable();
+        for list in seeds.iter_mut() {
+            list.sort_unstable();
+        }
 
         let mut count = Count {
             hits: hits.len() as u64,
@@ -251,7 +259,11 @@ impl Shard<'_> {
 
         let mut at = 0usize;
         let mut dom_at = 0usize;
-        let mut seed_at = 0usize;
+
+        // one cursor per list rather than per run: several runs replay one
+        // seeding, and advancing per run would walk a shared list twice
+        let mut seed_at = vec![0usize; seeds.len()];
+        let mut holds = vec![false; seeds.len()];
 
         while at < hits.len() {
             let key = hits[at].key;
@@ -299,13 +311,23 @@ impl Shard<'_> {
                 }
             }
 
-            // both lists are sorted by the same key the hits are, so each is
+            // the lists are sorted by the same key the hits are, so each is
             // walked forward once across the whole shard rather than searched
             // per pair. a seed list with the pair twice is harmless
-            while seed_at < seeds.len() && seeds[seed_at] < key {
-                seed_at += 1;
+            for (li, list) in seeds.iter().enumerate() {
+                while seed_at[li] < list.len() && list[seed_at[li]] < key {
+                    seed_at[li] += 1;
+                }
+                holds[li] = list.get(seed_at[li]) == Some(&key);
             }
-            let seeded = self.seeds.then(|| seeds.get(seed_at) == Some(&key));
+
+            // a run whose seeding never offered the pair did not miss it, and
+            // the character says so rather than a column shared by every run
+            for (run, list) in self.seeds.iter().enumerate() {
+                if list.is_some_and(|li| !holds[li]) {
+                    pass[run] = b'-';
+                }
+            }
 
             // every domain of this pair, in the order the domtbl listed them
             dom_scores.clear();
@@ -332,7 +354,6 @@ impl Shard<'_> {
                 target: &name[..],
                 pass: &pass[..],
                 scores: &scores[..],
-                seeded,
                 inc,
                 doms: &dom_scores[..],
             })?;

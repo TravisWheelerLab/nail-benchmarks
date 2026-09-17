@@ -221,14 +221,16 @@ pub fn stages(path: &Path, out: &Path) -> anyhow::Result<()> {
         }
 
         truth += 1;
-        let seeded = scores.seeded().unwrap_or(true);
 
         for run in 0..runs {
             if run == hmmer {
                 continue;
             }
 
-            match (seeded, scores.present(run)) {
+            // per run rather than per pair: a seeding sweep gives every arm
+            // its own seed list, so whether the pair was ever offered is the
+            // arm's answer and not the pipeline's
+            match (scores.seeded(run), scores.present(run)) {
                 (false, _) => lost_seed[run] += 1,
                 (_, false) => lost_cloud_align[run] += 1,
                 (_, true) => reported[run] += 1,

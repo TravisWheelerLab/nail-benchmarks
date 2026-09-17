@@ -371,7 +371,7 @@ impl Ledger {
     pub fn distill(path: &Path) -> anyhow::Result<Ledger> {
         let manifest = Manifest::read(path)?;
         let mut groups: Vec<Group> = Vec::new();
-        let mut at: BTreeMap<(String, String), usize> = BTreeMap::new();
+        let mut at: BTreeMap<(String, String, String), usize> = BTreeMap::new();
 
         // michi puts a label in the step cell on a step's own summary row and
         // `|` or `||` on the commands under it, so a cell that is neither
@@ -394,10 +394,18 @@ impl Ledger {
             };
             let shard = row.get(manifest::SHARD).unwrap_or_default().to_string();
 
-            let i = *at.entry((key.clone(), shard.clone())).or_insert_with(|| {
-                groups.push(Group::new(&key, &shard, stage));
-                groups.len() - 1
-            });
+            // a stage can happen more than once per shard: a seeding sweep
+            // writes one seed list per arm, and folding them together would
+            // report one seeding that took as long as all of them. What tells
+            // them apart is the seed list they wrote, so that joins the key
+            let seeds = row.get(manifest::SEEDS).unwrap_or_default().to_string();
+
+            let i = *at
+                .entry((key.clone(), shard.clone(), seeds.clone()))
+                .or_insert_with(|| {
+                    groups.push(Group::new(&key, &shard, stage));
+                    groups.len() - 1
+                });
             groups[i].add(step, row)?;
         }
 

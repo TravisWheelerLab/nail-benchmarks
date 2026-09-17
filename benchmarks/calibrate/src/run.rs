@@ -186,7 +186,7 @@ pub fn main(args: Args, paths: &crate::Paths) -> anyhow::Result<()> {
 
             for s in &args.nail_s {
                 let at = format!("s{s}.r{rep}");
-                let seeds = dirs.seeds(&format!("{at}.{shard}"));
+                let seeds = dirs.seeds(&at, &shard);
 
                 let name = format!("seed-{at}");
                 if timing(Part::Seed) {

@@ -31,6 +31,10 @@ use util::set::Set;
 /// The column hmmer's run becomes, which every cell is measured against.
 const HMMER: &str = "hmmer";
 
+/// What the one seeding is called. Every cell replays it, so the name is the
+/// same on every row and only the shard moves.
+const SEEDING: &str = "once";
+
 /// The -a the whole grid is run at, in order.
 ///
 /// 5 is nail's own default, passed rather than left off so the manifest
@@ -173,11 +177,14 @@ pub fn main(args: Args, paths: &crate::Paths) -> anyhow::Result<()> {
                 &query_hmm,
                 &target,
                 &shard,
-                &dirs.seeds(&shard),
+                &dirs.seeds(SEEDING, &shard),
                 &dirs,
                 args.threads,
                 &search::Seeding::new(SEED_S, SEED_MODE),
-                &[(manifest::STAGE, search::SEED.to_string())],
+                &[
+                    (manifest::STAGE, search::SEED.to_string()),
+                    (manifest::SEEDS, SEEDING.to_string()),
+                ],
             ));
 
         let hmmer = search::hmmer(&bins.hmmsearch, &split, &dirs, HMMER, &shard, &target, &[]);
@@ -195,13 +202,15 @@ pub fn main(args: Args, paths: &crate::Paths) -> anyhow::Result<()> {
                 // and will never call it, and nothing here is on PATH
                 .arg("--mmseqs-path", &bins.mmseqs)
                 .arg("-t", args.threads)
-                .arg("--seeds", dirs.seeds(&shard))
+                .arg("--seeds", dirs.seeds(SEEDING, &shard))
                 .arg("-E", search::EVALUE)
                 .arg("--tmp-dir", dirs.tmp.join("cell"))
                 .arg("--tbl-out", dirs.table(&label, &shard))
                 .flag("--allow-overwrite")
                 .field(manifest::NAME, &label)
                 .field(manifest::TOOL, "nail")
+                // every cell replays the one seeding this unit got
+                .field(manifest::SEEDS, SEEDING)
                 .field(manifest::SHARD, &shard);
 
             let cmd = match cell {

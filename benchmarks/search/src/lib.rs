@@ -111,8 +111,9 @@ impl Dirs {
         manifest::table_path(&self.results, name, shard)
     }
 
-    pub fn seeds(&self, shard: &str) -> PathBuf {
-        manifest::seeds_path(&self.results, shard)
+    /// Where one seeding's list for one shard goes.
+    pub fn seeds(&self, seeding: &str, shard: &str) -> PathBuf {
+        manifest::seeds_path(&self.results, seeding, shard)
     }
 }
 

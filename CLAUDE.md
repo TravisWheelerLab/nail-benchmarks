@@ -422,7 +422,13 @@ six runs over a thousand shards is four billion rows, and a column per run is
 what made an earlier grammar write 700 GB.
 
 `cloud-search parse runs --in <label>` reads cloud-search and loss-decomp into `runs.tbl`: one score
-column per run, plus a `seeded` column where the pipeline kept a seed list.
+column per run. Whether a run's seeding offered a pair is the `pass` string's
+third state -- `-` where that run's seed list never held it, against a
+lowercase letter for seeded and unreported and an uppercase one for reported.
+It is per run rather than a column of its own because a seeding sweep gives
+every arm its own seed list, so the answer differs between runs of one pair;
+a run's ledger row names the seeding it replayed in a `seeds` setting, and
+many runs to one seeding is the ordinary case.
 `-A` and `-B` constrain the dynamic programming, so two cells can score one
 pair differently, and that is what the sweep measures.
 These pipelines search one shard, so the wider row costs nothing.

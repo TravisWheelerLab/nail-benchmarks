@@ -26,6 +26,13 @@ pub const SHARD: &str = "shard";
 /// What part of the pipeline a command belongs to, for the ones that aren't
 /// runs -- seeding, which produces pairs rather than scores.
 pub const STAGE: &str = "stage";
+/// Which seed list a run replayed, and which one a seeding wrote.
+///
+/// Many runs to one seeding: a pruning sweep replays a single list into every
+/// cell, and a seeding sweep writes one per arm. The shard alone cannot say
+/// which, so the run says it and the analysis reads it rather than building a
+/// filename out of the shard.
+pub const SEEDS: &str = "seeds";
 
 /// Everything a pipeline produces lands in one `results/` directory, named
 /// `<what>.<shard>`. These three say what the names are.
@@ -44,11 +51,16 @@ pub fn dom_path(results: &Path, name: &str, shard: &str) -> PathBuf {
     results.join(stem(name, shard, Some("domtbl")))
 }
 
-/// The (query, target) pairs seeding found for one shard. No extension: it is
-/// nail's own two-column list, not a hit table, and the bare name says so in a
-/// directory of `.tbl`s.
-pub fn seeds_path(results: &Path, shard: &str) -> PathBuf {
-    results.join(stem("seeds", shard, None))
+/// The (query, target) pairs one seeding found. No extension: it is nail's own
+/// two-column list, not a hit table, and the bare name says so in a directory
+/// of `.tbl`s.
+///
+/// `seeding` is the name a run's [`SEEDS`] setting gives, and it names the
+/// seeding rather than the file: a run covers several shards and carries one
+/// setting, so the shard joins it here. A pipeline that seeds once per shard
+/// has one such name; a seeding sweep has one per arm.
+pub fn seeds_path(results: &Path, seeding: &str, shard: &str) -> PathBuf {
+    results.join(stem(&format!("seeds.{seeding}"), shard, None))
 }
 
 fn stem(name: &str, shard: &str, ext: Option<&str>) -> String {
