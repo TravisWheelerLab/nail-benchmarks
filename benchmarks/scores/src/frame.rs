@@ -345,6 +345,11 @@ impl<R: Read> Frame<R> {
         self.field(at) != b"-"
     }
 
+    /// Which block the current row is in -- the unit it was searched against.
+    pub fn shard(&self) -> &str {
+        &self.shard
+    }
+
     /// One character per run, in the order `#= pass` names them.
     pub fn pass(&self) -> &[u8] {
         self.field(self.at().pass)

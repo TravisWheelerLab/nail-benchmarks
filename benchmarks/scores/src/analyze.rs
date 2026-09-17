@@ -197,6 +197,26 @@ fn preamble(meta: &crate::Meta, truth: usize, rows: u64) -> String {
 /// One pass, counting per run. A sweep that seeded once and searched every
 /// cell off those seeds gets a column per cell, which is what tells the loss
 /// every cell shares from the loss its pruning caused.
+/// What one unit's pairs came to, per run.
+struct Tally {
+    /// Pairs hmmer reported at or above their family's cutoff, for this unit.
+    truth: usize,
+    lost_seed: Vec<usize>,
+    lost_cloud_align: Vec<usize>,
+    reported: Vec<usize>,
+}
+
+impl Tally {
+    fn new(runs: usize) -> Tally {
+        Tally {
+            truth: 0,
+            lost_seed: vec![0; runs],
+            lost_cloud_align: vec![0; runs],
+            reported: vec![0; runs],
+        }
+    }
+}
+
 pub fn stages(path: &Path, out: &Path) -> anyhow::Result<()> {
     let mut scores = Runs::open(path)?;
 
@@ -208,10 +228,12 @@ pub fn stages(path: &Path, out: &Path) -> anyhow::Result<()> {
         "this pipeline kept no seeds, so there is no seeding checkpoint to split on"
     );
 
-    let mut lost_seed = vec![0usize; runs];
-    let mut lost_cloud_align = vec![0usize; runs];
-    let mut reported = vec![0usize; runs];
-    let (mut truth, mut rows) = (0usize, 0u64);
+    // per unit as well as per run. A `cross` set searches one query against
+    // several kinds of target, and what hmmer found in one is not the truth
+    // set for another: summed, the two corpora make a sensitivity that
+    // describes neither
+    let mut at: indexmap::IndexMap<String, Tally> = indexmap::IndexMap::new();
+    let mut rows = 0u64;
 
     while scores.step()? {
         rows += 1;
@@ -220,7 +242,9 @@ pub fn stages(path: &Path, out: &Path) -> anyhow::Result<()> {
             continue;
         }
 
-        truth += 1;
+        let unit = scores.row().shard().to_string();
+        let tally = at.entry(unit).or_insert_with(|| Tally::new(runs));
+        tally.truth += 1;
 
         for run in 0..runs {
             if run == hmmer {
@@ -231,51 +255,51 @@ pub fn stages(path: &Path, out: &Path) -> anyhow::Result<()> {
             // its own seed list, so whether the pair was ever offered is the
             // arm's answer and not the pipeline's
             match (scores.seeded(run), scores.present(run)) {
-                (false, _) => lost_seed[run] += 1,
-                (_, false) => lost_cloud_align[run] += 1,
-                (_, true) => reported[run] += 1,
+                (false, _) => tally.lost_seed[run] += 1,
+                (_, false) => tally.lost_cloud_align[run] += 1,
+                (_, true) => tally.reported[run] += 1,
             }
         }
     }
 
     ensure!(
-        truth > 0,
+        at.values().any(|t| t.truth > 0),
         "hmmer found nothing that clears a cutoff; there is nothing to measure against"
     );
 
-    let headers = ["run", "stage", "n", "sens"].map(str::to_string).to_vec();
+    // one row per (unit, run), a column per checkpoint. Written long it was
+    // four rows apiece, where `n` meant a population on two of them and a loss
+    // on the other two, and the last row's fraction only ever repeated the one
+    // above it
+    let headers = ["unit", "run", "truth", "lost_seed", "lost_align", "reported", "sens"]
+        .map(str::to_string)
+        .to_vec();
     let mut cells: Vec<Vec<String>> = Vec::new();
 
-    for (run, column) in scores.meta().runs.iter().enumerate() {
-        if run == hmmer {
-            continue;
-        }
+    for (unit, tally) in &at {
+        for (run, column) in scores.meta().runs.iter().enumerate() {
+            if run == hmmer {
+                continue;
+            }
 
-        let (seed, cloud, reached) = (lost_seed[run], lost_cloud_align[run], reported[run]);
-
-        // each stage is what it dropped, against what is still standing after
-        // it -- so the last column falls from 1 to the fraction that survived
-        let stages = [
-            ("truth", truth, truth),
-            ("lost_seed", seed, truth - seed),
-            ("lost_cloud_align", cloud, truth - seed - cloud),
-            ("reported", reached, reached),
-        ];
-
-        cells.extend(stages.iter().map(|&(stage, n, left)| {
-            vec![
+            cells.push(vec![
+                unit.clone(),
                 column.name.clone(),
-                stage.to_string(),
-                n.to_string(),
-                format!("{:.4}", frac(left, truth)),
-            ]
-        }));
+                tally.truth.to_string(),
+                tally.lost_seed[run].to_string(),
+                tally.lost_cloud_align[run].to_string(),
+                tally.reported[run].to_string(),
+                format!("{:.4}", frac(tally.reported[run], tally.truth)),
+            ]);
+        }
     }
 
     ensure!(
         !cells.is_empty(),
         "nothing but hmmer ran, so there is no pipeline to trace"
     );
+
+    let truth: usize = at.values().map(|tally| tally.truth).sum();
 
     tbl::write(
         out,

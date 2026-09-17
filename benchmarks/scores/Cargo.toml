@@ -9,6 +9,7 @@ tabl = { workspace = true }
 util = { workspace = true }
 
 anyhow = { workspace = true }
+indexmap = { workspace = true }
 clap = { workspace = true }
 memchr = { workspace = true }
 rayon = { workspace = true }
