@@ -9,6 +9,13 @@
 //! A tool accessor checks the binary is there and runs it with `-h` before
 //! handing back its path, so a missing or broken install fails by name at the
 //! front of a pipeline rather than as a mystery exit code an hour in.
+//!
+//! [`identity`] is the other half: what a result should record about the binary
+//! that produced it. A version string is not enough on its own, since nail can
+//! be built from a working tree with `make nail NAIL_SRC=...` and two builds
+//! that differ both say `nail 0.7.1`. The hash is of the bytes that actually
+//! ran, computed here rather than read out of `tools/installed.tbl`, so it
+//! cannot be stale in the one direction that matters.
 
 use std::path::{Path, PathBuf};
 use std::process::Command;
@@ -48,6 +55,104 @@ fn tool(name: &str, help: &str) -> anyhow::Result<PathBuf> {
     }
 
     Ok(path)
+}
+
+/// What a tool was, as far as a result needs to record it.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Identity {
+    pub name: String,
+    /// The first version-shaped token the binary prints, or `-`.
+    pub version: String,
+    /// The first 12 hex digits of the sha256 of the binary, which is what tells
+    /// two builds of one version apart. The same digest `make` records.
+    pub hash: String,
+}
+
+impl std::fmt::Display for Identity {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{} {} {}", self.name, self.version, self.hash)
+    }
+}
+
+/// The binary a ledger's `tool` column means.
+///
+/// The column names the tool a result is attributed to, which for three of
+/// them is a suite rather than a program: hmmer is searched with `hmmsearch`,
+/// blast with `blastp`, last with `lastal`. The rest are named after their one
+/// binary.
+pub fn binary_of(tool: &str) -> &str {
+    match tool {
+        "hmmer" => "hmmsearch",
+        "blast" => "blastp",
+        "last" => "lastal",
+        other => other,
+    }
+}
+
+/// What the binary at `tools/bin/<name>` is right now.
+pub fn identity(tool: &str) -> anyhow::Result<Identity> {
+    let name = binary_of(tool);
+    let path = bin()?.join(name);
+    let bytes = std::fs::read(&path).with_context(|| format!("couldn't read {}", path.display()))?;
+
+    let digest = <sha2::Sha256 as sha2::Digest>::digest(&bytes);
+    let hash: String = digest.iter().take(6).map(|b| format!("{b:02x}")).collect();
+
+    Ok(Identity {
+        name: name.to_string(),
+        version: version_of(&path).unwrap_or_else(|| "-".to_string()),
+        hash,
+    })
+}
+
+/// The first version-shaped token the binary prints, from `--version` or from
+/// `-h`. Every tool here answers one of the two, and none answers both the
+/// same way, so the shape of the token is what is looked for rather than a
+/// per-tool spelling.
+fn version_of(path: &Path) -> Option<String> {
+    // `version` last and bare: mmseqs answers a subcommand rather than a flag,
+    // and a tool that has no such subcommand reads it as a filename, fails,
+    // and prints nothing that matches
+    let mut fallback = None;
+
+    for flag in ["--version", "-h", "version"] {
+        let Ok(out) = Command::new(path).arg(flag).output() else {
+            continue;
+        };
+        if !out.status.success() {
+            continue;
+        }
+
+        let text = String::from_utf8_lossy(&out.stdout);
+        if let Some(found) = text.split_whitespace().find_map(semver) {
+            return Some(found);
+        }
+
+        // mmseqs answers `version` with a commit and no dots in it, which is
+        // its version as much as 3.4 is hmmer's. Kept only if nothing better
+        // turns up, since a help text's first word is not a version
+        if fallback.is_none()
+            && let Some(line) = text.lines().next()
+            && let [word] = line.split_whitespace().collect::<Vec<_>>()[..]
+            && word.len() <= 64
+        {
+            fallback = Some(word.to_string());
+        }
+    }
+
+    fallback
+}
+
+/// A token that looks like a version: digits, a dot, then more of either.
+fn semver(word: &str) -> Option<String> {
+    let trimmed = word.trim_matches(|c: char| !c.is_ascii_alphanumeric());
+    let (before, after) = trimmed.split_once('.')?;
+
+    let ok = !before.is_empty()
+        && before.bytes().all(|b| b.is_ascii_digit())
+        && after.starts_with(|c: char| c.is_ascii_digit());
+
+    ok.then(|| trimmed.to_string())
 }
 
 pub fn nail() -> anyhow::Result<PathBuf> {

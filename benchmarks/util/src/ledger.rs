@@ -23,6 +23,7 @@ use anyhow::{Context, ensure};
 
 use crate::manifest::{self, Manifest};
 use crate::tbl;
+use crate::tools;
 
 /// The shard cell of a row whose wall clock covers every shard of its run at
 /// once, for a search timed as a whole somewhere else.
@@ -87,6 +88,12 @@ pub struct Ledger {
     /// What was left out, as (run or stage, shard), so a caller can say what
     /// is missing rather than quietly reporting a smaller table.
     failed: Vec<(String, String)>,
+    /// The binaries that produced this, taken when the pipeline finished.
+    ///
+    /// Here rather than in an analysis because an analysis can run after a
+    /// rebuild: what a result was produced by is a fact about the run, and the
+    /// run is the only moment it can be read honestly.
+    tools: Vec<tools::Identity>,
 }
 
 impl Ledger {
@@ -160,6 +167,7 @@ impl Ledger {
         Ok(Ledger {
             rows,
             failed: failed_meta(&table.meta),
+            tools: tool_meta(&table.meta),
         })
     }
 
@@ -217,9 +225,14 @@ impl Ledger {
             .collect();
 
         let meta: String = self
-            .failed
+            .tools
             .iter()
-            .map(|(what, shard)| format!("#= failed {} {}\n", dash(what), dash(shard)))
+            .map(|id| format!("#= tool {} {} {}\n", id.name, id.version, id.hash))
+            .chain(
+                self.failed
+                    .iter()
+                    .map(|(what, shard)| format!("#= failed {} {}\n", dash(what), dash(shard))),
+            )
             .collect();
 
         tbl::write(
@@ -315,10 +328,46 @@ impl Ledger {
         &self.failed
     }
 
+    /// The binaries this says produced it, empty for a ledger written before
+    /// they were recorded.
+    pub fn tools(&self) -> &[tools::Identity] {
+        &self.tools
+    }
+
+    /// Reads what each tool named in the rows is right now.
+    ///
+    /// A tool that cannot be read is left out rather than failing the write: a
+    /// ledger with an incomplete provenance line is worth more than no ledger
+    /// at the end of a run that took hours.
+    pub fn stamp(mut self) -> Ledger {
+        let mut names: Vec<String> = self
+            .rows
+            .iter()
+            .map(|row| row.tool.clone())
+            .filter(|tool| !tool.is_empty())
+            .collect();
+        names.sort_unstable();
+        names.dedup();
+
+        self.tools = names
+            .iter()
+            .filter_map(|name| match tools::identity(name) {
+                Ok(id) => Some(id),
+                Err(e) => {
+                    eprintln!("warning: no identity for {name}: {e}");
+                    None
+                }
+            })
+            .collect();
+
+        self
+    }
+
     pub fn from_rows(rows: Vec<Row>) -> Ledger {
         Ledger {
             rows,
             failed: Vec::new(),
+            tools: Vec::new(),
         }
     }
 }
@@ -338,6 +387,31 @@ fn dash(cell: &str) -> String {
         true => "-".to_string(),
         false => cell.to_string(),
     }
+}
+
+fn tool_meta(meta: &[String]) -> Vec<tools::Identity> {
+    let mut out = Vec::new();
+
+    for line in meta {
+        let mut fields = line.split_whitespace();
+        if fields.next() != Some("#=") || fields.next() != Some("tool") {
+            continue;
+        }
+
+        let (Some(name), Some(version), Some(hash)) =
+            (fields.next(), fields.next(), fields.next())
+        else {
+            continue;
+        };
+
+        out.push(tools::Identity {
+            name: name.to_string(),
+            version: version.to_string(),
+            hash: hash.to_string(),
+        });
+    }
+
+    out
 }
 
 fn failed_meta(meta: &[String]) -> Vec<(String, String)> {
@@ -423,7 +497,11 @@ impl Ledger {
             rows.push(group.row());
         }
 
-        Ok(Ledger { rows, failed })
+        Ok(Ledger {
+            rows,
+            failed,
+            tools: Vec::new(),
+        })
     }
 }
 
@@ -569,7 +647,9 @@ pub fn clear(dir: &Path) {
 /// Writes the ledger of a pipeline that has just finished.
 pub fn record(dir: &Path) -> anyhow::Result<()> {
     let out = path(dir);
-    Ledger::distill(&dir.join("manifest.tbl"))?.write(&out)?;
+    Ledger::distill(&dir.join("manifest.tbl"))?
+        .stamp()
+        .write(&out)?;
 
     println!("wrote {}", out.display());
     Ok(())

@@ -125,6 +125,7 @@ pub fn collect(args: Args<'_>) -> anyhow::Result<Count> {
         cutoffs: collect::absolute(args.cutoffs),
         c: args.c,
         runs: columns.iter().map(|column| column.run.clone()).collect(),
+        tools: ran.tools().to_vec(),
     };
 
     // every run here is measured against what hmmer found, and the domain

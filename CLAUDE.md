@@ -104,6 +104,26 @@ No benchmark looks on `PATH`. `util::tools` holds the path to every binary and
 every download, and a benchmark reads it rather than guessing, so a run uses
 whichever `hmmsearch` was built for this repo.
 
+### Which build of a tool ran
+
+`make nail` installs the pinned tarball. `make nail NAIL_SRC=/path/to/nail`
+builds from a working tree instead, which is how an unreleased fix gets used.
+One nail is installed at a time, and `tools/installed.tbl` records what each
+rule installed: the version, a sha256 of the binary and where it came from.
+
+The hash is the part that matters. A version string cannot tell two builds
+apart -- a release and a working tree can both say `nail 0.7.1` and be different
+binaries -- and a tree's binary changes whenever the tree does. So `make check`
+compares the hash on disk against the one recorded and says when they differ,
+and `util::tools::identity` computes the same digest at run time rather than
+reading the table, which is the only way it cannot be stale.
+
+A pipeline stamps what it ran with: `ledger.tbl` gets a `#= tool <name>
+<version> <hash>` line per tool when the run finishes, and `parse` carries
+those into `runs.tbl` and `scores.tbl`. The run is the only moment this can be
+read honestly, since an analysis may happen after a rebuild. A table written
+before this existed has no such line and still reads.
+
 `pid` reads a set like everything else now. What kept it out was a
 record-level truth table, and the answer was for `set.tbl` to name the file
 rather than carry it -- see the `profmark` shape. It still keeps its own copy of

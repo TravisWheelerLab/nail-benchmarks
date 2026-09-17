@@ -7,4 +7,5 @@ edition = "2024"
 anyhow = { workspace = true }
 libsail = { workspace = true }
 serde = { workspace = true }
+sha2 = { workspace = true }
 toml = { workspace = true }

@@ -1,4 +1,4 @@
-MAKEFILE_DIR := $(dir $(abspath $(lastword $(MAKEFILE_LIST))))
+MAKEFILE_DIR := $(patsubst %/,%,$(dir $(abspath $(lastword $(MAKEFILE_LIST)))))
 .DEFAULT_GOAL := none
 # a recipe that dies partway leaves no target behind. it reaches the
 # decompression step's output and pfam.hmm, not the downloads: those land in a
@@ -149,6 +149,39 @@ TOOL_BIN := $(TOOL_DIR)/bin
 $(TOOL_BIN):
 	@mkdir -p $@
 
+# What is installed, written by the rule that installed it.
+#
+# The version string is not enough to tell two builds apart -- a working tree
+# and a release can both say `nail 0.7.1` and be different binaries -- so the
+# row carries a hash of the bytes and where they came from. `make check` reads
+# it back and says when the binary no longer matches.
+INSTALLED := $(TOOL_DIR)/installed.tbl
+
+# $(1) the tool, $(2) where it came from. Replaces that tool's row.
+define record_tool
+	@for name in $(1); do \
+	bin=$(TOOL_BIN)/$$name; \
+	[ -e "$$bin" ] || continue; \
+	real=$$(readlink -f "$$bin"); \
+	ver=$$({ "$$bin" --version 2>/dev/null || "$$bin" -h 2>/dev/null; } \
+	        | grep -m1 -oE '[0-9]+\.[0-9]+[0-9a-zA-Z.+-]*' || true); \
+	sum=$$(sha256sum "$$real" | cut -c1-12); \
+	mkdir -p $(TOOL_DIR); \
+	touch $(INSTALLED); \
+	grep -v "^  $$name " $(INSTALLED) > $(INSTALLED).new 2>/dev/null || true; \
+	grep -q '^# name' $(INSTALLED).new 2>/dev/null || { \
+	  printf '# %-16s %-12s %-12s %-10s %s\n' name version sha256 built source \
+	    > $(INSTALLED).new; \
+	  printf '# %-16s %-12s %-12s %-10s %s\n' ---------------- ------------ \
+	    ------------ ---------- ------; \
+	}; \
+	printf '  %-16s %-12s %-12s %-10s %s\n' "$$name" "$${ver:--}" "$$sum" \
+	  "$$(date +%F)" "$(2)" >> $(INSTALLED).new; \
+	mv $(INSTALLED).new $(INSTALLED); \
+	printf 'installed %s %s %s from %s\n' "$$name" "$${ver:--}" "$$sum" "$(2)"; \
+	done
+endef
+
 NAIL        := $(TOOL_BIN)/nail
 PHMMER      := $(TOOL_BIN)/phmmer
 HMMSEARCH   := $(TOOL_BIN)/hmmsearch
@@ -168,6 +201,16 @@ DIAMOND     := $(TOOL_BIN)/diamond
 
 .PHONY: nail hmmer mmseqs blast last diamond
 
+# A nail working tree to build from, for a fix that is not released yet:
+#
+#     make nail NAIL_SRC=/path/to/nail
+#
+# Unset downloads the pinned tarball below, which is what a fresh clone gets.
+# Only one nail is installed at a time, and `make check` prints which, since a
+# working tree's binary changes whenever the tree does and the version string
+# does not move with it.
+NAIL_SRC ?=
+
 NAIL_SRC_URL  := https://github.com/TravisWheelerLab/nail/archive/refs/tags/nail-v0.7.1.tar.gz
 NAIL_SRC_TGZ  := $(TOOL_DIR)/nail.tgz
 NAIL_SRC_DIR  := $(TOOL_DIR)/nail
@@ -176,12 +219,20 @@ NAIL_TGT_DIR  := $(NAIL_SRC_DIR)/target
 # would otherwise move the binary and leave the symlink dangling, since ln -s
 # does not check
 nail: $(TOOL_BIN)
+ifeq ($(strip $(NAIL_SRC)),)
 	@wget -O $(NAIL_SRC_TGZ) $(NAIL_SRC_URL)
 	@mkdir -p $(NAIL_SRC_DIR)
 	@tar --strip-components=1 -xzf $(NAIL_SRC_TGZ) -C $(NAIL_SRC_DIR)
 	@cd $(NAIL_SRC_DIR) && cargo build --release -p nail --target-dir $(NAIL_TGT_DIR)
 	@rm $(NAIL_SRC_TGZ)
 	@ln -sf $(NAIL_TGT_DIR)/release/nail $(NAIL)
+	$(call record_tool,nail,$(NAIL_SRC_URL))
+else
+	@test -f "$(NAIL_SRC)/Cargo.toml" || 	  { echo "no Cargo.toml in $(NAIL_SRC); NAIL_SRC wants a nail checkout" >&2; exit 1; }
+	@cd "$(NAIL_SRC)" && cargo build --release -p nail --target-dir "$(NAIL_SRC)/target"
+	@ln -sf "$(NAIL_SRC)/target/release/nail" $(NAIL)
+	$(call record_tool,nail,$(NAIL_SRC))
+endif
 
 HMMER_SRC_URL := http://eddylab.org/software/hmmer/hmmer-3.4.tar.gz
 HMMER_SRC_TGZ := $(TOOL_DIR)/hmmer.tgz
@@ -205,6 +256,7 @@ hmmer: $(TOOL_BIN)
 	@ln -sf $(HMMER_BIN_DIR)/hmmemit $(HMMEMIT)
 	@ln -sf $(HMMER_SRC_DIR)/profmark/create-profmark $(PROFMARK)
 	@rm $(HMMER_SRC_TGZ)
+	$(call record_tool,hmmsearch phmmer hmmbuild hmmemit esl-seqstat esl-alistat hmmstat create-profmark,$(HMMER_SRC_URL))
 
 MMSEQS_BIN_TGZ := $(TOOL_DIR)/mmseqs.tgz
 MMSEQS_DIR     := $(TOOL_DIR)/mmseqs
@@ -216,6 +268,7 @@ mmseqs: $(TOOL_BIN)
 	@tar --strip-components=1 -xzf $(MMSEQS_BIN_TGZ) -C $(MMSEQS_DIR)
 	@rm $(MMSEQS_BIN_TGZ)
 	@ln -sf $(MMSEQS_BIN) $(MMSEQS)
+	$(call record_tool,mmseqs,$(MMSEQS_BIN_URL))
 
 LAST_SRC_URL := https://gitlab.com/mcfrith/last/-/archive/1642/last-1642.tar.gz
 LAST_SRC_TGZ := $(TOOL_DIR)/last.tgz
@@ -229,6 +282,7 @@ last: $(TOOL_BIN)
 	@rm $(LAST_SRC_TGZ)
 	@ln -sf $(LAST_BIN_DIR)/lastal $(LASTAL)
 	@ln -sf $(LAST_BIN_DIR)/lastdb $(LASTDB)
+	$(call record_tool,lastal lastdb,$(LAST_SRC_URL))
 
 BLAST_BIN_TGZ := $(TOOL_DIR)/blast.tgz
 BLAST_DIR     := $(TOOL_DIR)/blast
@@ -242,6 +296,7 @@ blast: $(TOOL_BIN)
 	@ln -sf $(BLAST_BIN_DIR)/blastp $(BLASTP)
 	@ln -sf $(BLAST_BIN_DIR)/psiblast $(PSIBLAST)
 	@ln -sf $(BLAST_BIN_DIR)/makeblastdb $(MAKEBLASTDB)
+	$(call record_tool,blastp psiblast makeblastdb,$(BLAST_BIN_URL))
 
 DIAMOND_BIN_TGZ := $(TOOL_DIR)/diamond.tgz
 diamond: $(TOOL_BIN)
@@ -249,6 +304,7 @@ diamond: $(TOOL_BIN)
 	@wget -O $(DIAMOND_BIN_TGZ) $(DIAMOND_BIN_URL)
 	@tar -xzf $(DIAMOND_BIN_TGZ) -C $(TOOL_BIN)
 	@rm $(DIAMOND_BIN_TGZ)
+	$(call record_tool,diamond,$(DIAMOND_BIN_URL))
 
 # built from source, so every platform can have them
 TOOLS := nail hmmer last
@@ -287,9 +343,28 @@ check:
 	  elif ! "$$bin" $$flag >/dev/null 2>&1; then \
 	    note="$$flag exited nonzero"; \
 	  fi; \
+	  if [ -z "$$note" ]; then \
+	    row=$$(awk -v n="$$name" '!/^#/ && $$1 == n { print; exit }' $(INSTALLED) 2>/dev/null); \
+	    if [ -z "$$row" ]; then \
+	      row=; \
+	    else \
+	      want=$$(echo "$$row" | awk '{ print $$3 }'); \
+	      have=$$(sha256sum "$$(readlink -f "$$bin")" | cut -c1-12); \
+	      if [ "$$want" != "$$have" ]; then \
+	        note="rebuilt since it was installed: $$want on record, $$have on disk"; \
+	      fi; \
+	    fi; \
+	  fi; \
 	  if [ -n "$$note" ]; then \
 	    fail=1; printf '  ✘ %-18s %s\n' "$$name" "$$note"; \
-	  else printf '  ✔ %s\n' "$$name"; fi; \
+	  else \
+	    if [ -z "$$row" ]; then \
+	      printf '  ✔ %-18s %s\n' "$$name" "no record; predates installed.tbl"; \
+	    else \
+	      printf '  ✔ %-18s %s\n' "$$name" \
+	        "$$(echo "$$row" | awk '{ printf "%-8s %s  %s", $$2, $$3, $$5 }')"; \
+	    fi; \
+	  fi; \
 	done; \
 	echo; \
 	echo "data  $(DATA_DIR)"; \

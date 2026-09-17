@@ -486,6 +486,10 @@ pub struct Meta {
     pub cutoffs: PathBuf,
     pub c: usize,
     pub runs: Vec<Run>,
+    /// The binaries that produced the results this was read from, carried
+    /// through from the run's ledger. Empty for a table written before they
+    /// were recorded.
+    pub tools: Vec<util::tools::Identity>,
 }
 
 impl Meta {
@@ -509,6 +513,10 @@ impl Meta {
                 size.residues,
                 size.bytes
             )?;
+        }
+
+        for id in &self.tools {
+            writeln!(out, "#= tool {} {} {}", id.name, id.version, id.hash)?;
         }
 
         for (name, wall) in &self.seeds {
@@ -576,6 +584,7 @@ pub struct Preamble {
     cutoffs: Option<PathBuf>,
     c: Option<usize>,
     runs: Vec<Run>,
+    tools: Vec<util::tools::Identity>,
     pass: Vec<String>,
 }
 
@@ -601,6 +610,17 @@ impl Preamble {
                     .map(str::parse)
                     .transpose()?;
             }
+            "tool" => {
+                let [name, version, hash] = fields else {
+                    bail!("a `#= tool` line wants a name, a version and a hash");
+                };
+
+                self.tools.push(util::tools::Identity {
+                    name: name.to_string(),
+                    version: version.to_string(),
+                    hash: hash.to_string(),
+                });
+            }
             "run" => self.runs.push(run(fields)?),
             "pass" => self.pass = fields.iter().map(|name| name.to_string()).collect(),
             other => bail!("unknown `#= {other}` line"),
@@ -618,6 +638,7 @@ impl Preamble {
             cutoffs: self.cutoffs.context("no `#= cutoffs` line")?,
             c: self.c.context("no `c=` on the `#= cutoffs` line")?,
             runs: self.runs,
+            tools: self.tools,
         };
 
         ensure!(!meta.runs.is_empty(), "no `#= run` lines");
