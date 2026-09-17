@@ -5,7 +5,7 @@
 # sensitivities, no threads. Paths are relative to this file.
 #
 # Every benchmark gets its own two sets. Sharing one would hide what a
-# benchmark actually reads: cloud-search and hit-loss search a single unit, and
+# benchmark actually reads: cloud-search and loss-decomp search a single unit, and
 # for a long time they did that by opening shard 1 of recall's thousand.
 #
 # A set and everything derived from it share a directory, so `out` is the
@@ -32,7 +32,7 @@ targets    = "../../data/mgnify"
 out        = "../../store/recall-real/inputs"
 shards     = 1000
 
-# ------------------------------------------------- cloud-search and hit-loss
+# ------------------------------------------------- cloud-search and loss-decomp
 
 # One unit each, so one shard is the whole set. Its size matches one of
 # recall-real's thousand, which is what keeps a cell's cost readable against a
@@ -56,22 +56,22 @@ out        = "../../store/cloud-search-real/inputs"
 shards     = 1
 seqs       = 2455939
 
-[hit-loss-toy]
+[loss-decomp-toy]
 shape      = "fixed"
 queries    = "../../data/pfam.hmm"
 alignments = "../../data/pfam.sto"
 targets    = "../../data/mgnify"
-out        = "../../store/hit-loss-toy/inputs"
+out        = "../../store/loss-decomp-toy/inputs"
 shards     = 1
 seqs       = 400
 fams       = 5
 
-[hit-loss-real]
+[loss-decomp-real]
 shape      = "fixed"
 queries    = "../../data/pfam.hmm"
 alignments = "../../data/pfam.sto"
 targets    = "../../data/mgnify"
-out        = "../../store/hit-loss-real/inputs"
+out        = "../../store/loss-decomp-real/inputs"
 shards     = 1
 seqs       = 2455939
 

@@ -26,7 +26,7 @@ pub enum Cmd {
     Summary(TableArgs),
     /// Where the hits hmmer found were lost, one row per run per
     /// checkpoint.
-    Funnel(TableArgs),
+    Stages(TableArgs),
 }
 
 pub fn main(cmd: Cmd) -> anyhow::Result<()> {
@@ -34,7 +34,7 @@ pub fn main(cmd: Cmd) -> anyhow::Result<()> {
         Cmd::Scores(args) => scores(args),
         Cmd::Runs(args) => runs(args),
         Cmd::Summary(args) => summary(args),
-        Cmd::Funnel(args) => funnel(args),
+        Cmd::Stages(args) => stages(args),
     }
 }
 
@@ -222,11 +222,11 @@ fn summary(args: TableArgs) -> anyhow::Result<()> {
     Ok(())
 }
 
-fn funnel(args: TableArgs) -> anyhow::Result<()> {
+fn stages(args: TableArgs) -> anyhow::Result<()> {
     let path = table(&args, &["runs.tbl"])?;
-    let out = beside(&path, args.out, "funnel.tbl")?;
+    let out = beside(&path, args.out, "stages.tbl")?;
 
-    analyze::funnel(&path, &out)?;
+    analyze::stages(&path, &out)?;
 
     println!("wrote {}", out.display());
     Ok(())

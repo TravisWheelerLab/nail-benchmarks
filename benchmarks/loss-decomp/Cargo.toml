@@ -1,10 +1,10 @@
 [package]
-name = "hit-loss"
+name = "loss-decomp"
 version = "0.1.0"
 edition = "2024"
 
 [[bin]]
-name = "hit-loss"
+name = "loss-decomp"
 path = "src/main.rs"
 
 [dependencies]

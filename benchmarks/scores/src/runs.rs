@@ -334,7 +334,7 @@ impl<R: Read> Reader<R> {
     pub fn present(&self, run: usize) -> bool {
         // presence, not a cutoff: a pair that survived to be
         // scored badly was not dropped, which is the
-        // distinction the funnel is built on
+        // distinction the stages is built on
         self.frame.filled(self.scores + run)
     }
 

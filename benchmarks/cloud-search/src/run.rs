@@ -158,8 +158,7 @@ pub fn main(args: Args, paths: &crate::Paths) -> anyhow::Result<()> {
             &dirs.seeds(&args.shard),
             &dirs,
             args.threads,
-            SEED_S,
-            SEED_MODE,
+            &search::Seeding::new(SEED_S, SEED_MODE),
             &[(manifest::STAGE, search::SEED.to_string())],
         ));
 

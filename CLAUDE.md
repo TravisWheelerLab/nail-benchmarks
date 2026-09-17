@@ -52,7 +52,7 @@ benchmarks/store/         what can be done to the store: import | clean
 
 benchmarks/recall/        recall against prefilter sensitivity   [fixed]
 benchmarks/cloud-search/  the (A, B) pruning surface             [fixed]
-benchmarks/hit-loss/      where hmmer's hits get lost            [fixed]
+benchmarks/loss-decomp/   where nail loses hmmer's hits, by stage [fixed]
 benchmarks/calibrate/     what a run will cost  [ladder]  ON ICE, see below
 benchmarks/cutoffs/       per-family score cutoffs from decoys    [fixed]
 benchmarks/long-seqs/     how the tools scale with length         [pairs]
@@ -82,16 +82,16 @@ recall's:
   the only benchmark that sweeps mmseqs. Another 16 have no consumer at all:
   `cat`, `MMSEQS_K`, `Dirs.results`. The remaining ~325 -- `Dirs`, `Split`,
   `Hmmer`, `Bins`, `jobs`, `HMMER_CPU` -- are used by recall, cloud-search and
-  hit-loss alike.
+  loss-decomp alike.
 - `scores`, 4,200 lines. Roughly 680 are recall alone: `write.rs` and
   `read.rs`, which are the `scores.tbl` grammar. Nothing at all is exclusive to
-  cloud-search or to hit-loss.
+  cloud-search or to loss-decomp.
 
 The seam that shows up is the one the two table grammars already draw, rather
 than a split between reading and analysing: `scores.tbl` is recall's and
-nobody else's, `runs.tbl` is cloud-search's and hit-loss's. hit-loss's use of
+nobody else's, `runs.tbl` is cloud-search's and loss-decomp's. loss-decomp's use of
 the crate is a strict subset of cloud-search's -- both write `runs.tbl` and
-read `funnel`, and cloud-search also reads `summary`.
+read `stages`, and cloud-search also reads `summary`.
 
 All three reach `scores` only through `scores::parse`. No binary names
 `analyze`, `write`, `runs`, `frame`, `read`, `shard` or `collect`, so what sits
@@ -202,7 +202,7 @@ builder stamps `#= shape` and the benchmark names the one it reads, and
 
 | shape | representations | attributes | read by |
 |---|---|---|---|
-| `fixed` | `query_hmm`, `query_sto`, `query_db`, `target` | `shard`, `seqs`, `residues`, `bytes` | recall, cloud-search, hit-loss |
+| `fixed` | `query_hmm`, `query_sto`, `query_db`, `target` | `shard`, `seqs`, `residues`, `bytes` | recall, cloud-search, loss-decomp |
 | `reversed` | the same as `fixed` | the same as `fixed` | cutoffs |
 | `ladder` | the same | `query_rung`, `target_rung`, `query_residues`, `target_residues` | calibrate |
 | `pairs` | `query_fa`, `target` | `pair`, `query_residues`, `residues` | long-seqs |
@@ -257,7 +257,7 @@ the labels its file holds.
 Every benchmark has exactly two, `toy` and `real`, over two sets of its own:
 `build-set` names them `<benchmark>-toy` and `<benchmark>-real`. A benchmark
 sharing a set with another needs a reason, because a shared set hides what a
-benchmark reads. cloud-search and hit-loss search a single unit, and they did
+benchmark reads. cloud-search and loss-decomp search a single unit, and they did
 that by opening shard 1 of recall's thousand, so their real sets are one shard
 the size of one of recall's rather than a thousand of them.
 
@@ -346,7 +346,12 @@ search.
 Three benchmarks. `recall` searches every shard while sweeping nail's and
 MMseqs2's prefilter sensitivity. `cloud-search` seeds once, then searches every
 `(A, B)` pruning cell off those same seeds, so the pruning parameters are the
-only thing moving. `hit-loss` follows where the hits HMMER finds get lost.
+only thing moving. `loss-decomp` asks where nail loses the hits HMMER finds,
+and decomposes that across the seeding knobs: `static` against
+`--mmseqs-max-seqs`, and `prog` against `--prog-n` and `--prog-f`. Every arm is
+a seed list of its own and a nail that replays it; hmmer runs once outside the
+sweep, because the truth set is the same for all of them and is most of the
+wall clock -- 59 minutes of a 68-minute real run, against 8 minutes an arm.
 
 `build-set` counts each shard as it deals it and writes the counts into
 `set.tbl`: counting a thousand shards afterwards is the whole deal read again,
@@ -365,7 +370,7 @@ scores them, so one column per tool is the honest shape and the cheap one --
 six runs over a thousand shards is four billion rows, and a column per run is
 what made an earlier grammar write 700 GB.
 
-`cloud-search parse runs --in <label>` reads cloud-search and hit-loss into `runs.tbl`: one score
+`cloud-search parse runs --in <label>` reads cloud-search and loss-decomp into `runs.tbl`: one score
 column per run, plus a `seeded` column where the pipeline kept a seed list.
 `-A` and `-B` constrain the dynamic programming, so two cells can score one
 pair differently, and that is what the sweep measures.
@@ -375,12 +380,12 @@ Both are collected the same way: each shard on its own, written as a block in
 shard order, so the file comes out the same bytes however many threads it ran.
 `--threads` and `--mem` size that. `summary` is one streaming pass and reads
 either grammar -- it reads only the `pass` string and the domain list, and
-those sit in the same place in both. `funnel` reads `runs.tbl` alone, because where a
+those sit in the same place in both. `stages` reads `runs.tbl` alone, because where a
 pair was dropped is a question about a run rather than about a tool.
 
     recall        parse scores → parse summary
     cloud-search  parse runs   → parse summary → plot
-    hit-loss      parse runs   → parse funnel
+    loss-decomp      parse runs   → parse stages
 
 `plot` draws two figures off cloud-search's summary: the `(A, B)` heatmaps, and
 a tradeoff of every cell in wall time against sensitivity, where the `full`

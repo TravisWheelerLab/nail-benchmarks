@@ -25,7 +25,7 @@ use util::split::{self, Kind};
 /// These are settings of the comparison rather than of any one pipeline. They
 /// sat on whichever pipeline first needed them, which left `calibrate` reading
 /// three other pipelines' constants to price them, and left cloud-search and
-/// hit-loss holding a value each had to keep equal to the other by hand.
+/// loss-decomp holding a value each had to keep equal to the other by hand.
 pub mod sweeps {
     /// nail's seeding mode. Every pipeline that seeds uses this one, so a
     /// seed set from one is the seed set another would have got.
@@ -34,7 +34,7 @@ pub mod sweeps {
     /// The sensitivity the pipelines that seed once seed at.
     ///
     /// Named apart from [`MMSEQS_S`] because it is one setting rather than a
-    /// sweep: cloud-search and hit-loss seed at this and then vary something
+    /// sweep: cloud-search and loss-decomp seed at this and then vary something
     /// else. They used to spell it `MMSEQS_S` separately, with a comment on
     /// each saying it had to match the other.
     pub const SEED_S: &str = "12.0";
@@ -303,6 +303,36 @@ pub const SEED: &str = "seed";
 /// which is what lets a pipeline ask where a hit was lost rather than only
 /// whether it survived.
 #[allow(clippy::too_many_arguments)]
+/// What decides how many alignments the seeding stage does.
+///
+/// `static` aligns everything the prefilter passed, so `max_seqs` bounds the
+/// work directly. `prog` aligns from `prog_n` upward while the hit fraction
+/// holds above `prog_f`. A `None` leaves nail on its own default.
+pub struct Seeding<'a> {
+    pub mmseqs_s: &'a str,
+    pub mode: &'a str,
+    /// `--mmseqs-max-seqs`: how much of the prefilter is allowed through.
+    pub max_seqs: Option<usize>,
+    /// `--prog-n`: the first round's alignments per query. prog mode only.
+    pub prog_n: Option<usize>,
+    /// `--prog-f`: the hit fraction that keeps it going. prog mode only.
+    pub prog_f: Option<f64>,
+}
+
+impl<'a> Seeding<'a> {
+    /// Seeding at a sensitivity and mode, every other knob left to nail.
+    pub fn new(mmseqs_s: &'a str, mode: &'a str) -> Seeding<'a> {
+        Seeding {
+            mmseqs_s,
+            mode,
+            max_seqs: None,
+            prog_n: None,
+            prog_f: None,
+        }
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
 pub fn seed(
     nail: &Path,
     mmseqs: &Path,
@@ -312,17 +342,28 @@ pub fn seed(
     seeds_out: &Path,
     dirs: &Dirs,
     threads: usize,
-    mmseqs_s: &str,
-    seed_mode: &str,
+    seeding: &Seeding,
     fields: &[(&str, String)],
 ) -> Step {
-    let cmd = Cmd::new(nail)
+    let mut cmd = Cmd::new(nail)
         .sub("search")
         .arg("--mmseqs-path", mmseqs)
         .arg("-t", threads)
         .arg("--tmp-dir", dirs.tmp.join("seeding"))
-        .arg("--mmseqs-s", mmseqs_s)
-        .arg("--seed-mode", seed_mode)
+        .arg("--mmseqs-s", seeding.mmseqs_s)
+        .arg("--seed-mode", seeding.mode);
+
+    if let Some(n) = seeding.max_seqs {
+        cmd = cmd.arg("--mmseqs-max-seqs", n);
+    }
+    if let Some(n) = seeding.prog_n {
+        cmd = cmd.arg("--prog-n", n);
+    }
+    if let Some(f) = seeding.prog_f {
+        cmd = cmd.arg("--prog-f", f);
+    }
+
+    let cmd = cmd
         .arg("--seeds-out", seeds_out)
         .flag("--only-seed")
         .flag("--allow-overwrite")

@@ -14,7 +14,7 @@ use clap::{Parser, Subcommand};
 pub const SHAPE: &util::set::Shape = &util::set::shape::FIXED;
 
 #[derive(Parser)]
-#[command(name = "hit-loss", about = "where hmmer's hits get lost")]
+#[command(name = "loss-decomp", about = "where hmmer's hits get lost")]
 struct Cli {
     #[command(subcommand)]
     command: Command,
@@ -35,7 +35,7 @@ enum Parse {
     /// run, and whether seeding found the pair.
     Runs(scores::parse::ScoresArgs),
     /// Where the hits hmmer found were lost, one row per run per checkpoint.
-    Funnel(scores::parse::TableArgs),
+    Stages(scores::parse::TableArgs),
 }
 
 /// Where this benchmark reads and writes, as one label of `paths.toml` names
@@ -74,14 +74,14 @@ impl Paths {
     }
 }
 
-const USAGE: &str = "hit-loss <run|parse> --in <label>";
+const USAGE: &str = "loss-decomp <run|parse> --in <label>";
 
 impl Command {
     fn label(&self) -> Option<&str> {
         match self {
             Command::Run(a) => a.label.as_deref(),
             Command::Parse(Parse::Runs(a)) => a.label.as_deref(),
-            Command::Parse(Parse::Funnel(a)) => a.label.as_deref(),
+            Command::Parse(Parse::Stages(a)) => a.label.as_deref(),
         }
     }
 
@@ -94,9 +94,9 @@ impl Command {
                 a.analysis = paths.analysis.clone();
                 scores::parse::main(scores::parse::Cmd::Runs(a))
             }
-            Command::Parse(Parse::Funnel(mut a)) => {
+            Command::Parse(Parse::Stages(mut a)) => {
                 a.analysis = paths.analysis.clone();
-                scores::parse::main(scores::parse::Cmd::Funnel(a))
+                scores::parse::main(scores::parse::Cmd::Stages(a))
             }
         }
     }

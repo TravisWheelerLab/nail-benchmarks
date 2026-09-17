@@ -1,0 +1,16 @@
+# Where loss-decomp reads and writes. Paths only, relative to this file.
+#
+# Its own two sets: sharing one with another benchmark would hide what this one
+# actually reads. A set and everything derived from it share a directory.
+
+[toy]
+set      = "../../store/loss-decomp-toy/inputs"
+run      = "../../store/loss-decomp-toy/outputs/loss-decomp"
+analysis = "../../store/loss-decomp-toy/analysis/loss-decomp"
+tmp      = "../../store/loss-decomp-toy/tmp/loss-decomp"
+
+[real]
+set      = "../../store/loss-decomp-real/inputs"
+run      = "../../store/loss-decomp-real/outputs/loss-decomp"
+analysis = "../../store/loss-decomp-real/analysis/loss-decomp"
+tmp      = "../../store/loss-decomp-real/tmp/loss-decomp"

@@ -43,7 +43,7 @@ enum Parse {
     /// What every run found and what it cost, one row per run.
     Summary(scores::parse::TableArgs),
     /// Where the hits hmmer found were lost, one row per run per checkpoint.
-    Funnel(scores::parse::TableArgs),
+    Stages(scores::parse::TableArgs),
 }
 
 /// This crate's directory, fixed at compile time. The plot script hangs off
@@ -97,7 +97,7 @@ impl Command {
             Command::Plot(a) => a.label.as_deref(),
             Command::Parse(Parse::Runs(a)) => a.label.as_deref(),
             Command::Parse(Parse::Summary(a)) => a.label.as_deref(),
-            Command::Parse(Parse::Funnel(a)) => a.label.as_deref(),
+            Command::Parse(Parse::Stages(a)) => a.label.as_deref(),
         }
     }
 
@@ -115,9 +115,9 @@ impl Command {
                 a.analysis = paths.analysis.clone();
                 scores::parse::main(scores::parse::Cmd::Summary(a))
             }
-            Command::Parse(Parse::Funnel(mut a)) => {
+            Command::Parse(Parse::Stages(mut a)) => {
                 a.analysis = paths.analysis.clone();
-                scores::parse::main(scores::parse::Cmd::Funnel(a))
+                scores::parse::main(scores::parse::Cmd::Stages(a))
             }
         }
     }

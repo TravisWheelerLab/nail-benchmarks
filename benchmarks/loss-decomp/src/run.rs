@@ -22,15 +22,52 @@ use clap::Parser;
 
 use michi::{Cmd, PipelineBuilder, Progress, Step, Table};
 
-use search::sweeps::{SEED_MODE, SEED_S};
+use search::sweeps::SEED_S;
 use search::{self, Bins, Dirs, Split};
 use util::ledger;
 use util::manifest;
 use util::set::Set;
 
-/// The columns the two runs become.
-const RUN: &str = "nail";
+/// The column hmmer's run becomes, which every arm is measured against.
 const HMMER: &str = "hmmer";
+
+/// One arm of the sweep: a seeding, and the run name its column takes.
+//
+// the knobs are all seeding knobs, so an arm is a seed list of its own and a
+// nail that replays it. hmmer and the query split sit outside: the truth set
+// is the same for every arm, and it is most of the wall clock
+struct Arm {
+    name: String,
+    seeding: search::Seeding<'static>,
+}
+
+impl Arm {
+    fn static_(max_seqs: usize) -> Arm {
+        Arm {
+            name: format!("static-ms{max_seqs}"),
+            seeding: search::Seeding {
+                mmseqs_s: SEED_S,
+                mode: "static",
+                max_seqs: Some(max_seqs),
+                prog_n: None,
+                prog_f: None,
+            },
+        }
+    }
+
+    fn prog(n: usize, f: f64) -> Arm {
+        Arm {
+            name: format!("prog-n{n}-f{f}"),
+            seeding: search::Seeding {
+                mmseqs_s: SEED_S,
+                mode: "prog",
+                max_seqs: None,
+                prog_n: Some(n),
+                prog_f: Some(f),
+            },
+        }
+    }
+}
 
 #[derive(Parser, Debug)]
 pub struct Args {
@@ -47,6 +84,33 @@ pub struct Args {
     /// gate itself
     #[arg(long, default_value_t = 1e6, value_name = "X")]
     nail_evalue: f64,
+
+    /// `--mmseqs-max-seqs` values to sweep in static mode
+    #[arg(
+        long,
+        value_delimiter = ',',
+        default_value = "200,2000,20000",
+        value_name = "N,N,..."
+    )]
+    max_seqs: Vec<usize>,
+
+    /// `--prog-n` values to sweep in prog mode
+    #[arg(
+        long,
+        value_delimiter = ',',
+        default_value = "50,200,800",
+        value_name = "N,N,..."
+    )]
+    prog_n: Vec<usize>,
+
+    /// `--prog-f` values to sweep in prog mode
+    #[arg(
+        long,
+        value_delimiter = ',',
+        default_value = "0.001,0.01,0.1",
+        value_name = "X,X,..."
+    )]
+    prog_f: Vec<f64>,
 
     /// Threads per search, and the cores each search is pinned to
     #[arg(short, long, default_value_t = 8)]
@@ -98,20 +162,41 @@ pub fn main(args: Args, paths: &crate::Paths) -> anyhow::Result<()> {
 
     let mut pl = PipelineBuilder::new()
         .step(dirs.mkdir())
-        .step(split.step(&[]))
-        .step(search::seed(
-            &bins.nail,
-            &bins.mmseqs,
-            &query_hmm,
-            &target,
-            &args.shard,
-            &dirs.seeds(&args.shard),
-            &dirs,
-            args.threads,
-            SEED_S,
-            SEED_MODE,
-            &[(manifest::STAGE, search::SEED.to_string())],
-        ));
+        .step(split.step(&[]));
+
+    // static aligns the whole prefilter, so max-seqs bounds it; prog aligns
+    // from prog-n upward while the hit fraction holds. one arm, one seed list
+    let arms: Vec<Arm> = args
+        .max_seqs
+        .iter()
+        .map(|&n| Arm::static_(n))
+        .chain(
+            args.prog_n
+                .iter()
+                .flat_map(|&n| args.prog_f.iter().map(move |&f| Arm::prog(n, f))),
+        )
+        .collect();
+
+    ensure!(!arms.is_empty(), "the sweep has no arms");
+    println!("{} arms over shard {}", arms.len(), args.shard);
+
+    for arm in &arms {
+        pl = pl.step(
+            search::seed(
+                &bins.nail,
+                &bins.mmseqs,
+                &query_hmm,
+                &target,
+                &args.shard,
+                &dirs.seeds(&arm.name),
+                &dirs,
+                args.threads,
+                &arm.seeding,
+                &[(manifest::STAGE, search::SEED.to_string())],
+            )
+            .name(format!("seeds.{}", arm.name)),
+        );
+    }
 
     let hmmer = search::hmmer(
         &bins.hmmsearch,
@@ -124,28 +209,31 @@ pub fn main(args: Args, paths: &crate::Paths) -> anyhow::Result<()> {
     );
     pl = pl.step(hmmer.search).step(hmmer.cat);
 
-    let pipeline = pl
-        .step(
+    for arm in &arms {
+        pl = pl.step(
             Step::serial([Cmd::new(&bins.nail)
                 .sub("search")
                 // nail looks for mmseqs at startup even when it is replaying
                 // seeds and will never call it, and nothing here is on PATH
                 .arg("--mmseqs-path", &bins.mmseqs)
                 .arg("-t", args.threads)
-                .arg("--seeds", dirs.seeds(&args.shard))
+                .arg("--seeds", dirs.seeds(&arm.name))
                 .arg("-E", args.nail_evalue)
-                .arg("--tmp-dir", dirs.tmp.join("align"))
-                .arg("--tbl-out", dirs.table(RUN, &args.shard))
+                .arg("--tmp-dir", dirs.tmp.join("align").join(&arm.name))
+                .arg("--tbl-out", dirs.table(&arm.name, &args.shard))
                 .flag("--allow-overwrite")
                 .path(&query_hmm)
                 .path(&target)
-                .field(manifest::NAME, RUN)
+                .field(manifest::NAME, &arm.name)
                 .field(manifest::TOOL, "nail")
                 .field(manifest::SHARD, &args.shard)
                 .field("E", args.nail_evalue)])
-            .name(RUN)
+            .name(arm.name.clone())
             .cores(args.threads),
-        )
+        );
+    }
+
+    let pipeline = pl
         .stderr_dir(dirs.tmp.join("stderr"))
         .sink(Progress::new())
         .sink(Table::new(dirs.root.join("manifest.tbl")))

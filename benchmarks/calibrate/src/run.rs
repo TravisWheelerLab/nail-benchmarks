@@ -200,8 +200,7 @@ pub fn main(args: Args, paths: &crate::Paths) -> anyhow::Result<()> {
                             &seeds,
                             &dirs,
                             args.threads,
-                            s,
-                            SEED_MODE,
+                            &search::Seeding::new(s, SEED_MODE),
                             &[
                                 (manifest::NAME, name.clone()),
                                 (manifest::TOOL, "nail".to_string()),

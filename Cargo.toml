@@ -6,7 +6,7 @@ members = [
     "benchmarks/calibrate",
     "benchmarks/cloud-search",
     "benchmarks/cutoffs",
-    "benchmarks/hit-loss",
+    "benchmarks/loss-decomp",
     "benchmarks/long-seqs",
     "benchmarks/pid",
     "benchmarks/recall",

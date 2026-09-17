@@ -1,7 +1,7 @@
 //! The analyses, which are groupings over a table of pairs.
 //!
-//! Nothing in here reads a results file. A summary is a count per run, a
-//! funnel is a count per checkpoint; both are held to the same denominator,
+//! Nothing in here reads a results file. A summary counts per run, and stages
+//! counts per checkpoint within a run; both are held to the same denominator,
 //! which is what hmmer found and scored over its family's cutoff.
 //!
 //! They are separate from `parse` because reading every results table is the
@@ -186,7 +186,7 @@ fn preamble(meta: &crate::Meta, truth: usize, rows: u64) -> String {
 ///
 /// Only two checkpoints are visible from the outside: whether a pair got a
 /// seed, and whether it ended up in the run's table at all. Everything
-/// between them collapses into one bucket -- see hit_loss.rs for why the
+/// between them collapses into one bucket -- see loss-decomp for why the
 /// e-value gate has to be opened up for that bucket to mean what it says.
 ///
 /// Reaching the table is presence, not a cutoff: this is asking where a pair
@@ -195,9 +195,9 @@ fn preamble(meta: &crate::Meta, truth: usize, rows: u64) -> String {
 /// a property of a run, and recall keeps a column per tool.
 ///
 /// One pass, counting per run. A sweep that seeded once and searched every
-/// cell off those seeds gets a funnel per cell, which is what tells the loss
+/// cell off those seeds gets a column per cell, which is what tells the loss
 /// every cell shares from the loss its pruning caused.
-pub fn funnel(path: &Path, out: &Path) -> anyhow::Result<()> {
+pub fn stages(path: &Path, out: &Path) -> anyhow::Result<()> {
     let mut scores = Runs::open(path)?;
 
     let hmmer = scores.meta().hmmer()?;
