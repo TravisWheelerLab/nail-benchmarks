@@ -34,9 +34,11 @@ shards     = 1000
 
 # ------------------------------------------------- cloud-search and loss-decomp
 
-# One unit each, so one shard is the whole set. Its size matches one of
-# recall-real's thousand, which is what keeps a cell's cost readable against a
-# recall column.
+# One unit each, so one shard is the whole set. A round million rather than one
+# of recall-real's thousand, which was 2,455,939: both of these sweep their unit
+# many times over -- 162 cells for cloud-search, 12 seeding arms for
+# loss-decomp -- and the size that makes a sweep affordable is worth more here
+# than a cost that reads directly against a recall column.
 [cloud-search-toy]
 shape      = "fixed"
 queries    = "../../data/pfam.hmm"
@@ -54,7 +56,7 @@ alignments = "../../data/pfam.sto"
 targets    = "../../data/mgnify"
 out        = "../../store/cloud-search-real/inputs"
 shards     = 1
-seqs       = 2455939
+seqs       = 1000000
 
 [loss-decomp-toy]
 shape      = "fixed"
@@ -73,7 +75,7 @@ alignments = "../../data/pfam.sto"
 targets    = "../../data/mgnify"
 out        = "../../store/loss-decomp-real/inputs"
 shards     = 1
-seqs       = 2455939
+seqs       = 1000000
 
 # ------------------------------------------------------------------ cutoffs
 

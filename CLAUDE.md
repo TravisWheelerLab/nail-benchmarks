@@ -346,12 +346,16 @@ search.
 Three benchmarks. `recall` searches every shard while sweeping nail's and
 MMseqs2's prefilter sensitivity. `cloud-search` seeds once, then searches every
 `(A, B)` pruning cell off those same seeds, so the pruning parameters are the
-only thing moving. `loss-decomp` asks where nail loses the hits HMMER finds,
+only thing moving. The grid is run twice, at `-a 5` and at `-a 0`, because a
+surface at one `-a` cannot say whether a hard-pruning cell found its hits or
+recovered them. `loss-decomp` asks where nail loses the hits HMMER finds,
 and decomposes that across the seeding knobs: `static` against
 `--mmseqs-max-seqs`, and `prog` against `--prog-n` and `--prog-f`. Every arm is
 a seed list of its own and a nail that replays it; hmmer runs once outside the
 sweep, because the truth set is the same for all of them and is most of the
-wall clock -- 59 minutes of a 68-minute real run, against 8 minutes an arm.
+wall clock -- 59 minutes of a 68-minute run, against 8 minutes an arm, measured
+on the 2,455,939-sequence set both real labels carried before they were dropped
+to a round million.
 
 `build-set` counts each shard as it deals it and writes the counts into
 `set.tbl`: counting a thousand shards afterwards is the whole deal read again,
