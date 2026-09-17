@@ -8,15 +8,15 @@
 [toy]
 set      = "../../store/cutoffs-toy/inputs"
 recruit  = "../../store/cutoffs-toy/outputs/recruit"
-decoys   = "../../store/cutoffs-toy/outputs/decoys"
-search   = "../../store/cutoffs-toy/outputs/search"
+gather   = "../../store/cutoffs-toy/outputs/gather"
+reject   = "../../store/cutoffs-toy/outputs/reject"
 analysis = "../../store/cutoffs-toy/analysis/cutoffs"
 tmp      = "../../store/cutoffs-toy/tmp/cutoffs"
 
 [real]
 set      = "../../store/cutoffs-real/inputs"
 recruit  = "../../store/cutoffs-real/outputs/recruit"
-decoys   = "../../store/cutoffs-real/outputs/decoys"
-search   = "../../store/cutoffs-real/outputs/search"
+gather   = "../../store/cutoffs-real/outputs/gather"
+reject   = "../../store/cutoffs-real/outputs/reject"
 analysis = "../../store/cutoffs-real/analysis/cutoffs"
 tmp      = "../../store/cutoffs-real/tmp/cutoffs"

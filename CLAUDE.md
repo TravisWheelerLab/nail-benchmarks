@@ -113,7 +113,15 @@ root.
 ## External crates
 
 - `michi` runs a pipeline of commands, times each one, and writes what it did to
-  `manifest.tbl`.
+  `manifest.tbl`. It pins each command with `sched_setaffinity` and sets no
+  memory policy, handing out one logical cpu per physical core from the low end
+  of the pool. On this two-node box that lease straddles both nodes, since node
+  membership goes by parity. Measured, four reps of a 350s nail search at 32
+  cores: straddling costs about 2% against 32 cores of a single node, and
+  `numactl --membind` on top of single-node pinning buys nothing (+0.35%,
+  inside the noise). So if this is ever worth fixing, the fix is making the
+  lease node-aware rather than adding `set_mempolicy`. It is not worth fixing
+  today. Full write-up while it lasts: `tmp-claude/numaprobe/REPORT.md`.
 - `libsail` reads and writes the formats: FASTA, Stockholm, p7hmm, and the hit
   tables nail, HMMER, MMseqs2 and BLAST produce.
 - `tabl` writes the padded, `#`-headed tables. It is not published: the
@@ -444,49 +452,62 @@ reads as an upper bound. The alignments are the rows to trust: their cost is
 almost all target work, and they are the only ones the ladder pinned to better
 than 3%.
 
-`cutoffs` is the other calibration, and the words do not mean the same
-thing: cutoffs calibrates scores, calibrate calibrates cost. Five stages that
-reverse the targets, recruit decoys per family, search each family against its
-own decoys forward and reversed, and learn the per-family score cutoffs every
-hit is then held against.
+`cutoffs` is the other calibration, and the words do not mean the same thing:
+cutoffs calibrates scores, calibrate calibrates cost.
 
-The set it reads arrives reversed, built by a `fixed` recipe under a
-`reversed` tag, so nothing here reverses anything and no second copy of the
-shards is made. Everything the calibration then makes is an output of that set:
-`recruit`'s tables, the decoys, `search`'s tables, the learned cutoffs.
+### The words
 
-The decoys were briefly a set of their own, with a `set.tbl` and a shape. That
-was wrong, and the tell was that nothing ever loaded the manifest -- `search`
-globs the directory for families. `build-set` makes a set from sources under a
-recipe, deterministically; the decoy pool comes out of whatever `recruit`
-happened to score, so it could never be a recipe and was never a set. Before
-giving anything a `set.tbl`, ask whether `build-set` could produce it from a
-label.
+Naming here is deliberate and worth holding to, because the loose version of it
+hides the one thing the method turns on.
 
-**Backburner: the pure fix is a `reversal-recruit` shape.** The decoy pool is
-genuinely an input to `search` -- per-family queries against per-family targets
--- and the honest home for producing it is `build-set`, as a shape of its own.
-What stops that today is that making it requires running alignments: the pool
-is defined by what nail and mmseqs score against the reversed shards, so a
-builder would have to search before it could place. `build-set` cuts and deals
-and has never run a tool. Worth revisiting if a second thing ever needs a
-recruited set, but not for one caller.
+- **initial reversals** -- the source sequences written backwards. These are
+  not decoys. Nothing has been asked about them yet.
+- **recruits** -- initial reversals that scored against some family in the
+  first search. `candidate` is not the word: this repo already uses that for
+  what a prefilter promotes.
+- **decoys** -- recruits whose *original* has no significant match to the
+  family that recruited them. Unlikely to be homologs, so they are noise, and
+  noise is what a threshold is learned from.
+- **rejects** -- recruits whose original *does* match. Reversed homologs
+  wearing a decoy's clothes, and they are thrown out.
+- **original** -- a recruit re-reversed, which is bit-identical to the source
+  sequence. Never *forward*: nail's Forward algorithm owns that word here, and
+  a reversal and its original are two forms of one sequence rather than two
+  directions of anything. The manifest column is `form`.
 
-A record read out of a reversed shard is already the reversed decoy, and
-reversing it is the forward one, so both directions come out of one pass over
-the recruits. What makes this a calibration rather than a benchmark is that its
-product, `data/mgy-cutoffs.tbl`, is committed and promoted by hand.
+### The stages
 
-### The forward pass is a per-pair test, and that is not negotiable
+`recruit` searches every family against the initial reversals, cheaply, and
+finds the small subset that scores at all. `gather` pulls those out of the
+shards in both forms. `reject` searches each family against its recruits with
+the prefilter effectively off, so a score is a real score, and the two forms
+together split the recruits into decoys and rejects. `learn` turns the decoy
+scores into the per-family cutoffs every hit is afterwards held against.
+
+The set arrives reversed, built by a `fixed` recipe under a `reversed` tag, so
+no stage here reverses anything and no second copy of the shards is made. A
+record read out of a reversed shard is already the reversal, and reversing it
+again gives the original, so both forms come out of one pass in `gather`.
+Everything the calibration makes is an output of that set. What makes it a
+calibration rather than a benchmark is that its product,
+`data/mgy-cutoffs.tbl`, is committed and promoted by hand.
+
+The recruits were briefly a set of their own, with a `set.tbl` and a shape.
+That was wrong, and the tell was that nothing ever loaded the manifest --
+`reject` globs the directory for families. `build-set` makes a set from sources
+under a recipe, deterministically; what `recruit` happened to score could never
+be a recipe and was never a set. Before giving anything a `set.tbl`, ask
+whether `build-set` could produce it from a label.
+
+### Rejection is a per-pair test, and that is not negotiable
 
 **A family's null holds only sequences vetted for that family. Never pool them
 across families.**
 
-The forward pass asks exactly one question about one pair: family A recruited
-sequence S on the reverse, so does A also match `forward(S)`? A yes means S is
-the reversal of a true member of A, and S is thrown out rather than counted as
-a decoy for A. Family B's forward result for B's own recruit answers that
-question for B and for nothing else.
+`reject` asks exactly one question about one pair: family A recruited sequence
+S, so does A also match S's original? A yes makes S a reject -- the reversal of
+a true member of A -- rather than a decoy for A. Family B's answer for B's own
+recruit settles it for B and for nothing else.
 
 The reason this matters more than it looks: a reversed sequence keeps a
 surprisingly high similarity score against its unreversed self. That is not
@@ -511,13 +532,58 @@ It means pairs reached A's null without being asked A's question, and by the
 paragraph above the pairs most likely to do that are the reversals of A's own
 true members. The null would then be seeded with disguised true positives, A's
 cutoff would rise, and real hits would be discarded quietly -- the exact failure
-the forward pass exists to prevent. A measurable effect from pooling is the
+rejection exists to prevent. A measurable effect from pooling is the
 method reporting its own unsoundness, so treat it as a bug to find rather than
 a result to keep.
 
 The one case where B's recruits could legitimately inform A is A and B being
 highly related, and that is the two families not being independent rather than
 an argument for pooling.
+
+### Pinned, for whenever cutoffs is next opened
+
+**`--strategy fanout|union|auto`.** Two ways for `reject` to score the recruits.
+`fanout` is one search per family per form, which is what the pipeline does
+today. `union` is two invocations -- all of Pfam against every recruit's
+reversal, then against every recruit's original -- with `learn` joining each hit
+back to the family that recruited the sequence. The per-pair rule above is what
+`union` must not break.
+
+Which is faster is an open question, and **there is no usable cost model for it
+yet.** nail's and mmseqs' runtimes do not scale linearly in target size, so
+estimating either arm by multiplying a per-comparison rate is wrong and any
+crossover derived that way is not to be trusted. `calibrate` is the machinery
+for fitting this properly, and even it only fits the target axis with the query
+held fixed.
+
+What is actually measured, and nothing more:
+
+- `fanout` launches one process per family per direction. A per-invocation
+  floor of about 0.65s was seen on a **four-family toy**, where the target was
+  five sequences and contributed no measurable work. Treat it as a floor
+  observed at toy scale, not a constant.
+- `data/mgy-cutoffs.tbl` records what the recruits came to for MGnify: 20,795
+  families, mean 5,427 recruits, max 221,046, summing to 1.13e8 (family,
+  sequence) pairs. The count of *distinct* sequences those cover is not
+  recorded and is the quantity `union` scales with.
+
+`union` is clearly right at SwissProt scale, where the pool caps the union near
+570k. For MGnify it is unproven either way. Do not switch MGnify over on the
+strength of the SwissProt result, and do not pick between the arms from an
+extrapolation -- measure both on the same input.
+
+**`auto` needs a fitted model before it means anything**, not a rule of thumb.
+Leave it unimplemented until `fanout` and `union` have been timed side by side
+on real inputs.
+
+**Measuring MGnify's union need not wait.** Recruiting a single reversed shard
+and counting distinct recruits gives an estimate without building a full
+reversed set, which is otherwise blocked on libsail 0.4.0's sequential sampler.
+That sampler is the streaming `Selector` sketched in
+`tmp-claude/libsail-sampling-proposal.md` rather than the `Indexable::sample`
+that proposal leads with; combined with buffered per-shard output it should
+build a real MGnify set orders of magnitude faster than permuting 2.4 billion
+indices.
 
 `store import` writes a `ledger.tbl` for result tables produced elsewhere, out of
 the `.time` files that came back with them, which turns a search run on a

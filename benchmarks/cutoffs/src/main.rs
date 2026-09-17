@@ -12,21 +12,26 @@
 //! Doing that exhaustively would mean searching every family against every
 //! reversed sequence. Instead it runs in two stages:
 //!
-//!   1. `recruit` — a cheap sweep of every family against the reversed shards,
-//!      which finds the small subset of sequences that score at all.
-//!   2. `search` — an exhaustive pass, one family at a time, against just its
-//!      own recruits, in both directions.
+//!   1. `recruit` — a cheap sweep of every family against the initial
+//!      reversals, which finds the small subset that scores at all. What it
+//!      finds are *recruits*.
+//!   2. `reject` — an exhaustive pass, against a family's own recruits in both
+//!      forms. A recruit whose *original* does not match the family is a
+//!      *decoy*; one whose original does match is a *reject*, a reversed
+//!      homolog rather than a piece of noise.
 //!
-//! Stage 2 is the one the cutoffs are read from. It runs at high sensitivity
+//! `reject` is the stage the cutoffs are read from. It runs at high sensitivity
 //! with the prefilter effectively disabled, so a decoy's score is its real
-//! score rather than one truncated by stage 1's parameters. It also searches
-//! the *forward* sequences, so a recruit that turns out to be a genuine family
-//! member can be dropped instead of inflating the threshold.
+//! score rather than one truncated by `recruit`'s parameters. Searching the
+//! originals is what separates the decoys from the rejects, and it matters
+//! more than it looks: a reversal keeps a surprisingly high score against its
+//! own original, so the recruits that look like the best decoys are exactly
+//! the ones that may not be decoys at all.
 //!
-//! `decoys` sits between them: it reads stage 1's hit tables and pulls the
+//! `gather` sits between them: it reads `recruit`'s hit tables and pulls the
 //! sequences that hit out of the shard they came from. A record read there is
-//! already the reversed decoy, and reversing it is the forward one, so both
-//! directions come out of one pass over the recruits.
+//! already the reversal, and reversing it again gives the original, so both
+//! forms come out of one pass over the recruits.
 //!
 //! Both searching stages are `michi` pipelines, and they get there differently.
 //! `recruit` is one big search per shard, so a shard's short chain unrolls
@@ -70,10 +75,13 @@ use util::cut;
 /// Name of the calibration when none is given.
 pub const DEFAULT_NAME: &str = "default";
 
-/// What the decoy set holds, relative to its own root. These spell both the
-/// paths the stages write and the cells the manifest carries.
-const DECOYS: &str = "decoys";
-const DECOYS_REV: &str = "decoys-rev";
+/// What `gather` lays out, relative to its own root. These spell both the paths
+/// the stages write and the cells the manifest carries.
+//
+// recruits, not decoys: a recruit only becomes a decoy once `reject` has shown
+// that its original does not match the family that recruited it
+const REVERSALS: &str = "reversals";
+const ORIGINALS: &str = "originals";
 const QUERIES: &str = "queries";
 
 // recruitment only has to nominate candidates, so it runs a cheap sweep
@@ -93,8 +101,8 @@ const NAIL: &str = "nail";
 const MMSEQS: &str = "mmseqs";
 const HMMER: &str = "hmmer";
 
-/// Which direction of a family's decoys a search covered. The forward run keeps
-/// the bare tool name; only the reversed one needs saying.
+/// Which form of a family's recruits a search covered. The originals keep the
+/// bare tool name; only the reversals need saying.
 /// What the manifest calls the commands around a search, so a database build
 /// is never charged to the tool that reads it.
 //
@@ -104,16 +112,20 @@ const DIRS: &str = "dirs";
 const PROFILE: &str = "profile";
 const CLEAN: &str = "clean";
 
-/// The column that tells a family's forward search from its reversed one.
-const DIRECTION: &str = "direction";
+/// The column that tells a search of the reversals from one of the originals.
+//
+// `form` rather than `direction`: nail's Forward algorithm owns that word here,
+// and a reversal and its original are two forms of one sequence rather than
+// two directions of anything
+const FORM: &str = "form";
 
-const FORWARD: &str = "fwd";
-const REVERSE: &str = "rev";
+const ORIGINAL: &str = "orig";
+const REVERSAL: &str = "rev";
 
-/// The run name for one tool searching one direction.
-fn run_name(tool: &str, direction: &str) -> String {
-    match direction {
-        REVERSE => format!("{tool}-{REVERSE}"),
+/// The run name for one tool searching one form.
+fn run_name(tool: &str, form: &str) -> String {
+    match form {
+        REVERSAL => format!("{tool}-{REVERSAL}"),
         _ => tool.to_string(),
     }
 }
@@ -130,25 +142,25 @@ fn run_name(tool: &str, direction: &str) -> String {
 /// be promoted by hand.
 ///
 /// ```text
-/// <set>/outputs/recruit/            stage 1's tables
-/// <set>/outputs/decoys/
-///   decoys/<family>.fa              what recruited, un-reversed
-///   decoys-rev/<family>.fa          ... and reversed again
+/// <set>/outputs/recruit/            recruit's tables
+/// <set>/outputs/gather/
+///   reversals/<family>.fa           the recruits, as they were hit
+///   originals/<family>.fa           ... re-reversed, which is the original
 ///   queries/<family>/               the query set, per family
-/// <set>/outputs/search/             stage 3's tables
+/// <set>/outputs/reject/             reject's tables
 /// <set>/analysis/cutoffs/           what was learned
 /// ```
 struct Layout {
-    /// What the middle stage makes for the later ones to read.
+    /// What `gather` makes for the later stages to read.
     ///
     /// Outputs of this pipeline rather than a set of their own: a set is what
     /// `build-set` produces from sources under a recipe, and these come out of
     /// whatever `recruit` happened to score.
-    decoys: PathBuf,
+    gather: PathBuf,
     /// Where each of the two searching stages writes, and the scratch they
     /// share.
     recruit: PathBuf,
-    search: PathBuf,
+    reject: PathBuf,
     analysis: PathBuf,
     tmp: PathBuf,
     // resolved out of the source set's manifest once, here, so that the rest
@@ -174,9 +186,9 @@ impl Layout {
             .collect::<anyhow::Result<Vec<_>>>()?;
 
         Ok(Layout {
-            decoys: paths.decoys.clone(),
+            gather: paths.gather.clone(),
             recruit: paths.recruit.clone(),
-            search: paths.search.clone(),
+            reject: paths.reject.clone(),
             analysis: paths.analysis.clone(),
             tmp: paths.tmp.clone(),
             query_hmm,
@@ -205,32 +217,32 @@ impl Layout {
         self.query_db.clone()
     }
 
-    fn decoys(&self) -> PathBuf {
-        self.decoys.join(DECOYS)
+    fn originals(&self) -> PathBuf {
+        self.gather.join(ORIGINALS)
     }
 
-    fn decoys_rev(&self) -> PathBuf {
-        self.decoys.join(DECOYS_REV)
+    fn reversals(&self) -> PathBuf {
+        self.gather.join(REVERSALS)
     }
 
     /// One directory per family, each holding a `query.hmm` and a `query.sto`
     /// -- the same shape as a ladder rung's query directory.
     fn queries(&self) -> PathBuf {
-        self.decoys.join(QUERIES)
+        self.gather.join(QUERIES)
     }
 
     fn recruit(&self) -> anyhow::Result<Stage> {
         self.stage("recruit")
     }
 
-    fn search(&self) -> anyhow::Result<Stage> {
+    fn reject(&self) -> anyhow::Result<Stage> {
         self.stage("search")
     }
 
     fn stage(&self, stage: &str) -> anyhow::Result<Stage> {
         let root = match stage {
             "recruit" => self.recruit.clone(),
-            _ => self.search.clone(),
+            _ => self.reject.clone(),
         };
 
         Ok(Stage {
@@ -269,12 +281,13 @@ impl Stage {
 
 #[derive(Subcommand)]
 enum Cmd {
-    /// Sweep every family against the reversed shards to find candidates.
+    /// Search every family against the initial reversals to find recruits.
     Recruit(RecruitArgs),
-    /// Un-reverse what hit, group it per family, and split the query set.
-    Decoys(DecoysArgs),
-    /// Search each family against its own decoys, forward and reversed.
-    Search(SearchArgs),
+    /// Lay out the recruits and their originals, and split the query set.
+    Gather(GatherArgs),
+    /// Search each family against its recruits, both forms, which splits them
+    /// into decoys and rejects.
+    Reject(RejectArgs),
     /// Turn the decoy scores into per-family cutoffs.
     Learn(LearnArgs),
     /// Run every stage in order.
@@ -303,7 +316,7 @@ pub struct RecruitArgs {
 }
 
 #[derive(Parser, Debug)]
-pub struct DecoysArgs {
+pub struct GatherArgs {
     #[command(flatten)]
     pub place: Where,
 
@@ -312,7 +325,7 @@ pub struct DecoysArgs {
 }
 
 #[derive(Parser, Debug)]
-pub struct SearchArgs {
+pub struct RejectArgs {
     #[command(flatten)]
     pub place: Where,
 
@@ -330,8 +343,8 @@ pub struct LearnArgs {
     #[command(flatten)]
     pub place: Where,
 
-    /// Forward hits at or below this E-value are treated as real, and their
-    /// reversed counterparts are excluded from the decoy scores
+    /// A recruit whose original hits at or below this E-value is a reject, and
+    /// its reversal is left out of the decoy scores
     #[arg(short = 'e', default_value_t = 1e-3, value_name = "F")]
     pub reverse_e_cutoff: f64,
 
@@ -373,9 +386,9 @@ struct Cli {
 #[serde(deny_unknown_fields)]
 pub struct Paths {
     pub set: PathBuf,
-    pub decoys: PathBuf,
+    pub gather: PathBuf,
     pub recruit: PathBuf,
-    pub search: PathBuf,
+    pub reject: PathBuf,
     pub analysis: PathBuf,
     pub tmp: PathBuf,
 }
@@ -387,9 +400,9 @@ impl Paths {
 
         Ok(Paths {
             set: file.at(p.set),
-            decoys: file.at(p.decoys),
+            gather: file.at(p.gather),
             recruit: file.at(p.recruit),
-            search: file.at(p.search),
+            reject: file.at(p.reject),
             analysis: file.at(p.analysis),
             tmp: file.at(p.tmp),
         })
@@ -418,8 +431,8 @@ impl Cmd {
     fn label(&self) -> Option<&str> {
         let place = match self {
             Cmd::Recruit(a) => &a.place,
-            Cmd::Decoys(a) => &a.place,
-            Cmd::Search(a) => &a.place,
+            Cmd::Gather(a) => &a.place,
+            Cmd::Reject(a) => &a.place,
             Cmd::Learn(a) => &a.place,
             Cmd::All(a) => &a.place,
         };
@@ -430,8 +443,8 @@ impl Cmd {
 fn run_cmd(cmd: Cmd, paths: &Paths) -> anyhow::Result<()> {
     match cmd {
         Cmd::Recruit(args) => recruit(args, paths),
-        Cmd::Decoys(args) => decoys(args, paths),
-        Cmd::Search(args) => search(args, paths),
+        Cmd::Gather(args) => gather(args, paths),
+        Cmd::Reject(args) => reject(args, paths),
         Cmd::Learn(args) => learn(args, paths),
         Cmd::All(args) => all(args, paths),
     }
@@ -542,7 +555,7 @@ fn recruit(args: RecruitArgs, paths: &Paths) -> anyhow::Result<()> {
 
 // ------------------------------------------------------------------ decoys
 
-fn decoys(args: DecoysArgs, paths: &Paths) -> anyhow::Result<()> {
+fn gather(args: GatherArgs, paths: &Paths) -> anyhow::Result<()> {
     let layout = Layout::new(paths)?;
     let recruit_results = layout.recruit()?.results();
 
@@ -594,17 +607,17 @@ fn decoys(args: DecoysArgs, paths: &Paths) -> anyhow::Result<()> {
 
     println!("{} families recruited decoys", families.len());
 
-    // ---- un-reverse: pull the forward sequences the reversed ones came from
+    // ---- pull the recruits out of the shards, in both forms
 
-    let decoy_dir = layout.decoys();
-    for dir in [&decoy_dir, &layout.decoys_rev()] {
+    let decoy_dir = layout.originals();
+    for dir in [&decoy_dir, &layout.reversals()] {
         if dir.exists() {
             std::fs::remove_dir_all(dir)?;
         }
     }
     std::fs::create_dir_all(&decoy_dir)?;
 
-    let rev_dir = layout.decoys_rev();
+    let rev_dir = layout.reversals();
     std::fs::create_dir_all(&rev_dir)?;
 
     // one lock per family, over both directions: shards are read in parallel
@@ -646,7 +659,7 @@ fn decoys(args: DecoysArgs, paths: &Paths) -> anyhow::Result<()> {
                     .with_context(|| format!("failed to open {}", path.display()))?;
 
                 // the shard is reversed, so a record read out of it is already
-                // the reversed decoy, and reversing it again is the forward
+                // the reversal, and reversing it again is the original
                 // one. both come out of the one pass, over the recruits alone
                 // rather than over the shard
                 let mut buffers: HashMap<&str, (Vec<u8>, Vec<u8>)> = HashMap::new();
@@ -659,25 +672,25 @@ fn decoys(args: DecoysArgs, paths: &Paths) -> anyhow::Result<()> {
                     rec.write_to(&mut reversed, DEFAULT_LINE_WIDTH)?;
 
                     rec.reverse();
-                    let mut forward = Vec::new();
-                    rec.write_to(&mut forward, DEFAULT_LINE_WIDTH)?;
+                    let mut original = Vec::new();
+                    rec.write_to(&mut original, DEFAULT_LINE_WIDTH)?;
 
                     for family in fams {
-                        let (fwd, rev) = buffers.entry(family).or_default();
-                        fwd.extend_from_slice(&forward);
+                        let (orig, rev) = buffers.entry(family).or_default();
+                        orig.extend_from_slice(&original);
                         rev.extend_from_slice(&reversed);
                     }
                 }
 
-                for (family, (forward, reversed)) in buffers {
+                for (family, (original, reversed)) in buffers {
                     let guard = handles
                         .get(family)
                         .with_context(|| format!("no handle for family {family}"))?
                         .lock()
                         .expect("family mutex poisoned");
 
-                    let (fwd_path, rev_path) = &*guard;
-                    for (path, text) in [(fwd_path, &forward), (rev_path, &reversed)] {
+                    let (orig_path, rev_path) = &*guard;
+                    for (path, text) in [(orig_path, &original), (rev_path, &reversed)] {
                         let mut file = std::fs::OpenOptions::new()
                             .create(true)
                             .append(true)
@@ -705,7 +718,7 @@ fn decoys(args: DecoysArgs, paths: &Paths) -> anyhow::Result<()> {
         );
     }
 
-    println!("wrote {}", layout.decoys.display());
+    println!("wrote {}", layout.gather.display());
     Ok(())
 }
 
@@ -720,9 +733,9 @@ fn collect<C: HitColumns>(tbl: &Table<HitParser<C>>, map: &mut HashMap<String, V
 
 // ------------------------------------------------------------------ search
 
-fn search(args: SearchArgs, paths: &Paths) -> anyhow::Result<()> {
+fn reject(args: RejectArgs, paths: &Paths) -> anyhow::Result<()> {
     let layout = Layout::new(paths)?;
-    let decoy_dir = layout.decoys();
+    let decoy_dir = layout.originals();
 
     if !decoy_dir.is_dir() {
         bail!(
@@ -743,10 +756,10 @@ fn search(args: SearchArgs, paths: &Paths) -> anyhow::Result<()> {
         bail!("no decoy files in {}", decoy_dir.display());
     }
 
-    let rev_dir = layout.decoys_rev();
+    let rev_dir = layout.reversals();
     let queries = layout.queries();
 
-    let stage = layout.search()?;
+    let stage = layout.reject()?;
     let results = stage.results();
     if results.exists() {
         std::fs::remove_dir_all(&results)?;
@@ -791,7 +804,7 @@ fn search(args: SearchArgs, paths: &Paths) -> anyhow::Result<()> {
             jobs,
             per_family(&|family| {
                 let mut cmd = PCmd::new("mkdir").name("dirs").flag("-p").path(&results);
-                for direction in [FORWARD, REVERSE] {
+                for direction in [ORIGINAL, REVERSAL] {
                     let d = dir_scratch(family, direction);
                     cmd = cmd.path(d.join("targetDB")).path(d.join("alnDB"));
                 }
@@ -835,7 +848,7 @@ fn search(args: SearchArgs, paths: &Paths) -> anyhow::Result<()> {
             .name("msa2profile"),
         );
 
-    for (direction, decoys) in [(FORWARD, &decoy_dir), (REVERSE, &rev_dir)] {
+    for (direction, decoys) in [(ORIGINAL, &decoy_dir), (REVERSAL, &rev_dir)] {
         let target = |family: &str| decoys.join(format!("{family}.fa"));
         let hmm = |family: &str| queries.join(family).join("query.hmm");
         let table = |tool: &str, family: &str| {
@@ -874,7 +887,7 @@ fn search(args: SearchArgs, paths: &Paths) -> anyhow::Result<()> {
                             .field(manifest::NAME, name)
                             .field(manifest::TOOL, tool)
                             .field(manifest::SHARD, shard)
-                            .field(DIRECTION, direction)
+                            .field(FORM, direction)
                     }),
                 )
                 .name(format!("nail.{direction}")),
@@ -916,7 +929,7 @@ fn search(args: SearchArgs, paths: &Paths) -> anyhow::Result<()> {
                         .field(manifest::NAME, name)
                         .field(manifest::TOOL, tool)
                         .field(manifest::SHARD, shard)
-                        .field(DIRECTION, direction)
+                        .field(FORM, direction)
                     }),
                 )
                 .name(format!("mmseqs.{direction}")),
@@ -970,7 +983,7 @@ fn search(args: SearchArgs, paths: &Paths) -> anyhow::Result<()> {
                             .field(manifest::NAME, name)
                             .field(manifest::TOOL, tool)
                             .field(manifest::SHARD, shard)
-                            .field(DIRECTION, direction)
+                            .field(FORM, direction)
                     }),
                 )
                 .name(format!("hmmer.{direction}")),
@@ -1018,7 +1031,7 @@ const TOOLS: [&str; 3] = [NAIL, MMSEQS, HMMER];
 
 fn learn(args: LearnArgs, paths: &Paths) -> anyhow::Result<()> {
     let layout = Layout::new(paths)?;
-    let stage = layout.search()?;
+    let stage = layout.reject()?;
     let results = stage.results();
 
     // what the search stage actually did, rather than what is on disk: a run
@@ -1123,7 +1136,7 @@ fn cells(scores: Option<&(Vec<f32>, usize)>) -> Vec<String> {
 /// The top decoy scores for one family and tool, plus how many decoys survived.
 ///
 /// A reversed hit only counts as a decoy if the same (query, target) pair did
-/// not also hit in the forward direction: reversal preserves composition, so a
+/// whose original does not also hit: reversal preserves composition, so a
 /// genuine family member's reversal can score for reasons that are not chance.
 fn decoy_scores<T>(
     results: &Path,
@@ -1136,18 +1149,18 @@ where
 {
     let table = |direction| manifest::table_path(results, &run_name(tool, direction), family);
 
-    let (fwd_path, rev_path) = (table(FORWARD), table(REVERSE));
+    let (orig_path, rev_path) = (table(ORIGINAL), table(REVERSAL));
 
-    if !fwd_path.exists() || !rev_path.exists() {
+    if !orig_path.exists() || !rev_path.exists() {
         return Ok(None);
     }
 
-    let fwd = Table::<HitParser<T>>::open(&fwd_path)
-        .with_context(|| format!("failed to read {}", fwd_path.display()))?;
+    let orig = Table::<HitParser<T>>::open(&orig_path)
+        .with_context(|| format!("failed to read {}", orig_path.display()))?;
     let rev = Table::<HitParser<T>>::open(&rev_path)
         .with_context(|| format!("failed to read {}", rev_path.display()))?;
 
-    let real: HashSet<(&str, &str)> = fwd
+    let real: HashSet<(&str, &str)> = orig
         .iter()
         .filter(|h| h.e_value <= e_cutoff)
         .map(|h| (h.query.as_str(), h.target.as_str()))
@@ -1193,13 +1206,13 @@ fn all(args: AllArgs, paths: &Paths) -> anyhow::Result<()> {
         dry_run: false,
     }, paths)?;
 
-    decoys(DecoysArgs {
+    gather(GatherArgs {
         place: args.place.clone(),
         threads: args.threads,
     }, paths)?;
 
-    search(
-        SearchArgs {
+    reject(
+        RejectArgs {
             place: args.place.clone(),
             dry_run: false,
             jobs: args.jobs,
