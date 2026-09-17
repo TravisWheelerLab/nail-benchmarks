@@ -13,6 +13,12 @@ no -A and no -B, so it has no cell of its own; the corner is where the surface
 is heading as the pruning relaxes, and it is the ceiling every pruned cell is
 read against.
 
+A table holding two -a draws each field at each of them and then the difference,
+six panels in two rows. The difference panel is the one to read: it says where
+on the grid the sensitivity credited to -A and -B was recovered by retrying
+disjoint clouds instead. A table holding one -a draws the two panels alone, so
+a summary written before that axis existed plots as what it is.
+
 A `tradeoff` figure used to plot the same runs as points in wall time against
 sensitivity. The points overlapped, each carried two parameters, and no reading
 of them survived the overlap, so it was deleted.
@@ -36,6 +42,7 @@ SCALE = 1.75
 mpl.rcParams.update({"font.size": mpl.rcParams["font.size"] * SCALE})
 
 PANELS = (22, 9)
+SIX = (30, 17)
 
 # small enough to fit inside a heatmap cell, which the base size does not
 CELL_SIZE = 11
@@ -100,6 +107,10 @@ class Run:
     def b(self):
         return self.param("B")
 
+    @property
+    def attempts(self):
+        return self.param("attempts")
+
 
 @dataclass
 class Table:
@@ -137,20 +148,36 @@ class Table:
     def betas(self):
         return sorted({c.b for c in self.cells})
 
-    def surface(self, field):
+    @property
+    def attempts(self):
+        """The -a the grid was run at, ascending.
+
+        Empty for a run made before -a was swept, which is what keeps those
+        summaries drawing as the single surface they are.
+        """
+        return sorted({c.attempts for c in self.cells if np.isfinite(c.attempts)})
+
+    def surface(self, field, attempts=None, corner=True):
         """The grid as a 2d array, alpha down the rows and beta across.
 
         One row and one column wider than the grid, holding nothing but the
         unpruned run in the far corner. It records no -A and no -B, so it has
         no cell of its own; the corner is where the surface is heading as the
         pruning relaxes, which is the only place it can be read against.
+
+        `corner` is off for a difference of two surfaces: the unpruned run is
+        one run at neither -a, so it cancels to a zero that reads as a measured
+        result rather than as an absence.
         """
         alphas, betas = self.alphas, self.betas
         out = np.full((len(alphas) + 1, len(betas) + 1), np.nan)
+
         for c in self.cells:
+            if attempts is not None and c.attempts != attempts:
+                continue
             out[alphas.index(c.a), betas.index(c.b)] = getattr(c, field)
 
-        if self.full is not None:
+        if corner and self.full is not None:
             out[len(alphas), len(betas)] = getattr(self.full, field)
 
         return out
@@ -224,75 +251,138 @@ def subtitle(g):
 # ------------------------------------------------------------------ figures
 
 
-def heatmaps(g, out):
-    """Both surfaces side by side, annotated. Wants an (A, B) grid."""
-    if not g.cells:
-        return None
+# a field, the panel title it gets, and how its numbers are written
+PANELS_BY_FIELD = [
+    ("sens", "sensitivity vs hmmer", "viridis", "{:.2f}"),
+    ("wall_s", "wall time (s)", "magma_r", "{:.2f}"),
+]
 
+# where nail ships
+DEFAULT_CELL = (10.0, 16.0)
+
+
+def panel(ax, g, data, cmap, fmt, title, norm):
+    """One surface: the quads, the ticks, a number in every cell."""
     alphas, betas = g.alphas, g.betas
-    fig, axes = plt.subplots(1, 2, figsize=PANELS, constrained_layout=True)
-
-    panels = [
-        ("sens", "sensitivity vs hmmer", "viridis", "{:.2f}"),
-        ("wall_s", "wall time (s)", "magma_r", "{:.2f}"),
-    ]
 
     # cell edges either side of each integer, so the centres stay on 0..n-1 and
     # the ticks and the default-cell box can be placed by index
     edges_x = np.arange(len(betas) + 2) - 0.5
     edges_y = np.arange(len(alphas) + 2) - 0.5
 
-    for ax, (field, title, cmap, fmt) in zip(axes, panels):
-        data = g.surface(field)
+    # pcolormesh rather than imshow: imshow resamples the grid into a bitmap
+    # and embeds that, which is what made the pdf pixelate. this draws one quad
+    # per cell and stays vector at any zoom. the edge has to actually be drawn
+    # for edgecolors="face" to do its job -- at zero width the quads keep the
+    # hairline seams between them.
+    im = ax.pcolormesh(
+        edges_x, edges_y, data, cmap=cmap, norm=norm,
+        edgecolors="face", linewidth=0.4, rasterized=False,
+    )
+    ax.set_ylim(edges_y[0], edges_y[-1])
 
-        # pcolormesh rather than imshow: imshow resamples the grid into a
-        # bitmap and embeds that, which is what made the pdf pixelate. this
-        # draws one quad per cell and stays vector at any zoom. the edge has to
-        # actually be drawn for edgecolors="face" to do its job -- at zero
-        # width the quads keep the hairline seams between them.
-        im = ax.pcolormesh(
-            edges_x, edges_y, data, cmap=cmap,
-            edgecolors="face", linewidth=0.4, rasterized=False,
-        )
-        ax.set_ylim(edges_y[0], edges_y[-1])
+    # the last tick on each axis is the unpruned run, which is what -A and -B
+    # are approaching rather than a value either of them takes
+    ax.set_xticks(range(len(betas) + 1), [f"{b:g}" for b in betas] + ["full"])
+    ax.set_yticks(range(len(alphas) + 1), [f"{a:g}" for a in alphas] + ["full"])
+    ax.set_xlabel("-B   (global pruning)")
+    ax.set_ylabel("-A   (local pruning)")
+    ax.set_title(title)
 
-        # the last tick on each axis is the unpruned run, which is what -A
-        # and -B are approaching rather than a value either of them takes
-        ax.set_xticks(
-            range(len(betas) + 1), [f"{b:g}" for b in betas] + ["full"]
-        )
-        ax.set_yticks(
-            range(len(alphas) + 1), [f"{a:g}" for a in alphas] + ["full"]
-        )
-        ax.set_xlabel("-B   (global pruning)")
-        ax.set_ylabel("-A   (local pruning)")
-        ax.set_title(title)
-
-        # a number in every cell: the surface is small enough to read
-        norm = Normalize(np.nanmin(data), np.nanmax(data))
-        for i in range(data.shape[0]):
-            for j in range(data.shape[1]):
-                v = data[i, j]
-                if np.isnan(v):
-                    continue
-                shade = "white" if norm(v) < 0.55 else "black"
-                if cmap.endswith("_r"):
-                    shade = "black" if norm(v) < 0.45 else "white"
-                ax.text(
-                    j, i, fmt.format(v), ha="center", va="center",
-                    fontsize=CELL_SIZE, color=shade,
-                )
-
-        colorbar(fig, im, ax, shrink=0.9)
-
-        # where nail ships
-        if 10.0 in alphas and 16.0 in betas:
-            ax.add_patch(
-                plt.Rectangle(
-                    (betas.index(16.0) - 0.5, alphas.index(10.0) - 0.5), 1, 1,
-                    fill=False, edgecolor=HMMER_COLOR, linewidth=3.5,
-                )
+    # a number in every cell: the surface is small enough to read
+    for i in range(data.shape[0]):
+        for j in range(data.shape[1]):
+            v = data[i, j]
+            if np.isnan(v):
+                continue
+            # against the colour actually painted, so the text stays legible
+            # whichever end of the map the cell landed on. the weights are
+            # relative luminance: green carries most of the brightness the eye
+            # sees, and an unweighted mean calls mid magma light when it is not
+            r, gr, bl = im.cmap(im.norm(v))[:3]
+            light = 0.299 * r + 0.587 * gr + 0.114 * bl
+            ax.text(
+                j, i, fmt.format(v), ha="center", va="center",
+                fontsize=CELL_SIZE, color="black" if light > 0.55 else "white",
             )
+
+    a, b = DEFAULT_CELL
+    if a in alphas and b in betas:
+        ax.add_patch(
+            plt.Rectangle(
+                (betas.index(b) - 0.5, alphas.index(a) - 0.5), 1, 1,
+                fill=False, edgecolor=HMMER_COLOR, linewidth=3.5,
+            )
+        )
+
+    return im
+
+
+def heatmaps(g, out):
+    """The surfaces, annotated. Wants an (A, B) grid.
+
+    Two panels for one -a, and six for two: each field at each -a, then the
+    difference between them. The difference is the panel the second arm was run
+    for -- it says where on the grid nail's disjoint-cloud recovery is doing
+    the work, which is sensitivity that -A and -B are credited with and did not
+    earn.
+    """
+    if not g.cells:
+        return None
+
+    arms = g.attempts
+    if len(arms) < 2:
+        return one_arm(g, out)
+
+    lo, hi = arms[0], arms[-1]
+    if len(arms) > 2:
+        raise SystemExit(f"{len(arms)} -a values in the table; the figure draws two")
+
+    fig, axes = plt.subplots(2, 3, figsize=SIX, constrained_layout=True)
+
+    for row, (field, title, cmap, fmt) in zip(axes, PANELS_BY_FIELD):
+        at_hi = g.surface(field, hi)
+        at_lo = g.surface(field, lo)
+        # the arms share a scale, so the two panels can be read against each
+        # other rather than each against itself
+        both = Normalize(np.nanmin([at_lo, at_hi]), np.nanmax([at_lo, at_hi]))
+
+        panel(row[0], g, at_hi, cmap, fmt, f"{title}   -a {hi:g}", both)
+        im = panel(row[1], g, at_lo, cmap, fmt, f"{title}   -a {lo:g}", both)
+        # one bar for the pair, since the point of the shared scale is that
+        # there is only one scale to read
+        colorbar(fig, im, [row[0], row[1]], shrink=0.9)
+
+        # the corner is dropped rather than differenced: the unpruned run is
+        # one run at neither -a, so subtracting it from itself would draw a
+        # zero that reads as a measured result
+        diff = g.surface(field, hi, corner=False) - g.surface(field, lo, corner=False)
+        span = np.nanmax(np.abs(diff)) or 1.0
+        im = panel(
+            row[2], g, diff, "RdBu_r", fmt,
+            f"{title}   -a {hi:g} minus -a {lo:g}",
+            Normalize(-span, span),
+        )
+        colorbar(fig, im, row[2], shrink=0.9)
+
+    fig.suptitle(
+        f"cloud search pruning: what -A and -B cost, and what -a recovers\n"
+        f"{subtitle(g)}   |   red box is nail's default (-A 10 -B 16)"
+    )
+    return save(fig, out, "heatmaps")
+
+
+def one_arm(g, out):
+    """Both fields side by side, for a table with a single -a in it."""
+    fig, axes = plt.subplots(1, 2, figsize=PANELS, constrained_layout=True)
+
+    for ax, (field, title, cmap, fmt) in zip(axes, PANELS_BY_FIELD):
+        data = g.surface(field)
+        im = panel(
+            ax, g, data, cmap, fmt, title,
+            Normalize(np.nanmin(data), np.nanmax(data)),
+        )
+        colorbar(fig, im, ax, shrink=0.9)
 
     fig.suptitle(
         f"cloud search pruning: what -A and -B cost\n"

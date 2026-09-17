@@ -397,6 +397,11 @@ records no `-A` and no `-B`, so it has no cell; the corner is where the surface
 is heading as the pruning relaxes, and it is the ceiling the pruned cells are
 read against.
 
+Each field is drawn at each `-a` and then as the difference between them, six
+panels. The difference is what the second arm is run for: it says where on the
+grid the sensitivity credited to `-A` and `-B` was recovered by retrying
+disjoint clouds instead. A summary with one `-a` in it draws two panels.
+
 A second figure used to scatter every cell in wall time against sensitivity.
 Eighty-one points overlapping on a plane, each carrying an `-A` and a `-B` that
 the position does not show, is not a figure anyone can read, so it was
