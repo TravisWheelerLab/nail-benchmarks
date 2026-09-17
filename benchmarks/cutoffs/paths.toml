@@ -20,3 +20,35 @@ gather   = "../../store/cutoffs-real/outputs/gather"
 reject   = "../../store/cutoffs-real/outputs/reject"
 analysis = "../../store/cutoffs-real/analysis/cutoffs"
 tmp      = "../../store/cutoffs-real/tmp/cutoffs"
+
+[sp-10k]
+set      = "../../store/cutoffs-sp-10k/inputs"
+recruit  = "../../store/cutoffs-sp-10k/outputs/recruit"
+gather   = "../../store/cutoffs-sp-10k/outputs/gather"
+reject   = "../../store/cutoffs-sp-10k/outputs/reject"
+analysis = "../../store/cutoffs-sp-10k/analysis/cutoffs"
+tmp      = "../../store/cutoffs-sp-10k/tmp/cutoffs"
+
+[sp-100k]
+set      = "../../store/cutoffs-sp-100k/inputs"
+recruit  = "../../store/cutoffs-sp-100k/outputs/recruit"
+gather   = "../../store/cutoffs-sp-100k/outputs/gather"
+reject   = "../../store/cutoffs-sp-100k/outputs/reject"
+analysis = "../../store/cutoffs-sp-100k/analysis/cutoffs"
+tmp      = "../../store/cutoffs-sp-100k/tmp/cutoffs"
+
+[sp-250k]
+set      = "../../store/cutoffs-sp-250k/inputs"
+recruit  = "../../store/cutoffs-sp-250k/outputs/recruit"
+gather   = "../../store/cutoffs-sp-250k/outputs/gather"
+reject   = "../../store/cutoffs-sp-250k/outputs/reject"
+analysis = "../../store/cutoffs-sp-250k/analysis/cutoffs"
+tmp      = "../../store/cutoffs-sp-250k/tmp/cutoffs"
+
+[sp-all]
+set      = "../../store/cutoffs-sp-all/inputs"
+recruit  = "../../store/cutoffs-sp-all/outputs/recruit"
+gather   = "../../store/cutoffs-sp-all/outputs/gather"
+reject   = "../../store/cutoffs-sp-all/outputs/reject"
+analysis = "../../store/cutoffs-sp-all/analysis/cutoffs"
+tmp      = "../../store/cutoffs-sp-all/tmp/cutoffs"

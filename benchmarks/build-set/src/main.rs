@@ -653,7 +653,12 @@ fn make_pairs(
     Ok(())
 }
 
-/// The fasta files in a directory, sorted by name.
+/// The fasta a source names: every one in a directory, sorted by name, or the
+/// single file itself.
+//
+// a source is a collection, and whether it arrived as one file or a thousand
+// is the downloader's business rather than the recipe's. MGnify comes as
+// shards and Swissprot as one file, and both are drawn from the same way
 //
 // sniffed rather than matched on the extension: these are
 // somebody else's downloads, and a shard that arrived as
@@ -661,6 +666,13 @@ fn make_pairs(
 // detect_path errors on anything it cannot identify, which
 // here is the same answer as "not a fasta"
 fn fastas(dir: &Path) -> anyhow::Result<Vec<PathBuf>> {
+    if dir.is_file() {
+        return match format::detect_path(dir) {
+            Ok(Format::Fasta) => Ok(vec![dir.to_path_buf()]),
+            _ => bail!("{} is not a fasta", dir.display()),
+        };
+    }
+
     let mut out: Vec<PathBuf> = std::fs::read_dir(dir)
         .with_context(|| format!("failed to read {}", dir.display()))?
         .filter_map(|e| e.ok().map(|e| e.path()))

@@ -341,6 +341,11 @@ pub struct GatherArgs {
     #[command(flatten)]
     pub place: Where,
 
+    /// What `reject` will run with. `union` searches the whole query set at
+    /// once, so the per-family split is not laid out for it
+    #[arg(long, value_enum, default_value_t = Strategy::Fanout)]
+    pub strategy: Strategy,
+
     #[arg(short, long, default_value_t = 4)]
     pub threads: usize,
 }
@@ -742,6 +747,15 @@ fn gather(args: GatherArgs, paths: &Paths) -> anyhow::Result<()> {
     })?;
 
     // ---- split the query set, so each family can be searched on its own
+    //
+    // fanout only. union searches the whole query set in one invocation, and
+    // the split is two files per family -- 41,590 of them for Pfam -- that
+    // nothing would then read
+    if args.strategy == Strategy::Union {
+        println!("union: leaving the query set whole");
+        println!("wrote {}", layout.gather.display());
+        return Ok(());
+    }
 
     println!("splitting queries for {} families...", families.len());
 
@@ -771,6 +785,17 @@ fn collect<C: HitColumns>(tbl: &Table<HitParser<C>>, map: &mut HashMap<String, V
 
 // ------------------------------------------------------------------ search
 
+/// The accession inside a `db|ACC|NAME` header, if the name is one.
+///
+/// mmseqs reports this where nail reports the whole name. MGnify's headers are
+/// a single token and the two agree; Swissprot's are not and they do not.
+fn accession(name: &str) -> Option<String> {
+    let mut parts = name.split('|');
+    let (_db, acc) = (parts.next()?, parts.next()?);
+    parts.next()?;
+    (!acc.is_empty()).then(|| acc.to_string())
+}
+
 /// The recruits each family holds, read back out of what `gather` laid out.
 ///
 /// This is the map `union` needs and `fanout` gets for free from the file
@@ -793,7 +818,15 @@ fn recruits_by_family(dir: &Path) -> anyhow::Result<HashMap<String, HashSet<Stri
         let mut rows = Reader::new(std::fs::File::open(&path)?, Format::Fasta);
         while rows.advance()? {
             if let Some(name) = libsail::seq::name_of(Format::Fasta, rows.record()) {
-                names.insert(String::from_utf8_lossy(name).into_owned());
+                let name = String::from_utf8_lossy(name).into_owned();
+                // both spellings, because the tools do not agree on one. a
+                // Swissprot record is `sp|Q7PKQ5|SQUT_ECO57`: nail reports it
+                // whole and mmseqs reports the accession alone, so a map keyed
+                // on either form alone silently drops one tool's every hit
+                if let Some(acc) = accession(&name) {
+                    names.insert(acc);
+                }
+                names.insert(name);
             }
         }
     }
@@ -857,6 +890,13 @@ fn reject_union(
 ) -> anyhow::Result<()> {
     let results = stage.results();
     let tmp = stage.tmp();
+
+    // cleared rather than reused: mmseqs refuses to write an alnDB that is
+    // already there, and unlike the fanout there is no fresh per-family
+    // scratch to hide that
+    if tmp.exists() {
+        std::fs::remove_dir_all(&tmp)?;
+    }
     std::fs::create_dir_all(&results)?;
     std::fs::create_dir_all(&tmp)?;
 
@@ -1590,6 +1630,7 @@ fn all(args: AllArgs, paths: &Paths) -> anyhow::Result<()> {
 
     gather(GatherArgs {
         place: args.place.clone(),
+        strategy: args.strategy,
         threads: args.threads,
     }, paths)?;
 
@@ -1624,4 +1665,31 @@ fn pool(threads: usize) -> anyhow::Result<rayon::ThreadPool> {
         .num_threads(threads.max(1))
         .build()
         .context("failed to build a thread pool")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// nail reports a Swissprot target whole and mmseqs reports the accession
+    /// alone, so the recruit map has to answer to both. Keyed on one form
+    /// only, the other tool's every hit is dropped and its cutoffs come out
+    /// zero without anything failing.
+    #[test]
+    fn an_accession_is_read_out_of_a_piped_name() {
+        assert_eq!(
+            accession("sp|Q7PKQ5|SQUT_ECO57").as_deref(),
+            Some("Q7PKQ5")
+        );
+        assert_eq!(accession("tr|A0A1B2|SOME_NAME").as_deref(), Some("A0A1B2"));
+    }
+
+    /// MGnify's headers are one token, which is why this went unnoticed: there
+    /// the two tools agree and there is nothing to strip.
+    #[test]
+    fn a_plain_name_has_no_accession_inside_it() {
+        assert_eq!(accession("MGYP001482868479"), None);
+        assert_eq!(accession("sp|Q7PKQ5"), None);
+        assert_eq!(accession(""), None);
+    }
 }

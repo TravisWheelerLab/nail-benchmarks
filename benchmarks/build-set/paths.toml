@@ -165,3 +165,48 @@ alignments = "../../data/pfam.sto"
 decoys     = "../../data/swissprot.fa"
 split      = "../pid/profmark"
 out        = "../../store/pid-real/inputs"
+
+# ------------------------------------------------------ cutoffs, on swissprot
+
+# The same reversal-recruit calibration the MGnify cutoffs run, against a
+# Swissprot background instead. Four sizes, because the question is how much
+# the learned cutoffs move as the decoy pool grows, and whether they settle.
+# One shard each: the pool is the variable, not the sharding.
+[cutoffs-sp-10k]
+shape      = "fixed"
+queries    = "../../data/pfam.hmm"
+alignments = "../../data/pfam.sto"
+targets    = "../../data/swissprot.fa"
+out        = "../../store/cutoffs-sp-10k/inputs"
+shards     = 1
+seqs       = 10000
+reversed   = true
+
+[cutoffs-sp-100k]
+shape      = "fixed"
+queries    = "../../data/pfam.hmm"
+alignments = "../../data/pfam.sto"
+targets    = "../../data/swissprot.fa"
+out        = "../../store/cutoffs-sp-100k/inputs"
+shards     = 1
+seqs       = 100000
+reversed   = true
+
+[cutoffs-sp-250k]
+shape      = "fixed"
+queries    = "../../data/pfam.hmm"
+alignments = "../../data/pfam.sto"
+targets    = "../../data/swissprot.fa"
+out        = "../../store/cutoffs-sp-250k/inputs"
+shards     = 1
+seqs       = 250000
+reversed   = true
+
+[cutoffs-sp-all]
+shape      = "fixed"
+queries    = "../../data/pfam.hmm"
+alignments = "../../data/pfam.sto"
+targets    = "../../data/swissprot.fa"
+out        = "../../store/cutoffs-sp-all/inputs"
+shards     = 1
+reversed   = true
