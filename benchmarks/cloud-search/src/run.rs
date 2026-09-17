@@ -9,8 +9,11 @@
 //! knob trades off, and the answer doesn't need more sequences than it takes
 //! to see the trade.
 //!
-//! -a is left alone. It is a real knob and it carries most of the weight at
-//! aggressive thresholds, but it is not what this benchmark is asking about.
+//! Every grid is run twice, at -a 5 and at -a 0. -a decides how many times
+//! nail may retry a pair whose clouds came apart, so a cell that prunes hard
+//! can buy back sensitivity somewhere -A and -B do not show. The second arm is
+//! what separates the two, and it is not optional: a surface at one -a alone
+//! cannot say which of them it is measuring.
 
 use std::path::PathBuf;
 
@@ -27,6 +30,13 @@ use util::set::Set;
 
 /// The column hmmer's run becomes, which every cell is measured against.
 const HMMER: &str = "hmmer";
+
+/// The -a the whole grid is run at, in order.
+///
+/// 5 is nail's own default, passed rather than left off so the manifest
+/// records what ran instead of whatever the binary defaulted to that day. 0
+/// turns the recovery off.
+const ATTEMPTS: [u32; 2] = [5, 0];
 
 #[derive(Parser, Debug)]
 pub struct Args {
@@ -76,7 +86,7 @@ pub struct Args {
 /// find it.
 #[derive(Clone, Copy, Debug, PartialEq)]
 enum Cell {
-    Pruned { a: f32, b: f32 },
+    Pruned { a: f32, b: f32, attempts: u32 },
     Full,
 }
 
@@ -84,13 +94,22 @@ impl Cell {
     /// What this cell's results file is called, and what its step is named.
     fn label(self) -> String {
         match self {
-            Cell::Pruned { a, b } => format!("A{a:.1}-B{b:.1}"),
+            Cell::Pruned { a, b, attempts } => format!("A{a:.1}-B{b:.1}-a{attempts}"),
             Cell::Full => "full".to_string(),
         }
     }
 }
 
-/// Every A against every B, then the unpruned cell on the end.
+/// Every A against every B at each -a, then the unpruned cell on the end.
+///
+/// -a is the outer loop, so each of its values gets a whole grid before the
+/// next one starts and a sweep that is killed partway leaves one complete
+/// surface rather than a piece of each. The default arm goes first, so what a
+/// killed sweep leaves is the surface that is already understood.
+///
+/// The unpruned cell is emitted once. `--full-dp` fills the matrix and never
+/// runs the cloud stage, so there is no disjoint cloud for -a to recover and
+/// no second timing to take.
 ///
 /// Cells where A >= B are in here and are expected to come out identical to
 /// each other: A prunes against the best score on the current anti-diagonal
@@ -98,9 +117,13 @@ impl Cell {
 /// global one never binds. They are left in as a check rather than skipped as
 /// waste.
 fn cells(alphas: &[f32], betas: &[f32]) -> Vec<Cell> {
-    let mut out: Vec<Cell> = alphas
+    let mut out: Vec<Cell> = ATTEMPTS
         .iter()
-        .flat_map(|&a| betas.iter().map(move |&b| Cell::Pruned { a, b }))
+        .flat_map(|&attempts| {
+            alphas.iter().flat_map(move |&a| {
+                betas.iter().map(move |&b| Cell::Pruned { a, b, attempts })
+            })
+        })
         .collect();
 
     out.push(Cell::Full);
@@ -198,11 +221,15 @@ pub fn main(args: Args, paths: &crate::Paths) -> anyhow::Result<()> {
             // the fields are written the way the label is, so a whole-numbered
             // threshold keeps its decimal point and `A=2.0` reads against
             // `A2.0-B4.0` rather than beside it
-            Cell::Pruned { a, b } => cmd
+            Cell::Pruned { a, b, attempts } => cmd
                 .arg("-A", a)
                 .arg("-B", b)
+                .arg("-a", attempts)
                 .field("A", format!("{a:.1}"))
-                .field("B", format!("{b:.1}")),
+                .field("B", format!("{b:.1}"))
+                // spelled out rather than `a`, which a reader of the table
+                // would have to tell from `A` by its case alone
+                .field("attempts", attempts),
             Cell::Full => cmd.flag("--full-dp"),
         };
 
