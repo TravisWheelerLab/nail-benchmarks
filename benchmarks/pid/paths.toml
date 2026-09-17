@@ -3,15 +3,21 @@
 # Its own two sets, built by `build-set --in pid-toy|pid-real`. The profmark
 # split they are drawn from is not named here: it is a source, and build-set's
 # recipe points at it.
+#
+# The figures are the one thing that does not land in the store: a pdf is read
+# by a person, so every benchmark's go to figures/<set>/ at the root where they
+# can be found together.
 
 [toy]
 set      = "../../store/pid-toy/inputs"
-run      = "../../store/pid-toy/outputs/pid"
-analysis = "../../store/pid-toy/analysis/pid"
-tmp      = "../../store/pid-toy/tmp/pid"
+run      = "../../store/pid-toy/outputs"
+analysis = "../../store/pid-toy/analysis"
+figures  = "../../figures/pid-toy"
+tmp      = "../../store/pid-toy/tmp"
 
 [real]
 set      = "../../store/pid-real/inputs"
-run      = "../../store/pid-real/outputs/pid"
-analysis = "../../store/pid-real/analysis/pid"
-tmp      = "../../store/pid-real/tmp/pid"
+run      = "../../store/pid-real/outputs"
+analysis = "../../store/pid-real/analysis"
+figures  = "../../figures/pid-real"
+tmp      = "../../store/pid-real/tmp"

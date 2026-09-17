@@ -44,17 +44,14 @@ fn e_value_cmp(a: &Hit2, b: &Hit2) -> std::cmp::Ordering {
 /// Where an analysis writes. Every one of them takes it.
 #[derive(Parser)]
 pub struct Which {
-    /// Where the tables go. Defaults to figures/ beside the run
+    /// Where the tables go. Defaults to what the label names
     #[arg(short, long, value_name = "dir")]
     out: Option<PathBuf>,
 }
 
 impl Which {
     fn out_dir(&self, analysis: &Path) -> PathBuf {
-        let _ = analysis;
-        self.out
-            .clone()
-            .unwrap_or_else(|| analysis.join("figures"))
+        self.out.clone().unwrap_or_else(|| analysis.to_path_buf())
     }
 }
 

@@ -25,7 +25,7 @@ pub struct Args {
     #[arg(long = "in", value_name = "label")]
     pub label: Option<String>,
 
-    /// Where the pdfs go. Defaults to figures/ beside summary.tbl
+    /// Where the pdfs go. Defaults to what the label names
     #[arg(short, long, value_name = "dir")]
     out: Option<PathBuf>,
 
@@ -47,13 +47,7 @@ pub fn main(args: Args, paths: &crate::Paths) -> anyhow::Result<()> {
         );
     }
 
-    let out = match args.out {
-        Some(dir) => dir,
-        None => summary
-            .parent()
-            .context("summary.tbl has no directory")?
-            .join("figures"),
-    };
+    let out = args.out.clone().unwrap_or_else(|| paths.figures.clone());
 
     let script = crate::dir().join(SCRIPT);
     if !script.is_file() {
@@ -76,7 +70,7 @@ pub fn main(args: Args, paths: &crate::Paths) -> anyhow::Result<()> {
 
     let pipeline = PipelineBuilder::new()
         .step(Step::serial([cmd]))
-        .stderr_dir(out.join("stderr"))
+        .stderr_dir(paths.tmp.join("plot-stderr"))
         .sink(Progress::new())
         .build()?;
 

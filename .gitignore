@@ -18,6 +18,10 @@
 # long-seqs' set ships with the repo rather than being built, so it sits under
 # data/ and is tracked like the pairs it describes
 /store/
+# the figures are the one thing a benchmark makes that does not go in the
+# store: a pdf is read by a person rather than by another pipeline, so it sits
+# one level under the root where all of them can be found together
+/figures/
 # pid still keeps its own, since it has not moved to the store
 /benchmarks/pid/inputs/
 /benchmarks/pid/outputs/

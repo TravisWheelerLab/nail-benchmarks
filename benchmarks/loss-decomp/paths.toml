@@ -5,12 +5,12 @@
 
 [toy]
 set      = "../../store/loss-decomp-toy/inputs"
-run      = "../../store/loss-decomp-toy/outputs/loss-decomp"
-analysis = "../../store/loss-decomp-toy/analysis/loss-decomp"
-tmp      = "../../store/loss-decomp-toy/tmp/loss-decomp"
+run      = "../../store/loss-decomp-toy/outputs"
+analysis = "../../store/loss-decomp-toy/analysis"
+tmp      = "../../store/loss-decomp-toy/tmp"
 
 [real]
 set      = "../../store/loss-decomp-real/inputs"
-run      = "../../store/loss-decomp-real/outputs/loss-decomp"
-analysis = "../../store/loss-decomp-real/analysis/loss-decomp"
-tmp      = "../../store/loss-decomp-real/tmp/loss-decomp"
+run      = "../../store/loss-decomp-real/outputs"
+analysis = "../../store/loss-decomp-real/analysis"
+tmp      = "../../store/loss-decomp-real/tmp"

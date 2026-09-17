@@ -5,12 +5,12 @@
 
 [toy]
 set      = "../../store/recall-toy/inputs"
-run      = "../../store/recall-toy/outputs/recall"
-analysis = "../../store/recall-toy/analysis/recall"
-tmp      = "../../store/recall-toy/tmp/recall"
+run      = "../../store/recall-toy/outputs"
+analysis = "../../store/recall-toy/analysis"
+tmp      = "../../store/recall-toy/tmp"
 
 [real]
 set      = "../../store/recall-real/inputs"
-run      = "../../store/recall-real/outputs/recall"
-analysis = "../../store/recall-real/analysis/recall"
-tmp      = "../../store/recall-real/tmp/recall"
+run      = "../../store/recall-real/outputs"
+analysis = "../../store/recall-real/analysis"
+tmp      = "../../store/recall-real/tmp"

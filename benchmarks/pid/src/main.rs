@@ -43,6 +43,9 @@ pub struct Paths {
     pub run: PathBuf,
     /// Where the tables parse works out go.
     pub analysis: PathBuf,
+    /// Where the figures go, which is outside the store: a pdf is read by a
+    /// person rather than by another pipeline.
+    pub figures: PathBuf,
     /// Scratch, and nothing worth keeping.
     pub tmp: PathBuf,
 }
@@ -58,6 +61,7 @@ impl Paths {
             set: file.at(p.set),
             run: file.at(p.run),
             analysis: file.at(p.analysis),
+            figures: file.at(p.figures),
             tmp: file.at(p.tmp),
         })
     }

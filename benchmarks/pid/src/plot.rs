@@ -63,8 +63,7 @@ pub struct Args {
     #[arg(long = "in", value_name = "label")]
     pub label: Option<String>,
 
-    /// Where `parse` wrote its tables, and where the pdfs go. Defaults to
-    /// figures/ beside the run
+    /// Where the pdfs go. Defaults to what the label names
     #[arg(short, long, value_name = "dir")]
     out: Option<PathBuf>,
 
@@ -89,17 +88,16 @@ pub fn main(args: Args, paths: &crate::Paths) -> anyhow::Result<()> {
         }
     }
 
-    let dir = args
-        .out
-        .clone()
-        .unwrap_or_else(|| paths.analysis.join("figures"));
+    // the tables and the pdfs part company here: parse writes into the
+    // store beside the run, and a figure is read by a person, so it goes
+    // where the labels put every other figure in the repository
+    let tables = paths.analysis.clone();
+    let dir = args.out.clone().unwrap_or_else(|| paths.figures.clone());
 
-    if !dir.is_dir() {
-        bail!(
-            "no {}; run `pid parse recall` first",
-            dir.display()
-        );
+    if !tables.is_dir() {
+        bail!("no {}; run `pid parse recall` first", tables.display());
     }
+    std::fs::create_dir_all(&dir)?;
 
     let scripts = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("scripts");
 
@@ -123,7 +121,7 @@ pub fn main(args: Args, paths: &crate::Paths) -> anyhow::Result<()> {
             .inputs
             .iter()
             .copied()
-            .filter(|f| !dir.join(f).is_file())
+            .filter(|f| !tables.join(f).is_file())
             .collect();
 
         if !missing.is_empty() {
@@ -131,7 +129,7 @@ pub fn main(args: Args, paths: &crate::Paths) -> anyhow::Result<()> {
                 "skipping {}: no {} in {}",
                 figure.name,
                 missing.join(", "),
-                dir.display()
+                tables.display()
             );
             continue;
         }
@@ -151,7 +149,7 @@ pub fn main(args: Args, paths: &crate::Paths) -> anyhow::Result<()> {
                 Cmd::new(&args.python)
                     .name(figure.name)
                     .sub(script.to_string_lossy()),
-                |cmd, input| cmd.path(dir.join(input)),
+                |cmd, input| cmd.path(tables.join(input)),
             )
             .path(dir.join(format!("{}.pdf", figure.name)));
 
@@ -162,12 +160,12 @@ pub fn main(args: Args, paths: &crate::Paths) -> anyhow::Result<()> {
     if drawn == 0 {
         bail!(
             "nothing to draw: no analysis output in {}. run `pid parse recall` first",
-            dir.display()
+            tables.display()
         );
     }
 
     let pipeline = pl
-        .stderr_dir(dir.join("stderr"))
+        .stderr_dir(paths.tmp.join("plot-stderr"))
         .sink(Progress::new())
         .build()
         .context("failed to build the figures")?;

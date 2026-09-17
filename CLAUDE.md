@@ -136,27 +136,41 @@ from which crate made it, so a set built by one benchmark is readable by
 another without either naming the other's directory.
 
 A set and everything derived from it share a directory, so what a run was
-searched against is the directory it sits in:
+searched against is the directory it sits in. The figures are the exception,
+and the reason is below:
 
 ```
 store/<set>/
 ├── inputs/
 │   ├── set.tbl                  one row per search unit, and what it is made of
 │   └── ...                      the queries and targets it names
-├── outputs/<run>/
+├── outputs/
 │   ├── manifest.tbl             every command, its wall clock, its exit code
 │   ├── ledger.tbl               one row per run per shard, and what it cost
 │   └── results/<run>.<shard>.tbl   one hit table per run, per target shard
-├── analysis/<run>/              what parse worked out, and the figures
-└── tmp/<run>/                   scratch, and nothing worth keeping
+├── analysis/                    what parse worked out
+└── tmp/                         scratch, and nothing worth keeping
+
+figures/<set>/                   the pdfs, outside the store
 ```
+
+A benchmark that runs in one pass writes straight into `outputs/`. cutoffs
+names a directory under it per stage -- `recruit/`, `gather/`, `reject/` --
+because each of those is a pipeline of its own with its own manifest and its
+own results. So the level, where it exists, is a stage rather than a repeat of
+the benchmark's name.
+
+The figures are the one thing that leaves the store. A pdf is read by a person
+rather than by another pipeline, so digging five levels down to find one is
+cost with nothing on the other side of it. They go to `figures/<set>/` at the
+root, keeping the set name so a toy figure and a real one are told apart.
 
 Nothing in the code knows that layout. It is what the `paths.toml` files happen
 to say, and moving a set to a scratch disk is editing a line rather than
 changing anything that compiles.
 
 The scratch sits beside the record rather than inside it, so
-`outputs/<run>/` holds the record and only the record, and the whole of `tmp/`
+`outputs/` holds the record and only the record, and the whole of `tmp/`
 can go at any time without touching it. The search pipelines still
 take `--tmp` to put their own scratch somewhere else, a scratch disk being the
 usual reason; `build` and `cutoffs` have no such flag and never had one.
@@ -245,9 +259,10 @@ one table per label:
 ```toml
 [toy]
 set      = "../../store/toy/inputs"
-run      = "../../store/toy/outputs/recall"
-analysis = "../../store/toy/analysis/recall"
-tmp      = "../../store/toy/tmp/recall"
+run      = "../../store/toy/outputs"
+analysis = "../../store/toy/analysis"
+figures  = "../../figures/toy"
+tmp      = "../../store/toy/tmp"
 ```
 
 A label is a whole set of paths under one name, so a toy run and a real run

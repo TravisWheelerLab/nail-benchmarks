@@ -1,16 +1,20 @@
 # Where cloud-search reads and writes. Paths only, relative to this file.
 #
 # Its own two sets: sharing one with another benchmark would hide what this one
-# actually reads. A set and everything derived from it share a directory.
+# actually reads. A set and everything derived from it share a directory,
+# except the figures: a pdf is read by a person, so every benchmark's go to
+# figures/<set>/ at the root where they can be found together.
 
 [toy]
 set      = "../../store/cloud-search-toy/inputs"
-run      = "../../store/cloud-search-toy/outputs/cloud-search"
-analysis = "../../store/cloud-search-toy/analysis/cloud-search"
-tmp      = "../../store/cloud-search-toy/tmp/cloud-search"
+run      = "../../store/cloud-search-toy/outputs"
+analysis = "../../store/cloud-search-toy/analysis"
+figures  = "../../figures/cloud-search-toy"
+tmp      = "../../store/cloud-search-toy/tmp"
 
 [real]
 set      = "../../store/cloud-search-real/inputs"
-run      = "../../store/cloud-search-real/outputs/cloud-search"
-analysis = "../../store/cloud-search-real/analysis/cloud-search"
-tmp      = "../../store/cloud-search-real/tmp/cloud-search"
+run      = "../../store/cloud-search-real/outputs"
+analysis = "../../store/cloud-search-real/analysis"
+figures  = "../../figures/cloud-search-real"
+tmp      = "../../store/cloud-search-real/tmp"
