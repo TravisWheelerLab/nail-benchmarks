@@ -477,6 +477,48 @@ reversing it is the forward one, so both directions come out of one pass over
 the recruits. What makes this a calibration rather than a benchmark is that its
 product, `data/mgy-cutoffs.tbl`, is committed and promoted by hand.
 
+### The forward pass is a per-pair test, and that is not negotiable
+
+**A family's null holds only sequences vetted for that family. Never pool them
+across families.**
+
+The forward pass asks exactly one question about one pair: family A recruited
+sequence S on the reverse, so does A also match `forward(S)`? A yes means S is
+the reversal of a true member of A, and S is thrown out rather than counted as
+a decoy for A. Family B's forward result for B's own recruit answers that
+question for B and for nothing else.
+
+The reason this matters more than it looks: a reversed sequence keeps a
+surprisingly high similarity score against its unreversed self. That is not
+only biology -- a good part of it is approximate-palindrome statistics of text,
+which the Wheeler lab wrote up in *wasitamatchisaw*. So the reversals of a
+family's own true members are exactly the sequences that score well against it
+on the reverse pass. The decoys that look best are the ones that are not decoys
+at all.
+
+Searching all of Pfam against the union of every family's recruits in one
+invocation is fine, and it is how the fanout is avoided. What is not fine is
+letting the union widen any family's null. `learn` joins each hit back to the
+family that recruited the sequence, and keeps only those.
+
+**The restriction costs nothing, and it comes with its own test.** Widening the
+pool cannot change a family's null: the null is the scores of sequences the
+family *hit*, and a sequence A never hits contributes nothing, whatever else
+sits in the target file. So pooling should move no cutoff at all.
+
+If pooling ever does move a cutoff, that is not an improvement and not noise.
+It means pairs reached A's null without being asked A's question, and by the
+paragraph above the pairs most likely to do that are the reversals of A's own
+true members. The null would then be seeded with disguised true positives, A's
+cutoff would rise, and real hits would be discarded quietly -- the exact failure
+the forward pass exists to prevent. A measurable effect from pooling is the
+method reporting its own unsoundness, so treat it as a bug to find rather than
+a result to keep.
+
+The one case where B's recruits could legitimately inform A is A and B being
+highly related, and that is the two families not being independent rather than
+an argument for pooling.
+
 `store import` writes a `ledger.tbl` for result tables produced elsewhere, out of
 the `.time` files that came back with them, which turns a search run on a
 cluster into an ordinary run directory in the store. It takes `--set` so it can
