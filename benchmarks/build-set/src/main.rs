@@ -26,7 +26,7 @@
 //! for the pipelines that don't search mmseqs. They are what an mmseqs column
 //! costs, and a query set that can't answer for one of the tools isn't one set.
 
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::fs::File;
 use std::io::{BufWriter, Write};
 use std::path::{Path, PathBuf};
@@ -34,10 +34,10 @@ use std::sync::{Arc, Mutex};
 
 use anyhow::{Context, bail, ensure};
 use clap::Parser;
-use serde::Deserialize;
 use rand::SeedableRng;
 use rand::rngs::StdRng;
 use rand::seq::SliceRandom;
+use serde::Deserialize;
 
 use libsail::collection::{Aggregate, Indexable, Iterable};
 use libsail::format::{self, Format};
@@ -52,7 +52,6 @@ use util::cut;
 use util::paths;
 use util::set::{self, Set};
 use util::tools::mmseqs;
-
 
 /// Where a set keeps things, relative to its own root.
 //
@@ -103,6 +102,18 @@ enum Recipe {
         /// calibration searches against.
         #[serde(default)]
         reversed: bool,
+        #[serde(default = "default_seed")]
+        seed: u64,
+    },
+    /// Every query source against every target source.
+    ///
+    /// Both sides are lists of independent sources, so a unit is one whole
+    /// source against another and what moves between units is which sources
+    /// they are. N x M, N x 1 and 1 x M are this one recipe.
+    Cross {
+        out: PathBuf,
+        queries: Vec<QuerySrc>,
+        targets: Vec<TargetSrc>,
         #[serde(default = "default_seed")]
         seed: u64,
     },
@@ -190,6 +201,7 @@ impl Recipe {
     fn out(&self) -> &Path {
         match self {
             Recipe::Fixed { out, .. }
+            | Recipe::Cross { out, .. }
             | Recipe::Pairs { out, .. }
             | Recipe::Ladder { out, .. }
             | Recipe::Profmark { out, .. } => out,
@@ -200,6 +212,7 @@ impl Recipe {
         match self {
             Recipe::Fixed { reversed: true, .. } => "reversed",
             Recipe::Fixed { .. } => "fixed",
+            Recipe::Cross { .. } => "cross",
             Recipe::Pairs { .. } => "pairs",
             Recipe::Ladder { .. } => "ladder",
             Recipe::Profmark { .. } => "profmark",
@@ -210,7 +223,10 @@ impl Recipe {
 const USAGE: &str = "build-set --in <label>";
 
 #[derive(Parser)]
-#[command(name = "build-set", about = "cut a query and a target source into a set")]
+#[command(
+    name = "build-set",
+    about = "cut a query and a target source into a set"
+)]
 struct Cli {
     /// Which label of paths.toml to build. Omit to list them
     #[arg(long = "in", value_name = "label")]
@@ -258,17 +274,18 @@ fn main() -> anyhow::Result<()> {
             reversed,
             seed,
         ),
+        Recipe::Cross {
+            out,
+            queries,
+            targets,
+            seed,
+        } => cross(&paths, paths.at(out), queries, targets, seed),
         Recipe::Pairs {
             queries,
             targets,
             out,
             pairs,
-        } => make_pairs(
-            paths.at(queries),
-            paths.at(targets),
-            paths.at(out),
-            pairs,
-        ),
+        } => make_pairs(paths.at(queries), paths.at(targets), paths.at(out), pairs),
         Recipe::Profmark {
             alignments,
             decoys,
@@ -330,7 +347,11 @@ fn listing(paths: &paths::File) -> anyhow::Result<String> {
         let recipe: Recipe = paths.get(label)?;
         let (shape, size, dst) = match &recipe {
             Recipe::Fixed {
-                out, shards, seqs, fams, ..
+                out,
+                shards,
+                seqs,
+                fams,
+                ..
             } => (
                 recipe.shape(),
                 format!(
@@ -338,6 +359,22 @@ fn listing(paths: &paths::File) -> anyhow::Result<String> {
                     plural(*shards, "shard"),
                     count(*seqs),
                     count(*fams)
+                ),
+                out,
+            ),
+            Recipe::Cross {
+                out,
+                queries,
+                targets,
+                ..
+            } => (
+                recipe.shape(),
+                format!(
+                    "{} x {} = {} {}",
+                    queries.len(),
+                    targets.len(),
+                    queries.len() * targets.len(),
+                    plural(queries.len() * targets.len(), "unit")
                 ),
                 out,
             ),
@@ -462,7 +499,9 @@ fn fixed(
                             Some(n) => n,
                         };
 
-                        let dealt = deal(&seqs, n_seqs, shards, seed, reversed, &targets)?;
+                        let dealt = deal(&seqs, n_seqs, shards, seed, reversed, &targets, |i| {
+                            targets.join(format!("{i}.fa"))
+                        })?;
                         *counted.lock().expect("the deal poisoned the count") = dealt;
                         Ok(())
                     }
@@ -511,19 +550,20 @@ struct Shard {
     bytes: u64,
 }
 
-/// Deals `n_seqs` sequences into `shards` files, `<i>.fa` for `i` in `1..=shards`.
-///
-/// The draw is a permutation, so plain round robin is enough to leave a shard
-/// with nothing of the collection's own order in it.
 /// How much of each shard is held in memory before it reaches the disk.
 ///
-/// The draw now reads forwards, so the writes are what is left to be scattered:
-/// a record goes to whichever of a thousand files its shard is, and the default
+/// The draw reads forwards, so the writes are what is left to be scattered: a
+/// record goes to whichever of a thousand files its shard is, and the default
 /// 8 KiB buffer would turn that into a flush every few records per file. A
 /// megabyte apiece costs a gigabyte at a thousand shards and makes each file's
 /// writes long and sequential.
 const SHARD_BUF: usize = 1 << 20;
 
+/// Deals `n_seqs` sequences into `shards` files, `file(i)` for `i` in `1..=shards`.
+///
+/// The caller names the files because what a shard is called is a property of
+/// the recipe: `fixed` numbers a thousand of them and `cross` writes one under
+/// the name of the source it drew from.
 fn deal(
     seqs: &Aggregate<IndexedFasta>,
     n_seqs: usize,
@@ -531,13 +571,14 @@ fn deal(
     seed: u64,
     reversed: bool,
     out_dir: &Path,
+    file: impl Fn(usize) -> PathBuf,
 ) -> anyhow::Result<Vec<Shard>> {
     std::fs::create_dir_all(out_dir)
         .with_context(|| format!("failed to create {}", out_dir.display()))?;
 
     let mut writers = Vec::with_capacity(shards);
     for i in 1..=shards {
-        let path = out_dir.join(format!("{i}.fa"));
+        let path = file(i);
         let file =
             File::create(&path).with_context(|| format!("failed to create {}", path.display()))?;
         writers.push(BufWriter::with_capacity(SHARD_BUF, file));
@@ -592,7 +633,7 @@ fn deal(
         .enumerate()
         .map(|(at, (seqs, residues))| {
             let shard = at + 1;
-            let path = out_dir.join(format!("{shard}.fa"));
+            let path = file(shard);
             let bytes = std::fs::metadata(&path)
                 .with_context(|| format!("failed to stat {}", path.display()))?
                 .len();
@@ -605,6 +646,174 @@ fn deal(
             })
         })
         .collect()
+}
+
+// -------------------------------------------------------------------- cross
+
+fn cross(
+    paths: &paths::File,
+    root: PathBuf,
+    queries: Vec<QuerySrc>,
+    targets: Vec<TargetSrc>,
+    seed: u64,
+) -> anyhow::Result<()> {
+    ensure!(!queries.is_empty(), "a cross needs a query source");
+    ensure!(!targets.is_empty(), "a cross needs a target source");
+    unique(queries.iter().map(|q| &q.name), "query")?;
+    unique(targets.iter().map(|t| &t.name), "target")?;
+
+    claim(&root)?;
+
+    // checked before the draw for the reason Sources checks it: finding out
+    // about a missing mmseqs after the targets are dealt would be miserable
+    let mmseqs_bin = mmseqs()?;
+
+    let mut pl = PipelineBuilder::new().step(
+        PCmd::new("mkdir")
+            .name("dirs")
+            .flag("-p")
+            .path(root.join(TARGETS)),
+    );
+
+    for q in &queries {
+        let dir = root.join(QUERIES).join(&q.name);
+        let (hmm, sto) = (dir.join(QUERY_HMM), dir.join(QUERY_STO));
+        let src = Sources {
+            dir: PathBuf::new(),
+            hmm: paths.at(q.hmm.clone()),
+            sto: paths.at(q.alignments.clone()),
+            mmseqs: mmseqs_bin.clone(),
+        };
+        let fams = q.fams;
+
+        pl = pl
+            .step(
+                PCmd::new("mkdir")
+                    .name("dirs")
+                    .flag("-p")
+                    .path(&dir)
+                    .name(format!("dirs.{}", q.name)),
+            )
+            .step(
+                Step::from_closures([Closure::new("query", move || {
+                    subset_query(&src, fams, &hmm, &sto)
+                })])
+                .name(format!("query.{}", q.name)),
+            )
+            .step(profile_db(&mmseqs_bin, &dir).name(format!("profile db.{}", q.name)));
+    }
+
+    // what each target source came to, filled in as it is drawn
+    let counted: Arc<Mutex<Vec<(String, Shard)>>> = Arc::default();
+
+    for tgt in &targets {
+        let from = paths.at(tgt.from.clone());
+        let (name, want) = (tgt.name.clone(), tgt.seqs);
+        let dir = root.join(TARGETS);
+        let counted = Arc::clone(&counted);
+
+        pl = pl.step(
+            Step::from_closures([Closure::new("target", move || {
+                let seqs = collection_at(&from)?;
+                let n = draw_size(want, seqs.len(), &from);
+                let file = dir.join(format!("{name}.fa"));
+
+                let mut dealt = deal(&seqs, n, 1, seed, false, &dir, |_| file.clone())?;
+                let shard = dealt.pop().expect("one shard was asked for");
+
+                counted
+                    .lock()
+                    .expect("a draw poisoned the count")
+                    .push((name.clone(), shard));
+                Ok(())
+            })])
+            .name(format!("target.{}", tgt.name)),
+        );
+    }
+
+    pl.stderr_dir(root.join("stderr"))
+        .sink(Progress::new())
+        .build()?
+        .run()?;
+
+    let counted = counted.lock().expect("a draw poisoned the count");
+    let sizes: HashMap<&str, &Shard> = counted.iter().map(|(n, s)| (n.as_str(), s)).collect();
+
+    let mut rows = Vec::with_capacity(queries.len() * targets.len());
+    for q in &queries {
+        for tgt in &targets {
+            let size = sizes[tgt.name.as_str()];
+            let dir = format!("{QUERIES}/{}", q.name);
+
+            rows.push(
+                set::Row::new(
+                    format!("{}.{}", q.name, tgt.name),
+                    format!("{TARGETS}/{}.fa", tgt.name),
+                )
+                .query_hmm(format!("{dir}/{QUERY_HMM}"))
+                .query_sto(format!("{dir}/{QUERY_STO}"))
+                .query_db(format!("{dir}/{QUERY_DB}"))
+                .attr("query_src", &q.name)
+                .attr("target_src", &tgt.name)
+                .attr("seqs", size.seqs)
+                .attr("residues", size.residues)
+                .attr("bytes", size.bytes),
+            );
+        }
+    }
+
+    Set::new(&root, rows)
+        .says("shape", "cross")
+        .says("recipe", "cross")
+        .says("seed", seed)
+        .says(
+            "queries",
+            queries
+                .iter()
+                .map(|q| q.name.as_str())
+                .collect::<Vec<_>>()
+                .join(","),
+        )
+        .says(
+            "targets",
+            targets
+                .iter()
+                .map(|t| t.name.as_str())
+                .collect::<Vec<_>>()
+                .join(","),
+        )
+        .save()?;
+
+    println!("\nbuilt {}", root.display());
+    Ok(())
+}
+
+/// How many records to draw, given what was asked for and what is there.
+fn draw_size(want: Option<usize>, total: usize, from: &Path) -> usize {
+    match want {
+        None => total,
+        Some(n) if n > total => {
+            eprintln!(
+                "warning: asked for {n} sequences but {} holds {total}",
+                from.display()
+            );
+            total
+        }
+        Some(n) => n,
+    }
+}
+
+/// Holds a list of source names to being distinct, since a name is half of a
+/// unit and two units cannot share one.
+fn unique<'a>(names: impl Iterator<Item = &'a String>, side: &str) -> anyhow::Result<()> {
+    let mut seen = HashSet::new();
+    for name in names {
+        ensure!(
+            seen.insert(name),
+            "two {side} sources are both called {name:?}"
+        );
+    }
+    Ok(())
 }
 
 // -------------------------------------------------------------------- pairs
@@ -918,8 +1127,35 @@ fn deal_nested(
     Ok(counted)
 }
 
-
 // ------------------------------------------------------------------- shared
+
+/// One query source: what to call it, where it is, and how much of it to cut.
+#[derive(Deserialize, Debug, Clone)]
+#[serde(rename_all = "kebab-case", deny_unknown_fields)]
+struct QuerySrc {
+    /// What this source is called. It becomes `query_src`, half of `unit`, and
+    /// the directory the cut query is written to.
+    name: String,
+    hmm: PathBuf,
+    alignments: PathBuf,
+    /// A cap on the families cut. All of them when absent.
+    #[serde(default)]
+    fams: Option<usize>,
+}
+
+/// One target source: what to call it, where it is, and how much of it to draw.
+#[derive(Deserialize, Debug, Clone)]
+#[serde(rename_all = "kebab-case", deny_unknown_fields)]
+struct TargetSrc {
+    /// What this source is called. It becomes `target_src`, half of `unit`,
+    /// and the name of the file drawn from it.
+    name: String,
+    /// A fasta, or a directory of them.
+    from: PathBuf,
+    /// A cap on the sequences drawn. All of them when absent.
+    #[serde(default)]
+    seqs: Option<usize>,
+}
 
 /// What a build reads, and the binary it needs to finish.
 #[derive(Clone)]
@@ -969,9 +1205,7 @@ fn collection_at(dir: &Path) -> anyhow::Result<Aggregate<IndexedFasta>> {
 
     let mut parts = Vec::with_capacity(paths.len());
     for path in &paths {
-        parts.push(
-            indexed(path).with_context(|| format!("failed to index {}", path.display()))?,
-        );
+        parts.push(indexed(path).with_context(|| format!("failed to index {}", path.display()))?);
     }
 
     Ok(Aggregate::new(parts))
@@ -1001,7 +1235,10 @@ fn indexed(path: &Path) -> anyhow::Result<IndexedFasta> {
     let index = Index::build(File::open(path)?, Format::Fasta)?;
 
     if let Err(e) = index.write(&at, path) {
-        eprintln!("warning: could not write an index beside {}: {e}", path.display());
+        eprintln!(
+            "warning: could not write an index beside {}: {e}",
+            path.display()
+        );
     }
 
     Ok(IndexedFasta::with_index(path, index)?)
@@ -1180,7 +1417,10 @@ mod tests {
     fn shards_of(dir: &Path, n: usize, shards: usize) -> (Vec<Vec<String>>, PathBuf) {
         let agg = collection_at(dir).unwrap();
         let out = dir.join(format!("out-{n}-{shards}"));
-        deal(&agg, n, shards, 67779, false, &out).unwrap();
+        deal(&agg, n, shards, 67779, false, &out, |i| {
+            out.join(format!("{i}.fa"))
+        })
+        .unwrap();
 
         let names = (1..=shards)
             .map(|i| {
@@ -1280,7 +1520,10 @@ mod tests {
 
         let of = |seed: u64| {
             let out = dir.join(format!("out-{seed}"));
-            deal(&agg, 300, 7, seed, false, &out).unwrap();
+            deal(&agg, 300, 7, seed, false, &out, |i| {
+                out.join(format!("{i}.fa"))
+            })
+            .unwrap();
             (1..=7)
                 .map(|i| {
                     std::fs::read_to_string(out.join(format!("{i}.fa")))

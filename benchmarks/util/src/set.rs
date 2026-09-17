@@ -142,6 +142,24 @@ pub mod shape {
         attrs: &["pair", "query_residues", "residues"],
     };
 
+    /// Every query source against every target source.
+    ///
+    /// The one shape where both sides are lists of independent sources rather
+    /// than cuts of one. [`FIXED`] grids a query over a partition of a single
+    /// target source and [`LADDER`] grids nested subsets of one source per
+    /// axis, so in both the units are pieces of the same thing; here a unit is
+    /// one whole source against another, and what moves between units is which
+    /// sources they are. [`PAIRS`] is the diagonal of a cross that was never
+    /// built.
+    ///
+    /// N x M, N x 1 and 1 x M are the same recipe and the same manifest: one
+    /// row per combination, `unit` naming both sides.
+    pub const CROSS: Shape = Shape {
+        name: "cross",
+        needs: &[Rep::QueryHmm, Rep::QuerySto, Rep::QueryDb, Rep::Target],
+        attrs: &["query_src", "target_src", "seqs", "residues", "bytes"],
+    };
+
     /// One search over a profmark split, with a truth table beside it.
     ///
     /// The whole benchmark is one unit: every query is searched against one
@@ -279,6 +297,33 @@ impl Set {
     pub fn load_as(dir: impl AsRef<Path>, shape: &Shape) -> anyhow::Result<Set> {
         let set = Set::load(dir)?;
         set.check(shape)?;
+        Ok(set)
+    }
+
+    /// The set, held to the representations a reader opens rather than to a
+    /// shape's name.
+    ///
+    /// For a benchmark that reads one unit and a couple of its columns, what
+    /// the recipe called the set says less than what the unit carries: a
+    /// `fixed` shard and a `profmark` split are the same search to a pipeline
+    /// that wants a query and a target. A reader that needs more than that --
+    /// an attribute, a particular number of units, a `ladder`'s two axes --
+    /// names the shape instead, because then the recipe is what it depends on.
+    pub fn load_needing(dir: impl AsRef<Path>, needs: &[Rep]) -> anyhow::Result<Set> {
+        let set = Set::load(dir)?;
+        let at = set.root.display();
+
+        for (row, unit) in set.rows.iter().zip(set.units()) {
+            for &rep in needs {
+                ensure!(
+                    !row.cell(rep).is_empty(),
+                    "the set at {at} has no {} for unit {:?}",
+                    rep.column(),
+                    unit.name()
+                );
+            }
+        }
+
         Ok(set)
     }
 
@@ -452,7 +497,11 @@ impl Set {
 
     /// The units whose `key` attribute is `value`, for a pipeline that walks
     /// one axis at a time.
-    pub fn where_attr<'a>(&'a self, key: &'a str, value: &'a str) -> impl Iterator<Item = Unit<'a>> {
+    pub fn where_attr<'a>(
+        &'a self,
+        key: &'a str,
+        value: &'a str,
+    ) -> impl Iterator<Item = Unit<'a>> {
         self.units().filter(move |u| u.attr(key) == Some(value))
     }
 
@@ -518,8 +567,12 @@ impl<'a> Unit<'a> {
 
     pub fn number(&self, key: &str) -> anyhow::Result<u64> {
         let text = self.need(key)?;
-        text.parse()
-            .with_context(|| format!("unit {:?} has a {key} that is not a number: {text:?}", self.row.unit))
+        text.parse().with_context(|| {
+            format!(
+                "unit {:?} has a {key} that is not a number: {text:?}",
+                self.row.unit
+            )
+        })
     }
 
     fn resolve(&self, what: &str, cell: &str) -> anyhow::Result<PathBuf> {
@@ -551,7 +604,10 @@ fn read_meta(lines: &[String]) -> BTreeMap<String, String> {
         .filter_map(|rest| {
             let mut parts = rest.trim().splitn(2, char::is_whitespace);
             let key = parts.next()?;
-            Some((key.to_string(), parts.next().unwrap_or("").trim().to_string()))
+            Some((
+                key.to_string(),
+                parts.next().unwrap_or("").trim().to_string(),
+            ))
         })
         .collect()
 }
@@ -580,8 +636,7 @@ mod tests {
     // one directory per test: these run in parallel in one process, and they
     // all write a file called set.tbl
     fn round_trip(set: &Set, what: &str) -> Set {
-        let dir =
-            std::env::temp_dir().join(format!("util-set-{}-{what}", std::process::id()));
+        let dir = std::env::temp_dir().join(format!("util-set-{}-{what}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();
 
         let path = dir.join(FILE);
@@ -602,7 +657,10 @@ mod tests {
 
         let units: Vec<Unit<'_>> = after.units().collect();
         assert_eq!(units[0].name(), "1");
-        assert_eq!(units[0].target().unwrap(), PathBuf::from("/tmp/x/targets/1.fa"));
+        assert_eq!(
+            units[0].target().unwrap(),
+            PathBuf::from("/tmp/x/targets/1.fa")
+        );
         assert_eq!(
             units[0].query_hmm().unwrap(),
             PathBuf::from("/tmp/x/queries/query.hmm")
@@ -740,7 +798,13 @@ mod tests {
     #[test]
     fn a_missing_attribute_is_named_rather_than_unwrapped() {
         let after = round_trip(&set("/tmp/x"), "need");
-        let err = after.units().next().unwrap().need("rung").unwrap_err().to_string();
+        let err = after
+            .units()
+            .next()
+            .unwrap()
+            .need("rung")
+            .unwrap_err()
+            .to_string();
         assert!(err.contains("rung"), "{err}");
     }
 }

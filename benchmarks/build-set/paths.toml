@@ -40,42 +40,89 @@ shards     = 1000
 # loss-decomp -- and the size that makes a sweep affordable is worth more here
 # than a cost that reads directly against a recall column.
 [cloud-search-toy]
-shape      = "fixed"
-queries    = "../../data/pfam.hmm"
+shape = "cross"
+out   = "../../store/cloud-search-toy/inputs"
+
+[[cloud-search-toy.queries]]
+name       = "pfam"
+hmm        = "../../data/pfam.hmm"
 alignments = "../../data/pfam.sto"
-targets    = "../../data/mgnify"
-out        = "../../store/cloud-search-toy/inputs"
-shards     = 1
-seqs       = 400
 fams       = 5
 
+[[cloud-search-toy.targets]]
+name = "mgnify"
+from = "../../data/mgnify"
+seqs = 400
+
+[[cloud-search-toy.targets]]
+name = "swissprot"
+from = "../../data/swissprot.fa"
+seqs = 400
+
+# 500,000 a side rather than the million loss-decomp draws: Swissprot holds
+# 570,420 sequences in total, and a target the size of most of its source is a
+# sample of nothing. The two units have to be the same size for the surfaces to
+# be read against each other, so the smaller source sets it.
 [cloud-search-real]
-shape      = "fixed"
-queries    = "../../data/pfam.hmm"
+shape = "cross"
+out   = "../../store/cloud-search-real/inputs"
+
+[[cloud-search-real.queries]]
+name       = "pfam"
+hmm        = "../../data/pfam.hmm"
 alignments = "../../data/pfam.sto"
-targets    = "../../data/mgnify"
-out        = "../../store/cloud-search-real/inputs"
-shards     = 1
-seqs       = 1000000
+
+[[cloud-search-real.targets]]
+name = "mgnify"
+from = "../../data/mgnify"
+seqs = 500000
+
+[[cloud-search-real.targets]]
+name = "swissprot"
+from = "../../data/swissprot.fa"
+seqs = 500000
 
 [loss-decomp-toy]
-shape      = "fixed"
-queries    = "../../data/pfam.hmm"
+shape = "cross"
+out   = "../../store/loss-decomp-toy/inputs"
+
+[[loss-decomp-toy.queries]]
+name       = "pfam"
+hmm        = "../../data/pfam.hmm"
 alignments = "../../data/pfam.sto"
-targets    = "../../data/mgnify"
-out        = "../../store/loss-decomp-toy/inputs"
-shards     = 1
-seqs       = 400
 fams       = 5
 
+[[loss-decomp-toy.targets]]
+name = "mgnify"
+from = "../../data/mgnify"
+seqs = 400
+
+[[loss-decomp-toy.targets]]
+name = "swissprot"
+from = "../../data/swissprot.fa"
+seqs = 400
+
+# Where nail loses hmmer's hits is a question about the sequences being
+# searched, so it gets the same two kinds of target cloud-search does, at the
+# same size, and the two benchmarks' answers can be read side by side.
 [loss-decomp-real]
-shape      = "fixed"
-queries    = "../../data/pfam.hmm"
+shape = "cross"
+out   = "../../store/loss-decomp-real/inputs"
+
+[[loss-decomp-real.queries]]
+name       = "pfam"
+hmm        = "../../data/pfam.hmm"
 alignments = "../../data/pfam.sto"
-targets    = "../../data/mgnify"
-out        = "../../store/loss-decomp-real/inputs"
-shards     = 1
-seqs       = 1000000
+
+[[loss-decomp-real.targets]]
+name = "mgnify"
+from = "../../data/mgnify"
+seqs = 500000
+
+[[loss-decomp-real.targets]]
+name = "swissprot"
+from = "../../data/swissprot.fa"
+seqs = 500000
 
 # ------------------------------------------------------------------ cutoffs
 

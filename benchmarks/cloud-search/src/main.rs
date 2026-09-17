@@ -11,8 +11,13 @@ use std::path::PathBuf;
 
 use clap::{Parser, Subcommand};
 
-/// The set this reads.
-pub const SHAPE: &util::set::Shape = &util::set::shape::FIXED;
+/// What this reads off a unit, which is all it holds a set to.
+///
+/// Not a shape: this benchmark searches one query against one target and reads
+/// no attribute, so a `fixed` shard of MGnify and a `profmark` split of Pfam
+/// are the same search to it. Naming a shape would refuse the second for
+/// saying so in its manifest rather than for anything it lacks.
+pub const NEEDS: &[util::set::Rep] = &[util::set::Rep::QueryHmm, util::set::Rep::Target];
 
 #[derive(Parser)]
 #[command(name = "cloud-search", about = "the (A, B) pruning surface")]

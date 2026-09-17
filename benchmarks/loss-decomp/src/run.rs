@@ -75,10 +75,6 @@ pub struct Args {
     #[arg(long = "in", value_name = "label")]
     pub label: Option<String>,
 
-    /// Which unit of the set to search
-    #[arg(long, default_value = "1", value_name = "N")]
-    shard: String,
-
     /// nail's -E, set far above its default so the final e-value gate can't be
     /// mistaken for a cloud/align filter. Only lower this to study the e-value
     /// gate itself
@@ -123,6 +119,12 @@ pub struct Args {
     dry_run: bool,
 }
 
+/// What an arm's seed list is called, which has to carry the unit as well as
+/// the arm once a set holds more than one.
+fn seed_list(arm: &str, shard: &str) -> String {
+    format!("{arm}.{shard}")
+}
+
 pub fn main(args: Args, paths: &crate::Paths) -> anyhow::Result<()> {
     ensure!(
         args.threads.is_multiple_of(search::HMMER_CPU),
@@ -137,32 +139,10 @@ pub fn main(args: Args, paths: &crate::Paths) -> anyhow::Result<()> {
         dirs.tmp = tmp;
     }
 
-    let set = Set::load_as(&paths.set, crate::SHAPE)?;
+    let set = Set::load_needing(&paths.set, crate::NEEDS)?;
+    ensure!(set.units().count() > 0, "{} is empty", paths.set.display());
 
-    let unit = set
-        .units()
-        .find(|u| u.name() == args.shard)
-        .with_context(|| {
-            format!(
-                "{} has no unit {:?}; it holds {}",
-                paths.set.display(),
-                args.shard,
-                set.units().map(|u| u.name()).collect::<Vec<_>>().join(", ")
-            )
-        })?;
-
-    let query_hmm = unit.query_hmm()?;
-    let target = unit.target()?;
-
-    let split = Split::new(
-        &query_hmm,
-        dirs.tmp.join("hmmer-query"),
-        search::jobs(args.threads),
-    );
-
-    let mut pl = PipelineBuilder::new()
-        .step(dirs.mkdir())
-        .step(split.step(&[]));
+    let mut pl = PipelineBuilder::new().step(dirs.mkdir());
 
     // static aligns the whole prefilter, so max-seqs bounds it; prog aligns
     // from prog-n upward while the hit fraction holds. one arm, one seed list
@@ -178,59 +158,78 @@ pub fn main(args: Args, paths: &crate::Paths) -> anyhow::Result<()> {
         .collect();
 
     ensure!(!arms.is_empty(), "the sweep has no arms");
-    println!("{} arms over shard {}", arms.len(), args.shard);
-
-    for arm in &arms {
-        pl = pl.step(
-            search::seed(
-                &bins.nail,
-                &bins.mmseqs,
-                &query_hmm,
-                &target,
-                &args.shard,
-                &dirs.seeds(&arm.name),
-                &dirs,
-                args.threads,
-                &arm.seeding,
-                &[(manifest::STAGE, search::SEED.to_string())],
-            )
-            .name(format!("seeds.{}", arm.name)),
-        );
-    }
-
-    let hmmer = search::hmmer(
-        &bins.hmmsearch,
-        &split,
-        &dirs,
-        HMMER,
-        &args.shard,
-        &target,
-        &[],
+    println!(
+        "{} arms over {} {}",
+        arms.len(),
+        set.units().count(),
+        if set.units().count() == 1 {
+            "unit"
+        } else {
+            "units"
+        }
     );
-    pl = pl.step(hmmer.search).step(hmmer.cat);
 
-    for arm in &arms {
-        pl = pl.step(
-            Step::serial([Cmd::new(&bins.nail)
-                .sub("search")
-                // nail looks for mmseqs at startup even when it is replaying
-                // seeds and will never call it, and nothing here is on PATH
-                .arg("--mmseqs-path", &bins.mmseqs)
-                .arg("-t", args.threads)
-                .arg("--seeds", dirs.seeds(&arm.name))
-                .arg("-E", args.nail_evalue)
-                .arg("--tmp-dir", dirs.tmp.join("align").join(&arm.name))
-                .arg("--tbl-out", dirs.table(&arm.name, &args.shard))
-                .flag("--allow-overwrite")
-                .path(&query_hmm)
-                .path(&target)
-                .field(manifest::NAME, &arm.name)
-                .field(manifest::TOOL, "nail")
-                .field(manifest::SHARD, &args.shard)
-                .field("E", args.nail_evalue)])
-            .name(arm.name.clone())
-            .cores(args.threads),
+    // every unit gets every arm. On a `fixed` set that is the one shard the
+    // label names; on a `cross` it is each target source in turn
+    for unit in set.units() {
+        let shard = unit.name().to_string();
+        let query_hmm = unit.query_hmm()?;
+        let target = unit.target()?;
+
+        // per unit rather than per run: a cross can pair more than one query
+        // source, and two of them cut into the same directory would search each
+        // other's parts
+        let split = Split::new(
+            &query_hmm,
+            dirs.tmp.join("hmmer-query").join(&shard),
+            search::jobs(args.threads),
         );
+        pl = pl.step(split.step(&[(manifest::SHARD, shard.clone())]));
+
+        for arm in &arms {
+            pl = pl.step(
+                search::seed(
+                    &bins.nail,
+                    &bins.mmseqs,
+                    &query_hmm,
+                    &target,
+                    &shard,
+                    &dirs.seeds(&seed_list(&arm.name, &shard)),
+                    &dirs,
+                    args.threads,
+                    &arm.seeding,
+                    &[(manifest::STAGE, search::SEED.to_string())],
+                )
+                .name(format!("seeds.{}.{shard}", arm.name)),
+            );
+        }
+
+        let hmmer = search::hmmer(&bins.hmmsearch, &split, &dirs, HMMER, &shard, &target, &[]);
+        pl = pl.step(hmmer.search).step(hmmer.cat);
+
+        for arm in &arms {
+            pl = pl.step(
+                Step::serial([Cmd::new(&bins.nail)
+                    .sub("search")
+                    // nail looks for mmseqs at startup even when it is replaying
+                    // seeds and will never call it, and nothing here is on PATH
+                    .arg("--mmseqs-path", &bins.mmseqs)
+                    .arg("-t", args.threads)
+                    .arg("--seeds", dirs.seeds(&seed_list(&arm.name, &shard)))
+                    .arg("-E", args.nail_evalue)
+                    .arg("--tmp-dir", dirs.tmp.join("align").join(&arm.name))
+                    .arg("--tbl-out", dirs.table(&arm.name, &shard))
+                    .flag("--allow-overwrite")
+                    .path(&query_hmm)
+                    .path(&target)
+                    .field(manifest::NAME, &arm.name)
+                    .field(manifest::TOOL, "nail")
+                    .field(manifest::SHARD, &shard)
+                    .field("E", args.nail_evalue)])
+                .name(format!("{}.{shard}", arm.name))
+                .cores(args.threads),
+            );
+        }
     }
 
     let pipeline = pl

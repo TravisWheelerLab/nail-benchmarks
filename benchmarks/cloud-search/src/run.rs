@@ -44,10 +44,6 @@ pub struct Args {
     #[arg(long = "in", value_name = "label")]
     pub label: Option<String>,
 
-    /// Which unit of the set to search
-    #[arg(long, default_value = "1", value_name = "N")]
-    shard: String,
-
     /// Local score pruning thresholds to sweep (nail's -A)
     #[arg(
         long,
@@ -120,9 +116,9 @@ fn cells(alphas: &[f32], betas: &[f32]) -> Vec<Cell> {
     let mut out: Vec<Cell> = ATTEMPTS
         .iter()
         .flat_map(|&attempts| {
-            alphas.iter().flat_map(move |&a| {
-                betas.iter().map(move |&b| Cell::Pruned { a, b, attempts })
-            })
+            alphas
+                .iter()
+                .flat_map(move |&a| betas.iter().map(move |&b| Cell::Pruned { a, b, attempts }))
         })
         .collect();
 
@@ -146,102 +142,94 @@ pub fn main(args: Args, paths: &crate::Paths) -> anyhow::Result<()> {
         dirs.tmp = tmp;
     }
 
-    let set = Set::load_as(&paths.set, crate::SHAPE)?;
+    let set = Set::load_needing(&paths.set, crate::NEEDS)?;
+    ensure!(set.units().count() > 0, "{} is empty", paths.set.display());
 
-    let unit = set
-        .units()
-        .find(|u| u.name() == args.shard)
-        .with_context(|| {
-            format!(
-                "{} has no unit {:?}; it holds {}",
-                paths.set.display(),
-                args.shard,
-                set.units().map(|u| u.name()).collect::<Vec<_>>().join(", ")
-            )
-        })?;
+    let mut pl = PipelineBuilder::new().step(dirs.mkdir());
 
-    let query_hmm = unit.query_hmm()?;
-    let target = unit.target()?;
+    // every unit gets the whole grid. On a `fixed` set that is the one shard
+    // the label names; on a `cross` it is each target source in turn, which is
+    // what makes the surface comparable across kinds of target rather than
+    // only across sizes of one
+    for unit in set.units() {
+        let shard = unit.name().to_string();
+        let query_hmm = unit.query_hmm()?;
+        let target = unit.target()?;
 
-    let split = Split::new(
-        &query_hmm,
-        dirs.tmp.join("hmmer-query"),
-        search::jobs(args.threads),
-    );
-
-    let mut pl = PipelineBuilder::new()
-        .step(dirs.mkdir())
-        .step(split.step(&[]))
-        .step(search::seed(
-            &bins.nail,
-            &bins.mmseqs,
+        // per unit rather than per run: a cross can pair more than one query
+        // source, and two of them cut into the same directory would search
+        // each other's parts
+        let split = Split::new(
             &query_hmm,
-            &target,
-            &args.shard,
-            &dirs.seeds(&args.shard),
-            &dirs,
-            args.threads,
-            &search::Seeding::new(SEED_S, SEED_MODE),
-            &[(manifest::STAGE, search::SEED.to_string())],
-        ));
-
-    let hmmer = search::hmmer(
-        &bins.hmmsearch,
-        &split,
-        &dirs,
-        HMMER,
-        &args.shard,
-        &target,
-        &[],
-    );
-    pl = pl.step(hmmer.search).step(hmmer.cat);
-
-    // the cells run in the order the grid gives them, which is ascending, so
-    // the cheap corner lands first and a sweep that gets killed still leaves a
-    // usable surface behind
-    for cell in cells(&args.alpha, &args.beta) {
-        let label = cell.label();
-
-        let cmd = Cmd::new(&bins.nail)
-            .sub("search")
-            // nail looks for mmseqs at startup even when it is replaying seeds
-            // and will never call it, and nothing here is on PATH
-            .arg("--mmseqs-path", &bins.mmseqs)
-            .arg("-t", args.threads)
-            .arg("--seeds", dirs.seeds(&args.shard))
-            .arg("-E", search::EVALUE)
-            .arg("--tmp-dir", dirs.tmp.join("cell"))
-            .arg("--tbl-out", dirs.table(&label, &args.shard))
-            .flag("--allow-overwrite")
-            .field(manifest::NAME, &label)
-            .field(manifest::TOOL, "nail")
-            .field(manifest::SHARD, &args.shard);
-
-        let cmd = match cell {
-            // the fields are written the way the label is, so a whole-numbered
-            // threshold keeps its decimal point and `A=2.0` reads against
-            // `A2.0-B4.0` rather than beside it
-            Cell::Pruned { a, b, attempts } => cmd
-                .arg("-A", a)
-                .arg("-B", b)
-                .arg("-a", attempts)
-                .field("A", format!("{a:.1}"))
-                .field("B", format!("{b:.1}"))
-                // spelled out rather than `a`, which a reader of the table
-                // would have to tell from `A` by its case alone
-                .field("attempts", attempts),
-            Cell::Full => cmd.flag("--full-dp"),
-        };
-
-        pl = pl.step(
-            Step::serial([cmd.path(&query_hmm).path(&target)])
-                .name(&label)
-                // every cell on the same cores, so the only thing moving
-                // between them is -A and -B. without this a cell is timed
-                // against whatever else the scheduler ran that second, and
-                // the differences here are small enough for that to show
-                .cores(args.threads),
+            dirs.tmp.join("hmmer-query").join(&shard),
+            search::jobs(args.threads),
         );
+
+        pl = pl
+            .step(split.step(&[(manifest::SHARD, shard.clone())]))
+            .step(search::seed(
+                &bins.nail,
+                &bins.mmseqs,
+                &query_hmm,
+                &target,
+                &shard,
+                &dirs.seeds(&shard),
+                &dirs,
+                args.threads,
+                &search::Seeding::new(SEED_S, SEED_MODE),
+                &[(manifest::STAGE, search::SEED.to_string())],
+            ));
+
+        let hmmer = search::hmmer(&bins.hmmsearch, &split, &dirs, HMMER, &shard, &target, &[]);
+        pl = pl.step(hmmer.search).step(hmmer.cat);
+
+        // the cells run in the order the grid gives them, which is ascending, so
+        // the cheap corner lands first and a sweep that gets killed still leaves a
+        // usable surface behind
+        for cell in cells(&args.alpha, &args.beta) {
+            let label = cell.label();
+
+            let cmd = Cmd::new(&bins.nail)
+                .sub("search")
+                // nail looks for mmseqs at startup even when it is replaying seeds
+                // and will never call it, and nothing here is on PATH
+                .arg("--mmseqs-path", &bins.mmseqs)
+                .arg("-t", args.threads)
+                .arg("--seeds", dirs.seeds(&shard))
+                .arg("-E", search::EVALUE)
+                .arg("--tmp-dir", dirs.tmp.join("cell"))
+                .arg("--tbl-out", dirs.table(&label, &shard))
+                .flag("--allow-overwrite")
+                .field(manifest::NAME, &label)
+                .field(manifest::TOOL, "nail")
+                .field(manifest::SHARD, &shard);
+
+            let cmd = match cell {
+                // the fields are written the way the label is, so a whole-numbered
+                // threshold keeps its decimal point and `A=2.0` reads against
+                // `A2.0-B4.0` rather than beside it
+                Cell::Pruned { a, b, attempts } => cmd
+                    .arg("-A", a)
+                    .arg("-B", b)
+                    .arg("-a", attempts)
+                    .field("A", format!("{a:.1}"))
+                    .field("B", format!("{b:.1}"))
+                    // spelled out rather than `a`, which a reader of the table
+                    // would have to tell from `A` by its case alone
+                    .field("attempts", attempts),
+                Cell::Full => cmd.flag("--full-dp"),
+            };
+
+            pl = pl.step(
+                Step::serial([cmd.path(&query_hmm).path(&target)])
+                    .name(&label)
+                    // every cell on the same cores, so the only thing moving
+                    // between them is -A and -B. without this a cell is timed
+                    // against whatever else the scheduler ran that second, and
+                    // the differences here are small enough for that to show
+                    .cores(args.threads),
+            );
+        }
     }
 
     let pipeline = pl

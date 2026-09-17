@@ -18,3 +18,14 @@ run      = "../../store/cloud-search-real/outputs"
 analysis = "../../store/cloud-search-real/analysis"
 figures  = "../../figures/cloud-search-real"
 tmp      = "../../store/cloud-search-real/tmp"
+
+# The same sweep over a profmark split instead of MGnify shards, which is what
+# says whether the (A, B) surface moves with the type of the search rather than
+# its size. pid built the set; this reads it, and writes into a directory of
+# its own beside pid's own run.
+[pid-toy]
+set      = "../../store/pid-toy/inputs"
+run      = "../../store/pid-toy/outputs/cloud-search"
+analysis = "../../store/pid-toy/analysis/cloud-search"
+figures  = "../../figures/pid-toy-cloud-search"
+tmp      = "../../store/pid-toy/tmp/cloud-search"

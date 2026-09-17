@@ -47,7 +47,7 @@ benchmarks/util/          set, store, ledger, tbl, tools, split, cut, ...
 benchmarks/search/        the tool command builders every pipeline composes
 benchmarks/scores/        the pair tables, the analyses, and parse
 
-benchmarks/build-set/     cuts sources into a set: fixed | ladder | pairs
+benchmarks/build-set/     cuts sources into a set: fixed | cross | ladder | pairs
 benchmarks/store/         what can be done to the store: import | clean
 
 benchmarks/recall/        recall against prefilter sensitivity   [fixed]
@@ -222,9 +222,10 @@ builder stamps `#= shape` and the benchmark names the one it reads, and
 
 | shape | representations | attributes | read by |
 |---|---|---|---|
-| `fixed` | `query_hmm`, `query_sto`, `query_db`, `target` | `shard`, `seqs`, `residues`, `bytes` | recall, cloud-search, loss-decomp |
+| `fixed` | `query_hmm`, `query_sto`, `query_db`, `target` | `shard`, `seqs`, `residues`, `bytes` | recall |
 | `reversed` | the same as `fixed` | the same as `fixed` | cutoffs |
 | `ladder` | the same | `query_rung`, `target_rung`, `query_residues`, `target_residues` | calibrate |
+| `cross` | the same as `fixed` | `query_src`, `target_src`, `seqs`, `residues`, `bytes` | cloud-search, loss-decomp |
 | `pairs` | `query_fa`, `target` | `pair`, `query_residues`, `residues` | long-seqs |
 | `profmark` | `query_hmm`, `query_sto`, `query_fa`, `target` | `truth` | pid |
 
@@ -242,6 +243,22 @@ file that carries it, relative to the set root, the way the representation
 columns name theirs. The shape check sees that the file is named, not what is
 in it.
 
+`cross` is the only shape where both sides are lists of independent sources
+rather than cuts of one. `fixed` grids a query over a partition of a single
+target source and `ladder` grids nested subsets of one source per axis, so in
+both a unit is a piece of the same thing; in a `cross` a unit is one whole
+source against another, and what moves between units is which sources they are.
+`pairs` is the diagonal of a cross that was never built. N x M, N x 1 and 1 x M
+are one recipe and one manifest, a row per combination, `unit` naming both
+sides.
+
+cloud-search and loss-decomp read it because their questions are about the kind
+of sequence being searched rather than about how much of it there is: both draw
+Pfam against MGnify and against Swissprot, 500,000 a side, so their two surfaces
+differ only in where the targets came from. Swissprot holds 570,420 sequences
+in total, which is what sets that size -- a target the size of most of its
+source is a sample of nothing.
+
 `pairs` is the one shape with no draw in it. Its two sources are separate
 directories of fasta, so a sequence is never on both sides, and pair `i` is the
 `i`th file of each in name order. These are pairs somebody chose for their
@@ -255,6 +272,15 @@ opens.
 
 A set built before shapes existed says nothing about itself, and is then checked
 on its columns alone.
+
+Two benchmarks name no shape at all. cloud-search and loss-decomp search one
+query against one target and read no attribute, so `Set::load_needing` holds
+them to `query_hmm` and `target` and to the set having a single unit, and
+nothing else. That is what lets the same sweep run over a `fixed` shard of
+MGnify and a `profmark` split of Pfam, which is the only way to ask whether the
+surface moves with the type of the search rather than its size. A reader that
+wants an attribute, or a `ladder`'s two axes, names the shape instead, because
+then the recipe is what it depends on.
 
 ## paths.toml
 
