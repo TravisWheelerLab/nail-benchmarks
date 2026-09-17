@@ -920,7 +920,17 @@ fn reject_union(
     let query_db = layout.query_db();
     let table = |tool: &str, form: &str| manifest::table_path(&results, &run_name(tool, form), ALL);
 
-    let mut pl = PipelineBuilder::new();
+    // hmmsearch does not scale past a couple of threads, so it gets the query
+    // cut into parts and the parts run together at search::HMMER_CPU each,
+    // rather than one invocation holding the whole pool. Both forms search the
+    // same query, so the cut happens once.
+    let split = search::Split::new(
+        &query_hmm,
+        tmp.join("hmmer-query"),
+        search::jobs(threads),
+    );
+
+    let mut pl = PipelineBuilder::new().step(split.step(&[]));
 
     for (form, target) in &targets {
         let scratch = tmp.join(form);
@@ -932,7 +942,8 @@ fn reject_union(
                     .name("dirs")
                     .flag("-p")
                     .path(scratch.join("targetDB"))
-                    .path(scratch.join("alnDB"))])
+                    .path(scratch.join("alnDB"))
+                    .path(scratch.join("hmmer"))])
                 .name(format!("dirs.{form}")),
             )
             .step(
@@ -994,26 +1005,23 @@ fn reject_union(
             .step(
                 Step::serial([cmds.convert.field(manifest::SHARD, ALL)])
                     .name(format!("convert.{form}")),
-            )
-            .step(
-                Step::serial([PCmd::new(&hmmsearch_bin)
-                    .arg("--cpu", threads)
-                    .arg("-E", search::EVALUE)
-                    .arg("-o", "/dev/null")
-                    .arg("--tblout", table(HMMER, form))
-                    .arg(
-                        "--domtblout",
-                        manifest::dom_path(&results, &run_name(HMMER, form), ALL),
-                    )
-                    .path(&query_hmm)
-                    .path(target)
-                    .field(manifest::NAME, run_name(HMMER, form))
-                    .field(manifest::TOOL, HMMER)
-                    .field(manifest::SHARD, ALL)
-                    .field(FORM, *form)])
-                .name(format!("hmmer.{form}"))
-                .cores(threads),
             );
+
+        // the one command in this stage built through `search` rather than by
+        // hand, because the batching is the whole point of it
+        let hmmer = search::hmmer(
+            &hmmsearch_bin,
+            &split,
+            &search::Dirs::new(&stage.root, &scratch),
+            &run_name(HMMER, form),
+            ALL,
+            target,
+            &[(FORM, form.to_string())],
+        );
+
+        pl = pl
+            .step(hmmer.search.name(format!("hmmer.{form}")))
+            .step(hmmer.cat.name(format!("cat.hmmer.{form}")));
     }
 
     let pipeline = pl
