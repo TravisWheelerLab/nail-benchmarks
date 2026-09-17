@@ -37,6 +37,7 @@ use clap::Parser;
 use rand::SeedableRng;
 use rand::rngs::StdRng;
 use rand::seq::SliceRandom;
+use rayon::iter::{IntoParallelIterator, ParallelIterator};
 use serde::Deserialize;
 
 use libsail::collection::{Aggregate, Indexable, Iterable};
@@ -559,6 +560,13 @@ struct Shard {
 /// writes long and sequential.
 const SHARD_BUF: usize = 1 << 20;
 
+/// How many records are read before the reversing and wrapping go wide.
+///
+/// The read stays on one thread because that is what fixes the order; the
+/// per-record work after it does not, and a batch is how much of it is in
+/// flight at once. At MGnify's average record this is a few megabytes.
+const BATCH: usize = 16384;
+
 /// Deals `n_seqs` sequences into `shards` files, `file(i)` for `i` in `1..=shards`.
 ///
 /// The caller names the files because what a shard is called is a property of
@@ -588,7 +596,7 @@ fn deal(
     // draw either way, but this one yields in the order the file holds the
     // records, so a source too large to cache pays ascending reads rather than
     // scattered ones
-    let drawn = seqs.sample_in_order(n_seqs, seed);
+    let mut drawn = seqs.sample_in_order(n_seqs, seed);
 
     // the draw arrives ascending, so where it lands has to carry the
     // randomness the order no longer does. A fixed `i % shards` would give
@@ -604,24 +612,54 @@ fn deal(
     // how big they are is the whole deal again
     let mut counted = vec![(0usize, 0u64); shards];
 
-    for (i, mut rec) in drawn.enumerate() {
-        let at = i % shards;
-        if at == 0 {
-            order.shuffle(&mut rng);
+    let mut taken = 0usize;
+    let mut batch: Vec<(usize, <Aggregate<IndexedFasta> as Indexable>::Record)> =
+        Vec::with_capacity(BATCH);
+
+    loop {
+        // the reader fills a batch on its own thread, which is what fixes the
+        // order: a record's shard is decided here, in the order the draw
+        // yielded it, and everything after this preserves that order
+        batch.clear();
+        for rec in drawn.by_ref().take(BATCH) {
+            let at = taken % shards;
+            if at == 0 {
+                order.shuffle(&mut rng);
+            }
+            batch.push((order[at], rec));
+            taken += 1;
         }
-        let at = order[at];
 
-        // reversed as it is written rather than in a pass afterwards, so the
-        // draw is the same one either way and a reversed set costs what a
-        // forward one costs
-        if reversed {
-            rec.reverse();
+        if batch.is_empty() {
+            break;
         }
 
-        rec.write_to(&mut writers[at], DEFAULT_LINE_WIDTH)?;
+        // reversing and wrapping are the per-record work, and they are
+        // independent, so they go wide. collect on a Vec's parallel iterator
+        // is order-preserving, so what comes back is still the reader's order
+        let formatted: Vec<(usize, u64, Vec<u8>)> = std::mem::take(&mut batch)
+            .into_par_iter()
+            .map(|(at, mut rec)| {
+                // reversed as it is written rather than in a pass afterwards,
+                // so the draw is the same one either way and a reversed set
+                // costs what a forward one costs
+                if reversed {
+                    rec.reverse();
+                }
 
-        counted[at].0 += 1;
-        counted[at].1 += rec.seq.len() as u64;
+                let residues = rec.seq.len() as u64;
+                let mut bytes = Vec::with_capacity(rec.seq.len() + rec.name.len() + 16);
+                rec.write_to(&mut bytes, DEFAULT_LINE_WIDTH)?;
+
+                Ok((at, residues, bytes))
+            })
+            .collect::<anyhow::Result<Vec<_>>>()?;
+
+        for (at, residues, bytes) in formatted {
+            writers[at].write_all(&bytes)?;
+            counted[at].0 += 1;
+            counted[at].1 += residues;
+        }
     }
 
     for mut w in writers {
@@ -1545,6 +1583,38 @@ mod tests {
         };
         assert_eq!(sorted(&a), sorted(&b), "both deals hold every record");
         assert_ne!(a, b, "a second seed should partition them differently");
+
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn dealing_crosses_a_batch_boundary_without_changing_what_it_writes() {
+        // the reversing and wrapping run wide over one batch at a time, so a
+        // deal shorter than BATCH never leaves the first one and the tests
+        // above would pass over a broken hand-off between batches
+        let dir = collection("batched", 2, BATCH);
+        let agg = collection_at(&dir).unwrap();
+
+        let of = |tag: &str| {
+            let out = dir.join(format!("out-{tag}"));
+            deal(&agg, 2 * BATCH, 7, 67779, false, &out, |i| {
+                out.join(format!("{i}.fa"))
+            })
+            .unwrap();
+            (1..=7)
+                .map(|i| std::fs::read(out.join(format!("{i}.fa"))).unwrap())
+                .collect::<Vec<_>>()
+        };
+
+        let (a, b) = (of("a"), of("b"));
+        assert_eq!(a, b, "two deals of one seed should be the same bytes");
+
+        let names: Vec<&[u8]> = a.iter().map(|s| s.as_slice()).collect();
+        let total: usize = names
+            .iter()
+            .map(|s| s.iter().filter(|&&c| c == b'>').count())
+            .sum();
+        assert_eq!(total, 2 * BATCH, "every record should land somewhere");
 
         std::fs::remove_dir_all(&dir).ok();
     }
