@@ -385,12 +385,18 @@ pair was dropped is a question about a run rather than about a tool.
 
     recall        parse scores → parse summary
     cloud-search  parse runs   → parse summary → plot
-    loss-decomp      parse runs   → parse stages
+    loss-decomp   parse runs   → parse stages
 
-`plot` draws two figures off cloud-search's summary: the `(A, B)` heatmaps, and
-a tradeoff of every cell in wall time against sensitivity, where the `full`
-run -- `--full-dp`, which records no `-A` and no `-B` and so sits off the grid
--- is the ceiling the pruned cells are read against.
+`plot` draws one figure off cloud-search's summary: the `(A, B)` heatmaps of
+sensitivity and wall clock, with the `full` run in the far corner. `--full-dp`
+records no `-A` and no `-B`, so it has no cell; the corner is where the surface
+is heading as the pruning relaxes, and it is the ceiling the pruned cells are
+read against.
+
+A second figure used to scatter every cell in wall time against sensitivity.
+Eighty-one points overlapping on a plane, each carrying an `-A` and a `-B` that
+the position does not show, is not a figure anyone can read, so it was
+deleted.
 
 Three things sit outside the shape above, and none of them asks what was
 found.

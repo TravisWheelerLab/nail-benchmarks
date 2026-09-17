@@ -28,7 +28,7 @@ enum Command {
     /// Turn the results into a table, and that into numbers.
     #[command(subcommand)]
     Parse(Parse),
-    /// Draw the pruning heatmaps and the tradeoff curve from summary.tbl.
+    /// Draw the pruning heatmaps from summary.tbl.
     Plot(plot::Args),
 }
 
