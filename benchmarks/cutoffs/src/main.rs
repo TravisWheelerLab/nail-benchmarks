@@ -59,6 +59,8 @@ use clap::{Parser, Subcommand};
 use rayon::iter::{IntoParallelRefIterator, ParallelIterator};
 
 use libsail::collection::Iterable;
+use libsail::format::Format;
+use libsail::index::Reader;
 use libsail::seq::fasta::{DEFAULT_LINE_WIDTH, IndexedFasta};
 use libsail::tbl::blast::BlastTable;
 use libsail::tbl::hmmer::HmmerTable;
@@ -72,6 +74,22 @@ use util::set::Set;
 
 use util::cut;
 
+/// How `reject` scores the recruits.
+//
+// the two are meant to agree exactly: same searches, same pairs, same cutoffs.
+// they differ only in how many processes it takes to get there, and which is
+// faster is an open question -- see the pinned note in CLAUDE.md
+#[derive(Clone, Copy, Debug, PartialEq, Eq, clap::ValueEnum)]
+pub enum Strategy {
+    /// One search per family per form. Cheap per search, and there are two of
+    /// them for every family in the set.
+    Fanout,
+    /// Two searches per tool: every family against every recruit's reversal,
+    /// then against every recruit's original. `learn` keeps only the pairs
+    /// whose sequence that family recruited.
+    Union,
+}
+
 /// Name of the calibration when none is given.
 pub const DEFAULT_NAME: &str = "default";
 
@@ -83,6 +101,9 @@ pub const DEFAULT_NAME: &str = "default";
 const REVERSALS: &str = "reversals";
 const ORIGINALS: &str = "originals";
 const QUERIES: &str = "queries";
+
+/// The shard a union search files its one table under.
+const ALL: &str = "all";
 
 // recruitment only has to nominate candidates, so it runs a cheap sweep
 // rather than the decoy stage's wide-open one
@@ -236,7 +257,7 @@ impl Layout {
     }
 
     fn reject(&self) -> anyhow::Result<Stage> {
-        self.stage("search")
+        self.stage("reject")
     }
 
     fn stage(&self, stage: &str) -> anyhow::Result<Stage> {
@@ -329,19 +350,32 @@ pub struct RejectArgs {
     #[command(flatten)]
     pub place: Where,
 
+    /// How to score the recruits. The two agree; they cost differently
+    #[arg(long, value_enum, default_value_t = Strategy::Fanout)]
+    pub strategy: Strategy,
+
     #[arg(long)]
     pub dry_run: bool,
 
     /// How many families to search at once. Each search is single-threaded,
-    /// so this is the whole of the parallelism
+    /// so this is the whole of the parallelism. `fanout` only
     #[arg(short = 'j', long)]
     pub jobs: Option<usize>,
+
+    /// Threads per search. `union` only, where there are two searches per tool
+    /// rather than two per family
+    #[arg(short, long, default_value_t = 8)]
+    pub threads: usize,
 }
 
 #[derive(Parser, Debug)]
 pub struct LearnArgs {
     #[command(flatten)]
     pub place: Where,
+
+    /// Which layout `reject` left behind. Must match what it ran with
+    #[arg(long, value_enum, default_value_t = Strategy::Fanout)]
+    pub strategy: Strategy,
 
     /// A recruit whose original hits at or below this E-value is a reject, and
     /// its reversal is left out of the decoy scores
@@ -356,6 +390,10 @@ pub struct LearnArgs {
 pub struct AllArgs {
     #[command(flatten)]
     pub place: Where,
+
+    /// How to score the recruits. The two agree; they cost differently
+    #[arg(long, value_enum, default_value_t = Strategy::Fanout)]
+    pub strategy: Strategy,
 
 
     #[arg(short, long, default_value_t = 4)]
@@ -733,8 +771,242 @@ fn collect<C: HitColumns>(tbl: &Table<HitParser<C>>, map: &mut HashMap<String, V
 
 // ------------------------------------------------------------------ search
 
+/// The recruits each family holds, read back out of what `gather` laid out.
+///
+/// This is the map `union` needs and `fanout` gets for free from the file
+/// layout: a hit only counts for the family that recruited its sequence.
+fn recruits_by_family(dir: &Path) -> anyhow::Result<HashMap<String, HashSet<String>>> {
+    let mut out: HashMap<String, HashSet<String>> = HashMap::new();
+
+    for entry in std::fs::read_dir(dir)
+        .with_context(|| format!("failed to read {}", dir.display()))?
+    {
+        let path = entry?.path();
+        if path.extension().is_none_or(|x| x != "fa") {
+            continue;
+        }
+        let Some(family) = path.file_stem().and_then(|s| s.to_str()) else {
+            continue;
+        };
+
+        let names = out.entry(family.to_string()).or_default();
+        let mut rows = Reader::new(std::fs::File::open(&path)?, Format::Fasta);
+        while rows.advance()? {
+            if let Some(name) = libsail::seq::name_of(Format::Fasta, rows.record()) {
+                names.insert(String::from_utf8_lossy(name).into_owned());
+            }
+        }
+    }
+
+    Ok(out)
+}
+
+/// Every recruit once, written into one file.
+///
+/// A sequence recruited by several families appears once here and is scored
+/// once; `learn` is what puts each hit back with the family that recruited it.
+/// Streamed rather than collected, so what is held is the set of names seen
+/// and not the sequences.
+fn union_fasta(from: &Path, to: &Path) -> anyhow::Result<usize> {
+    let mut seen: HashSet<Vec<u8>> = HashSet::new();
+    let mut out = std::io::BufWriter::with_capacity(
+        1 << 20,
+        std::fs::File::create(to)
+            .with_context(|| format!("failed to create {}", to.display()))?,
+    );
+
+    let mut files: Vec<PathBuf> = std::fs::read_dir(from)?
+        .filter_map(|e| e.ok().map(|e| e.path()))
+        .filter(|p| p.extension().is_some_and(|x| x == "fa"))
+        .collect();
+    files.sort();
+
+    for path in &files {
+        let mut rows = Reader::new(std::fs::File::open(path)?, Format::Fasta);
+        while rows.advance()? {
+            let rec = rows.record();
+            let Some(name) = libsail::seq::name_of(Format::Fasta, rec) else {
+                continue;
+            };
+            if seen.insert(name.to_vec()) {
+                out.write_all(rec)?;
+                if !rec.ends_with(b"\n") {
+                    out.write_all(b"\n")?;
+                }
+            }
+        }
+    }
+
+    out.flush()?;
+    Ok(seen.len())
+}
+
+/// `reject` in two searches per tool instead of two per family.
+///
+/// Every family against every recruit's reversal, then against every recruit's
+/// original. The searches are the same searches -- same sensitivity, same
+/// prefilter, same E-value -- so the scores are the same scores. What changes
+/// is that one invocation covers what `fanout` spreads over the whole set, and
+/// `learn` does the per-family bookkeeping the file layout used to do.
+#[allow(clippy::too_many_arguments)]
+fn reject_union(
+    args: &RejectArgs,
+    layout: &Layout,
+    stage: &Stage,
+    threads: usize,
+) -> anyhow::Result<()> {
+    let results = stage.results();
+    let tmp = stage.tmp();
+    std::fs::create_dir_all(&results)?;
+    std::fs::create_dir_all(&tmp)?;
+
+    let nail_bin = nail()?;
+    let mmseqs_bin = mmseqs()?;
+    let hmmsearch_bin = hmmsearch()?;
+
+    // one file per form, every recruit once
+    let mut targets = Vec::new();
+    for (form, from) in [
+        (REVERSAL, layout.reversals()),
+        (ORIGINAL, layout.originals()),
+    ] {
+        let to = tmp.join(format!("recruits.{form}.fa"));
+        let n = union_fasta(&from, &to)?;
+        println!("{n} distinct recruits in {}", to.display());
+        targets.push((form, to));
+    }
+
+    let query_hmm = layout.query_hmm();
+    let query_db = layout.query_db();
+    let table = |tool: &str, form: &str| manifest::table_path(&results, &run_name(tool, form), ALL);
+
+    let mut pl = PipelineBuilder::new();
+
+    for (form, target) in &targets {
+        let scratch = tmp.join(form);
+        let (name, tool, shard) = (run_name(NAIL, form), NAIL.to_string(), ALL.to_string());
+
+        pl = pl
+            .step(
+                Step::serial([PCmd::new("mkdir")
+                    .name("dirs")
+                    .flag("-p")
+                    .path(scratch.join("targetDB"))
+                    .path(scratch.join("alnDB"))])
+                .name(format!("dirs.{form}")),
+            )
+            .step(
+                Step::serial([PCmd::new(&nail_bin)
+                    .sub("search")
+                    .arg("--mmseqs-path", &mmseqs_bin)
+                    .arg("-t", threads)
+                    .arg("--tmp-dir", scratch.join("nail"))
+                    .arg("--mmseqs-s", DECOY_S)
+                    .arg("--seed-mode", search::sweeps::SEED_MODE)
+                    .arg("--mmseqs-max-seqs", DECOY_MAX_SEQS)
+                    .arg("-E", search::EVALUE)
+                    .flag("--allow-overwrite")
+                    .arg("--tbl-out", table(NAIL, form))
+                    .path(&query_hmm)
+                    .path(target)
+                    .field(manifest::NAME, &name)
+                    .field(manifest::TOOL, &tool)
+                    .field(manifest::SHARD, &shard)
+                    .field(FORM, *form)])
+                .name(format!("nail.{form}"))
+                .cores(threads),
+            )
+            .step(
+                Step::serial([search::createdb(
+                    &mmseqs_bin,
+                    target,
+                    &scratch.join("targetDB/targetDB"),
+                    ALL,
+                    threads,
+                )])
+                .name(format!("createdb.{form}")),
+            );
+
+        let cmds = search::Mmseqs {
+            bin: &mmseqs_bin,
+            query_db: &query_db,
+            target_db: &scratch.join("targetDB/targetDB"),
+            aln_db: scratch.join("alnDB/alnDB"),
+            work: scratch.join("work"),
+            out: table(MMSEQS, form),
+            threads,
+            s: Some(DECOY_S.to_string()),
+            max_seqs: Some(DECOY_MAX_SEQS),
+        }
+        .cmds();
+
+        pl = pl
+            .step(
+                Step::serial([cmds
+                    .search
+                    .field(manifest::NAME, run_name(MMSEQS, form))
+                    .field(manifest::TOOL, MMSEQS)
+                    .field(manifest::SHARD, ALL)
+                    .field(FORM, *form)])
+                .name(format!("mmseqs.{form}"))
+                .cores(threads),
+            )
+            .step(
+                Step::serial([cmds.convert.field(manifest::SHARD, ALL)])
+                    .name(format!("convert.{form}")),
+            )
+            .step(
+                Step::serial([PCmd::new(&hmmsearch_bin)
+                    .arg("--cpu", threads)
+                    .arg("-E", search::EVALUE)
+                    .arg("-o", "/dev/null")
+                    .arg("--tblout", table(HMMER, form))
+                    .arg(
+                        "--domtblout",
+                        manifest::dom_path(&results, &run_name(HMMER, form), ALL),
+                    )
+                    .path(&query_hmm)
+                    .path(target)
+                    .field(manifest::NAME, run_name(HMMER, form))
+                    .field(manifest::TOOL, HMMER)
+                    .field(manifest::SHARD, ALL)
+                    .field(FORM, *form)])
+                .name(format!("hmmer.{form}"))
+                .cores(threads),
+            );
+    }
+
+    let pipeline = pl
+        .stderr_dir(tmp.join("stderr"))
+        .sink(PTable::new(stage.manifest()))
+        .sink(Progress::new())
+        .build()?;
+
+    if args.dry_run {
+        pipeline.dry_run();
+        return Ok(());
+    }
+
+    pipeline.run()?;
+    ledger::record(&stage.root)?;
+    Ok(())
+}
+
 fn reject(args: RejectArgs, paths: &Paths) -> anyhow::Result<()> {
     let layout = Layout::new(paths)?;
+
+    if args.strategy == Strategy::Union {
+        let stage = layout.reject()?;
+        let threads = args.threads;
+
+        let results = stage.results();
+        if results.exists() {
+            std::fs::remove_dir_all(&results)?;
+        }
+
+        return reject_union(&args, &layout, &stage, threads);
+    }
+
     let decoy_dir = layout.originals();
 
     if !decoy_dir.is_dir() {
@@ -1029,6 +1301,91 @@ const N_SCORES: usize = 5;
 /// The tools a calibration scores, in the order `cutoffs.tbl` writes them.
 const TOOLS: [&str; 3] = [NAIL, MMSEQS, HMMER];
 
+/// `decoy_scores` over the two union tables, for every family at once.
+///
+/// The arithmetic is the fanout's, pair for pair. What the file layout used to
+/// say implicitly -- that a hit only counts for the family that recruited its
+/// sequence -- this says with `recruits`, and it is not optional: a family's
+/// null holds only sequences vetted for that family. See CLAUDE.md.
+fn decoy_scores_union<T>(
+    results: &Path,
+    tool: &str,
+    e_cutoff: f64,
+    recruits: &HashMap<String, HashSet<String>>,
+) -> anyhow::Result<HashMap<String, (Vec<f32>, usize)>>
+where
+    T: HitColumns,
+{
+    let table = |form| manifest::table_path(results, &run_name(tool, form), ALL);
+    let (orig_path, rev_path) = (table(ORIGINAL), table(REVERSAL));
+
+    if !orig_path.exists() || !rev_path.exists() {
+        return Ok(HashMap::new());
+    }
+
+    let orig = Table::<HitParser<T>>::open(&orig_path)
+        .with_context(|| format!("failed to read {}", orig_path.display()))?;
+    let rev = Table::<HitParser<T>>::open(&rev_path)
+        .with_context(|| format!("failed to read {}", rev_path.display()))?;
+
+    // a recruit whose original hits its family is a reject, not a decoy
+    let real: HashSet<(&str, &str)> = orig
+        .iter()
+        .filter(|h| h.e_value <= e_cutoff)
+        .map(|h| (h.query.as_str(), h.target.as_str()))
+        .collect();
+
+    // one entry per pair, the last row winning, exactly as the fanout does
+    let mut by_pair: HashMap<(&str, &str), &Hit> = HashMap::new();
+    for hit in rev.iter() {
+        let pair = (hit.query.as_str(), hit.target.as_str());
+        // the whole point: this family did not recruit this sequence, so the
+        // pair was never vetted for it and has no business in its null
+        if !recruits
+            .get(pair.0)
+            .is_some_and(|names| names.contains(pair.1))
+        {
+            continue;
+        }
+        by_pair.insert(pair, hit);
+    }
+
+    let mut by_family: HashMap<&str, Vec<&Hit>> = HashMap::new();
+    for (pair, hit) in by_pair {
+        if real.contains(&pair) {
+            continue;
+        }
+        by_family.entry(pair.0).or_default().push(hit);
+    }
+
+    // every family the tables covered gets an entry, even an empty one: the
+    // fanout answers Some for a family whose table exists and holds no hits,
+    // and `learn` reads a missing entry as "this family was never searched"
+    let mut out: HashMap<String, (Vec<f32>, usize)> = recruits
+        .keys()
+        .map(|f| (f.clone(), (vec![0.0; N_SCORES], 0)))
+        .collect();
+
+    for (family, mut decoys) in by_family {
+        decoys.sort_by(|a, b| {
+            a.e_value
+                .partial_cmp(&b.e_value)
+                .expect("NaN in decoy e-values")
+        });
+
+        let scores: Vec<f32> = decoys
+            .iter()
+            .map(|h| h.score)
+            .chain(std::iter::repeat(0.0))
+            .take(N_SCORES)
+            .collect();
+
+        out.insert(family.to_string(), (scores, decoys.len()));
+    }
+
+    Ok(out)
+}
+
 fn learn(args: LearnArgs, paths: &Paths) -> anyhow::Result<()> {
     let layout = Layout::new(paths)?;
     let stage = layout.reject()?;
@@ -1039,10 +1396,19 @@ fn learn(args: LearnArgs, paths: &Paths) -> anyhow::Result<()> {
     // with fewer decoys than it has
     let searched = manifest::Manifest::read(&stage.manifest())?;
 
-    let mut families: Vec<String> = searched
-        .runs()
-        .filter_map(|row| row.get(manifest::SHARD).map(str::to_string))
-        .collect();
+    // union files every table under one pseudo-shard, so the families come
+    // from what `gather` laid out rather than from the manifest
+    let union = (args.strategy == Strategy::Union)
+        .then(|| recruits_by_family(&layout.reversals()))
+        .transpose()?;
+
+    let mut families: Vec<String> = match &union {
+        Some(recruits) => recruits.keys().cloned().collect(),
+        None => searched
+            .runs()
+            .filter_map(|row| row.get(manifest::SHARD).map(str::to_string))
+            .collect(),
+    };
     families.sort_unstable();
     families.dedup();
 
@@ -1058,6 +1424,16 @@ fn learn(args: LearnArgs, paths: &Paths) -> anyhow::Result<()> {
         bail!("no finished searches in {}", stage.manifest().display());
     }
 
+    // read once for every family, rather than once per family
+    let pooled = match &union {
+        Some(recruits) => Some((
+            decoy_scores_union::<NailTable>(&results, NAIL, args.reverse_e_cutoff, recruits)?,
+            decoy_scores_union::<BlastTable>(&results, MMSEQS, args.reverse_e_cutoff, recruits)?,
+            decoy_scores_union::<HmmerTable>(&results, HMMER, args.reverse_e_cutoff, recruits)?,
+        )),
+        None => None,
+    };
+
     let skipped = AtomicUsize::new(0);
 
     // collected rather than written as they finish, so the file is in family
@@ -1067,12 +1443,18 @@ fn learn(args: LearnArgs, paths: &Paths) -> anyhow::Result<()> {
         families
             .par_iter()
             .map(|family| -> anyhow::Result<Option<Vec<String>>> {
-                let nail =
-                    decoy_scores::<NailTable>(&results, NAIL, family, args.reverse_e_cutoff)?;
-                let mmseqs =
-                    decoy_scores::<BlastTable>(&results, MMSEQS, family, args.reverse_e_cutoff)?;
-                let hmmer =
-                    decoy_scores::<HmmerTable>(&results, HMMER, family, args.reverse_e_cutoff)?;
+                let (nail, mmseqs, hmmer) = match &pooled {
+                    Some((n, m, h)) => (
+                        n.get(family).cloned(),
+                        m.get(family).cloned(),
+                        h.get(family).cloned(),
+                    ),
+                    None => (
+                        decoy_scores::<NailTable>(&results, NAIL, family, args.reverse_e_cutoff)?,
+                        decoy_scores::<BlastTable>(&results, MMSEQS, family, args.reverse_e_cutoff)?,
+                        decoy_scores::<HmmerTable>(&results, HMMER, family, args.reverse_e_cutoff)?,
+                    ),
+                };
 
                 if nail.is_none() || mmseqs.is_none() {
                     // a family without both tables tells us nothing comparative
@@ -1214,6 +1596,8 @@ fn all(args: AllArgs, paths: &Paths) -> anyhow::Result<()> {
     reject(
         RejectArgs {
             place: args.place.clone(),
+            strategy: args.strategy,
+            threads: args.threads,
             dry_run: false,
             jobs: args.jobs,
         },
@@ -1223,6 +1607,7 @@ fn all(args: AllArgs, paths: &Paths) -> anyhow::Result<()> {
     learn(
         LearnArgs {
             place: args.place.clone(),
+            strategy: args.strategy,
             reverse_e_cutoff: 1e-3,
             threads: args.threads,
         },
