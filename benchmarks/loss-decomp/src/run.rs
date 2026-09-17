@@ -142,7 +142,9 @@ pub fn main(args: Args, paths: &crate::Paths) -> anyhow::Result<()> {
     let set = Set::load_needing(&paths.set, crate::NEEDS)?;
     ensure!(set.units().count() > 0, "{} is empty", paths.set.display());
 
-    let mut pl = PipelineBuilder::new().step(dirs.mkdir());
+    // nail creates the last component of its --tmp-dir and no more, so the
+    // directory the arms sit under has to exist before the first one runs
+    let mut pl = PipelineBuilder::new().step(dirs.mkdir().path(dirs.tmp.join("align")));
 
     // static aligns the whole prefilter, so max-seqs bounds it; prog aligns
     // from prog-n upward while the hit fraction holds. one arm, one seed list

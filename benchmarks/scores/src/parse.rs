@@ -7,7 +7,7 @@
 
 use std::path::{Path, PathBuf};
 
-use anyhow::{Context, bail};
+use anyhow::{Context, bail, ensure};
 use clap::{Parser, Subcommand};
 
 use util::set::Set;
@@ -151,15 +151,32 @@ impl Inputs {
             None => crate::collect::ram() / 2,
         };
 
-        let set = Set::load_as(&args.set, &util::set::shape::FIXED)?;
+        // held to the one column this opens rather than to a shape: the
+        // pipelines that write these tables search a `fixed` shard and a
+        // `cross` unit alike, and a name in the manifest is not what decides
+        // whether the table can be read
+        let set = Set::load_needing(&args.set, &[util::set::Rep::QueryHmm])?;
 
         // the query is a property of the set rather than of a unit, and every
-        // pipeline that writes one of these tables searches one query set
-        let query_hmm = set
+        // pipeline that writes one of these tables searches one query set. A
+        // cross may pair several, so that is checked rather than assumed --
+        // taking the first would report one query's scores under another's
+        let queries: std::collections::BTreeSet<_> = set
             .units()
+            .map(|u| u.query_hmm())
+            .collect::<anyhow::Result<_>>()?;
+
+        ensure!(
+            queries.len() == 1,
+            "{} names {} query sets; this reads one",
+            args.set.display(),
+            queries.len()
+        );
+
+        let query_hmm = queries
+            .into_iter()
             .next()
-            .context("the set names no units")?
-            .query_hmm()?;
+            .context("the set names no units")?;
 
         let out = match args.out {
             Some(path) => path,
