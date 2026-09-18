@@ -37,10 +37,13 @@ const SEEDING: &str = "once";
 
 /// The -a the whole grid is run at, in order.
 ///
+/// -a bounds the whole cloud search rather than the retries after the first,
+/// so 1 is one attempt and no recovery. 0 asks for no attempt at all, which
+/// leaves nail with nothing to unwrap and panics.
+///
 /// 5 is nail's own default, passed rather than left off so the manifest
-/// records what ran instead of whatever the binary defaulted to that day. 0
-/// turns the recovery off.
-const ATTEMPTS: [u32; 2] = [5, 0];
+/// records what ran instead of whatever the binary defaulted to that day.
+const ATTEMPTS: [u32; 2] = [5, 1];
 
 #[derive(Parser, Debug)]
 pub struct Args {
