@@ -182,28 +182,16 @@ fn preamble(meta: &crate::Meta, truth: usize, rows: u64) -> String {
     )
 }
 
-/// Where the hits hmmer found are lost, for every run that isn't hmmer's.
-///
-/// Only two checkpoints are visible from the outside: whether a pair got a
-/// seed, and whether it ended up in the run's table at all. Everything
-/// between them collapses into one bucket -- see loss-decomp for why the
-/// e-value gate has to be opened up for that bucket to mean what it says.
-///
-/// Reaching the table is presence, not a cutoff: this is asking where a pair
-/// was dropped, and a pair that survived to be scored badly was not dropped.
-/// That is why this reads `runs.tbl` rather than recall's table -- presence is
-/// a property of a run, and recall keeps a column per tool.
-///
-/// One pass, counting per run. A sweep that seeded once and searched every
-/// cell off those seeds gets a column per cell, which is what tells the loss
-/// every cell shares from the loss its pruning caused.
 /// What one unit's pairs came to, per run.
 struct Tally {
     /// Pairs hmmer reported at or above their family's cutoff, for this unit.
     truth: usize,
     lost_seed: Vec<usize>,
     lost_cloud_align: Vec<usize>,
-    reported: Vec<usize>,
+    /// Scored, and below the family's cutoff. nail found the pair and would
+    /// not return it, which is a loss like any other.
+    lost_cutoff: Vec<usize>,
+    kept: Vec<usize>,
 }
 
 impl Tally {
@@ -212,11 +200,13 @@ impl Tally {
             truth: 0,
             lost_seed: vec![0; runs],
             lost_cloud_align: vec![0; runs],
-            reported: vec![0; runs],
+            lost_cutoff: vec![0; runs],
+            kept: vec![0; runs],
         }
     }
 }
 
+/// Where the hits hmmer found are lost, per unit and per run.
 pub fn stages(path: &Path, out: &Path) -> anyhow::Result<()> {
     let mut scores = Runs::open(path)?;
 
@@ -254,10 +244,15 @@ pub fn stages(path: &Path, out: &Path) -> anyhow::Result<()> {
             // per run rather than per pair: a seeding sweep gives every arm
             // its own seed list, so whether the pair was ever offered is the
             // arm's answer and not the pipeline's
-            match (scores.seeded(run), scores.present(run)) {
-                (false, _) => tally.lost_seed[run] += 1,
-                (_, false) => tally.lost_cloud_align[run] += 1,
-                (_, true) => tally.reported[run] += 1,
+            match (
+                scores.seeded(run),
+                scores.present(run),
+                scores.row().passed(run),
+            ) {
+                (false, _, _) => tally.lost_seed[run] += 1,
+                (_, false, _) => tally.lost_cloud_align[run] += 1,
+                (_, _, false) => tally.lost_cutoff[run] += 1,
+                (_, _, true) => tally.kept[run] += 1,
             }
         }
     }
@@ -271,9 +266,18 @@ pub fn stages(path: &Path, out: &Path) -> anyhow::Result<()> {
     // four rows apiece, where `n` meant a population on two of them and a loss
     // on the other two, and the last row's fraction only ever repeated the one
     // above it
-    let headers = ["unit", "run", "truth", "lost_seed", "lost_align", "reported", "sens"]
-        .map(str::to_string)
-        .to_vec();
+    let headers = [
+        "unit",
+        "run",
+        "truth",
+        "lost_seed",
+        "lost_align",
+        "lost_cutoff",
+        "kept",
+        "sens",
+    ]
+    .map(str::to_string)
+    .to_vec();
     let mut cells: Vec<Vec<String>> = Vec::new();
 
     for (unit, tally) in &at {
@@ -288,8 +292,9 @@ pub fn stages(path: &Path, out: &Path) -> anyhow::Result<()> {
                 tally.truth.to_string(),
                 tally.lost_seed[run].to_string(),
                 tally.lost_cloud_align[run].to_string(),
-                tally.reported[run].to_string(),
-                format!("{:.4}", frac(tally.reported[run], tally.truth)),
+                tally.lost_cutoff[run].to_string(),
+                tally.kept[run].to_string(),
+                format!("{:.4}", frac(tally.kept[run], tally.truth)),
             ]);
         }
     }
