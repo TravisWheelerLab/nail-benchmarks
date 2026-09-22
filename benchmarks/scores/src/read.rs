@@ -17,6 +17,9 @@ use crate::frame::Layout;
 /// Where recall's score columns start: after query, target and pass.
 const SCORES: usize = 3;
 
+/// Where the pass string sits.
+pub const PASS: usize = 2;
+
 /// Where this table's columns sit: query, target, pass, one per tool, inc,
 /// dom.
 pub fn layout(meta: &Meta) -> Layout {
@@ -24,7 +27,7 @@ pub fn layout(meta: &Meta) -> Layout {
 
     Layout {
         fields: SCORES + tools + 2,
-        pass: 2,
+        pass: Some(PASS),
         dom: SCORES + tools + 1,
     }
 }
@@ -34,7 +37,7 @@ mod tests {
     use super::*;
 
     use crate::FORMAT;
-    use crate::frame::Frame;
+    use crate::frame::{Frame, Verdict};
 
     /// Two runs, two rows, and a pair hmmer never reported.
     const FILE: &str = "\
@@ -59,6 +62,7 @@ beta MGYP000000000002 Nh 11.0   -      -   -
 
         anyhow::ensure!(frame.format() == FORMAT, "not a scores table");
         frame.layout(layout(&frame.meta));
+        frame.verdict(Verdict::Pass(PASS));
 
         Ok(frame)
     }

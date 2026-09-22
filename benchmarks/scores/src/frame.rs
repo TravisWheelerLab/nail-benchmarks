@@ -24,7 +24,7 @@ use std::path::Path;
 
 use anyhow::{Context, bail, ensure};
 
-use crate::{Meta, Preamble, SIGNIFICANT, Tool};
+use crate::{Meta, Named, Preamble, SIGNIFICANT, Tool};
 
 /// How much of the file is held at once.
 const BUFFER: usize = 4 << 20;
@@ -37,8 +37,21 @@ pub struct Layout {
     // moves between tables; each table computes its own start,
     // and what is here is only what the envelope checks
     pub fields: usize,
-    pub pass: usize,
+    /// Where the pass string sits, for a table that carries one.
+    pub pass: Option<usize>,
     pub dom: usize,
+}
+
+/// How a row says that a run reported a pair at or above its family's cutoff.
+pub enum Verdict {
+    /// The case of the run's character in the pass string, at that field.
+    Pass(usize),
+    /// The run's own score, from the field at `at + run`, against the cutoff
+    /// its family was given.
+    //
+    // a table with a score column per run has the comparison in it already,
+    // and a character repeating the answer is a column per run of it
+    Score { at: usize, cutoffs: Named },
 }
 
 pub struct Frame<R> {
@@ -58,6 +71,15 @@ pub struct Frame<R> {
     /// What to call the file in an error.
     file: String,
     layout: Option<Layout>,
+    verdict: Option<Verdict>,
+
+    /// The nail and mmseqs cutoffs of the family the row in hand names.
+    //
+    // a query's rows are adjacent, so this is one lookup per family
+    // rather than one per cell, which at 164 runs is 164 times fewer
+    cutoff: (Option<f32>, Option<f32>),
+    /// Which family those are for.
+    cutoff_for: Vec<u8>,
 
     shard: String,
     seen: HashSet<String>,
@@ -150,6 +172,9 @@ impl<R: Read> Frame<R> {
             rows: 0,
             line: at,
             done: false,
+            verdict: None,
+            cutoff: (None, None),
+            cutoff_for: Vec::new(),
         })
     }
 
@@ -166,6 +191,11 @@ impl<R: Read> Frame<R> {
     /// tools the file carries. Rows cannot be read before this.
     pub fn layout(&mut self, layout: Layout) {
         self.layout = Some(layout);
+    }
+
+    /// Fix how a row is asked whether a run cleared its family's cutoff.
+    pub fn verdict(&mut self, verdict: Verdict) {
+        self.verdict = Some(verdict);
     }
 
     /// Advance to the next row. `false` at the trailer.
@@ -279,36 +309,52 @@ impl<R: Read> Frame<R> {
             self.spans.len()
         );
 
-        let (start, end) = self.spans[layout.pass];
-        let pass = &self.buf[start..end];
+        if let Some(at) = layout.pass {
+            let (start, end) = self.spans[at];
+            let pass = &self.buf[start..end];
 
-        ensure!(
-            pass.len() == self.meta.runs.len(),
-            "{}:{} has a pass string of {} for {} runs",
-            self.file,
-            self.line,
-            pass.len(),
-            self.meta.runs.len()
-        );
-
-        for (at, letter) in pass.iter().enumerate() {
-            // `-` is the one character that is not a tool's: it says the
-            // run's seeding never offered the pair, which is a different
-            // answer from the run having scored it badly
-            if *letter == b'-' {
-                continue;
-            }
-
-            let tool = Tool::of_letter(*letter);
             ensure!(
-                tool == Some(self.meta.runs[at].tool),
-                "{}:{} has {:?} where run {} is {}",
+                pass.len() == self.meta.runs.len(),
+                "{}:{} has a pass string of {} for {} runs",
                 self.file,
                 self.line,
-                *letter as char,
-                self.meta.runs[at].name,
-                self.meta.runs[at].tool
+                pass.len(),
+                self.meta.runs.len()
             );
+
+            for (at, letter) in pass.iter().enumerate() {
+                // `-` is the one character that is not a tool's: it says the
+                // run's seeding never offered the pair, which is a different
+                // answer from the run having scored it badly
+                if *letter == b'-' {
+                    continue;
+                }
+
+                let tool = Tool::of_letter(*letter);
+                ensure!(
+                    tool == Some(self.meta.runs[at].tool),
+                    "{}:{} has {:?} where run {} is {}",
+                    self.file,
+                    self.line,
+                    *letter as char,
+                    self.meta.runs[at].name,
+                    self.meta.runs[at].tool
+                );
+            }
+        }
+
+        if let Some(Verdict::Score { cutoffs, .. }) = &self.verdict {
+            let (start, end) = self.spans[0];
+
+            if self.buf[start..end] != self.cutoff_for[..] {
+                self.cutoff_for.clear();
+                self.cutoff_for.extend_from_slice(&self.buf[start..end]);
+
+                self.cutoff = match std::str::from_utf8(&self.buf[start..end]) {
+                    Ok(family) => cutoffs.pair(family),
+                    Err(_) => (None, None),
+                };
+            }
         }
 
         // the pair as `query\0target`, which orders as the pair does and costs
@@ -340,10 +386,6 @@ impl<R: Read> Frame<R> {
         &self.buf[start..end]
     }
 
-    /// Whether a column holds something rather than a dash.
-    pub fn filled(&self, at: usize) -> bool {
-        self.field(at) != b"-"
-    }
 
     /// Which block the current row is in -- the unit it was searched against.
     pub fn shard(&self) -> &str {
@@ -352,12 +394,35 @@ impl<R: Read> Frame<R> {
 
     /// One character per run, in the order `#= pass` names them.
     pub fn pass(&self) -> &[u8] {
-        self.field(self.at().pass)
+        let at = self
+            .at()
+            .pass
+            .expect("a table whose layout names no pass column has no pass string");
+
+        self.field(at)
     }
 
     /// Whether one run reported this pair at or above its family's cutoff.
     pub fn passed(&self, run: usize) -> bool {
-        self.pass().get(run).is_some_and(u8::is_ascii_uppercase)
+        match &self.verdict {
+            Some(Verdict::Pass(at)) => self
+                .field(*at)
+                .get(run)
+                .is_some_and(u8::is_ascii_uppercase),
+            Some(Verdict::Score { at, .. }) => {
+                let Some(score) = crate::scan::score(self.field(at + run)) else {
+                    return false;
+                };
+
+                let cutoff = match self.meta.runs[run].tool {
+                    Tool::Nail | Tool::Hmmer => self.cutoff.0,
+                    Tool::Mmseqs => self.cutoff.1,
+                };
+
+                cutoff.is_some_and(|cutoff| score >= cutoff)
+            }
+            None => panic!("a frame is given its verdict before its first row"),
+        }
     }
 
     /// hmmer's domain scores, in the order the domtbl listed them.

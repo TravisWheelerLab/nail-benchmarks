@@ -90,10 +90,11 @@ pub const FORMAT: &str = "#= format scores 2";
 /// carrying enough of a hit to count as its own.
 pub const SIGNIFICANT: f32 = 0.1;
 
-/// How many runs a pass string can hold, and so how many score columns a
-/// `runs.tbl` carries.
+/// How many runs a `scores.tbl` can hold, which is the length of its pass
+/// string.
 //
-// cloud-search's grid is the widest pipeline here, at 83
+// recall sweeps six. the sweeps' own table has no pass string and so no
+// ceiling from one: cloud-search's grid is 164 columns wide
 pub const MAX_RUNS: usize = 128;
 
 // ---
@@ -230,12 +231,6 @@ pub struct Column {
 /// to read its table.
 pub fn runs(ran: &Ledger) -> anyhow::Result<Vec<Column>> {
     let columns = ran.columns()?;
-
-    ensure!(
-        columns.len() <= MAX_RUNS,
-        "{} runs, and a pass string holds {MAX_RUNS}",
-        columns.len()
-    );
 
     columns
         .into_iter()
@@ -407,58 +402,19 @@ impl Cutoffs {
     /// the column to read is found by name rather than by counting -- which is
     /// what lets the calibration add a tool without moving anything here.
     pub fn read(path: &Path, c: usize, queries: &Queries) -> anyhow::Result<Cutoffs> {
-        let text = std::fs::read_to_string(path)
-            .with_context(|| format!("failed to read {}", path.display()))?;
-
-        let headers: Vec<&str> = text
-            .lines()
-            .find_map(|line| {
-                let rest = line.strip_prefix('#')?.trim_start();
-                (!rest.starts_with('-')).then(|| rest.split_whitespace().collect())
-            })
-            .with_context(|| format!("no header in {}", path.display()))?;
-
-        let column = |tool: &str| -> anyhow::Result<usize> {
-            let name = format!("{tool}_{}", c + 1);
-            headers
-                .iter()
-                .position(|h| *h == name)
-                .with_context(|| format!("{} has no {name} column", path.display()))
-        };
-
-        let (nail_at, mmseqs_at) = (column("nail")?, column("mmseqs")?);
-
         let mut out = Cutoffs {
             nail: vec![None; queries.len()],
             mmseqs: vec![None; queries.len()],
         };
 
-        for line in text.lines() {
-            if line.starts_with('#') || line.trim().is_empty() {
-                continue;
-            }
-
-            let cells: Vec<&str> = line.split_whitespace().collect();
-            let Some(family) = cells.first() else {
-                continue;
-            };
-
+        parse(path, c, |family, nail, mmseqs| {
             // a family the calibration knows and this query set does not is
             // not an error: the calibration covers every family Pfam has
-            let Some(id) = queries.id(family) else {
-                continue;
-            };
-
-            let score = |at: usize| cells.get(at).and_then(|x| x.parse::<f32>().ok());
-
-            // a zero is a family that tool learned nothing about
-            if let Some(s) = score(nail_at).filter(|s| *s > 0.0) {
-                out.nail[id as usize] = Some(s);
+            if let Some(id) = queries.id(family) {
+                out.nail[id as usize] = nail;
+                out.mmseqs[id as usize] = mmseqs;
             }
-            if let Some(s) = score(mmseqs_at).filter(|s| *s > 0.0) {
-                out.mmseqs[id as usize] = Some(s);
-            }
-        }
+        })?;
 
         if out.nail.iter().all(Option::is_none) && out.mmseqs.iter().all(Option::is_none) {
             bail!(
@@ -470,6 +426,91 @@ impl Cutoffs {
 
         Ok(out)
     }
+}
+
+/// The same table keyed by the family name a row carries.
+///
+/// A reader has the names the table was written with and not the query set
+/// the search numbered them by, so it cannot index [`Cutoffs`].
+pub struct Named(HashMap<String, (Option<f32>, Option<f32>)>);
+
+impl Named {
+    /// Both tools' thresholds on one family, for a reader that asks once per
+    /// family and then answers per run.
+    pub fn pair(&self, family: &str) -> (Option<f32>, Option<f32>) {
+        self.0.get(family).copied().unwrap_or((None, None))
+    }
+
+    pub fn read(path: &Path, c: usize) -> anyhow::Result<Named> {
+        let mut out = HashMap::new();
+
+        parse(path, c, |family, nail, mmseqs| {
+            out.insert(family.to_string(), (nail, mmseqs));
+        })?;
+
+        ensure!(
+            out.values().any(|(nail, mmseqs)| nail.is_some() || mmseqs.is_some()),
+            "no usable cutoffs at index {c} in {}",
+            path.display()
+        );
+
+        Ok(Named(out))
+    }
+}
+
+/// Read `cutoffs.tbl`, handing each family its two thresholds at index `c`.
+///
+/// `cutoffs.tbl` names its columns `<tool>_1..<tool>_5` and `<tool>_n`, so the
+/// column to read is found by name rather than by counting -- which is what
+/// lets the calibration add a tool without moving anything here.
+fn parse(
+    path: &Path,
+    c: usize,
+    mut row: impl FnMut(&str, Option<f32>, Option<f32>),
+) -> anyhow::Result<()> {
+    let text = std::fs::read_to_string(path)
+        .with_context(|| format!("failed to read {}", path.display()))?;
+
+    let headers: Vec<&str> = text
+        .lines()
+        .find_map(|line| {
+            let rest = line.strip_prefix('#')?.trim_start();
+            (!rest.starts_with('-')).then(|| rest.split_whitespace().collect())
+        })
+        .with_context(|| format!("no header in {}", path.display()))?;
+
+    let column = |tool: &str| -> anyhow::Result<usize> {
+        let name = format!("{tool}_{}", c + 1);
+        headers
+            .iter()
+            .position(|h| *h == name)
+            .with_context(|| format!("{} has no {name} column", path.display()))
+    };
+
+    let (nail_at, mmseqs_at) = (column("nail")?, column("mmseqs")?);
+
+    for line in text.lines() {
+        if line.starts_with('#') || line.trim().is_empty() {
+            continue;
+        }
+
+        let cells: Vec<&str> = line.split_whitespace().collect();
+        let Some(family) = cells.first() else {
+            continue;
+        };
+
+        // a zero is a family that tool learned nothing about
+        let score = |at: usize| {
+            cells
+                .get(at)
+                .and_then(|x| x.parse::<f32>().ok())
+                .filter(|s| *s > 0.0)
+        };
+
+        row(family, score(nail_at), score(mmseqs_at));
+    }
+
+    Ok(())
 }
 
 // --------------------------------------------------------------------- meta
@@ -547,8 +588,15 @@ impl Meta {
             )?;
         }
 
-        let names: Vec<&str> = self.runs.iter().map(|run| run.name.as_str()).collect();
-        writeln!(out, "#= pass {}", names.join(" "))
+        // the legend belongs to the pass string, so a table without one gets
+        // no line: `#= run` already gives the order, and a legend beside no
+        // column would read as saying the column is there
+        if format == FORMAT {
+            let names: Vec<&str> = self.runs.iter().map(|run| run.name.as_str()).collect();
+            writeln!(out, "#= pass {}", names.join(" "))?;
+        }
+
+        Ok(())
     }
 
     /// Which column is hmmer's, which is what everything else is measured
@@ -645,10 +693,12 @@ impl Preamble {
         ensure!(!meta.targets.is_empty(), "no `#= target` lines");
 
         // the pass string is read by position, so a legend that disagrees with
-        // the runs is a file that cannot be read rather than one to guess at
+        // the runs is a file that cannot be read rather than one to guess at.
+        // a table with no pass string has no legend, and the `#= run` lines
+        // are the order there
         let names: Vec<&str> = meta.runs.iter().map(|run| run.name.as_str()).collect();
         ensure!(
-            self.pass == names,
+            self.pass.is_empty() || self.pass == names,
             "`#= pass` names {:?}, the runs are {:?}",
             self.pass,
             names

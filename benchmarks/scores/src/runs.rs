@@ -16,22 +16,30 @@
 //! #= seed <seeding> <wall_s>
 //! #= cutoffs <path> c=<n>
 //! #= run <name> <tool> <wall_s> [k=v ...]
-//! #= pass <run name> ...
-//! # query target           pass seeded A2.0-B4.0 ... full   hmmer  inc dom
-//! # ----- ---------------- ---- ------ --------- --- ------ ------ --- ---
+//! #                       A2.0
+//! #                       B4.0
+//! # query target           a5   ... full   hmmer  inc dom
+//! # ----- ---------------- ---- --- ------ ------ --- ---
 //! #= shard 1
-//! 2-Hacid_dh_C MGYP000522683479 NNH  y      98.8      ... 98.8   98.7   1   98.1
+//! 2-Hacid_dh_C MGYP000522683479 98.8 ... 98.8   98.7   1   98.1
 //! #= end <rows>
 //! ```
 //!
-//! `seeded` is `y` or `n`, and the column is there exactly when the pipeline
-//! kept a seed list beside its results. Seeding nothing and never having
-//! seeded are different answers, so a pipeline that never seeded has no column
-//! rather than a column of `n`.
+//! A run's name is stacked over its column on the dashes it is built from, so
+//! that a cell of the sweep is named in full without ruling fourteen columns
+//! of padding across every row.
 //!
-//! A `-` in a run's column means that run did not report the pair. Absent is
-//! not a score: a zero or a NaN would compare against a threshold and look
-//! like one, which for this table is the whole question.
+//! A cell is a score, or one of two sentinels: `-` where the run's seeding
+//! offered the pair and the run did not report it, and `.` where that run's
+//! seeding never offered it at all. Absent is not a score: a zero or a NaN
+//! would compare against a threshold and look like one, which for this table
+//! is the whole question.
+//!
+//! There is no `pass` column. Whether a run cleared its family's cutoff is its
+//! score against the cutoff `#= cutoffs` names, so a character per run saying
+//! so again would be the answer written twice -- and at 164 runs, 164 bytes a
+//! row of it. recall's `scores.tbl` keeps one, because there a score is per
+//! tool and no column can say which run reported the pair.
 
 use std::fmt::Write as _;
 use std::io::{BufWriter, Read, Write};
@@ -45,9 +53,9 @@ use util::ledger::{self, Ledger};
 use util::set::Set;
 
 use crate::collect::{self, Job};
-use crate::frame::{Frame, Layout};
+use crate::frame::{Frame, Layout, Verdict};
 use crate::shard::{Count, Pair, Scratch, Shard};
-use crate::{Cutoffs, Meta, Queries, label, runs};
+use crate::{Cutoffs, Meta, Named, Queries, label, runs};
 
 /// The `#= format` line a runs table opens with.
 pub const FORMAT: &str = "#= format runs 1";
@@ -60,8 +68,11 @@ const TARGET: usize = 16;
 /// How wide a score is written: four digits, a point and a place.
 const SCORE: usize = 6;
 
-/// Where the score columns start: after query, target and pass.
-const SCORES_AT: usize = 3;
+/// Where the score columns start: after query and target.
+pub const SCORES_AT: usize = 2;
+
+/// The cell of a run whose seeding never offered the pair.
+const NEVER: &str = ".";
 
 pub struct Args<'a> {
     /// The pipeline directory: `ledger.tbl` and `results/`.
@@ -216,11 +227,14 @@ fn block(
 
         line.text(work.queries.name(pair.query))?;
         line.bytes(pair.target)?;
-        line.bytes(pair.pass)?;
 
-        for score in pair.scores {
+        for (run, score) in pair.scores.iter().enumerate() {
             match score {
                 Some(score) => line.num(*score as f64)?,
+                // the `-` a fold writes into the pass string is the seeding
+                // never having offered the pair, and the cell carries that
+                // here rather than a column of its own
+                None if pair.pass[run] == b'-' => line.text(NEVER)?,
                 None => line.missing()?,
             };
         }
@@ -261,15 +275,18 @@ fn schema(meta: &Meta) -> Schema {
         // the column being padded to the widest family name in Pfam
         Column::new("query").ragged(),
         Column::new("target").min_width(TARGET),
-        Column::new("pass").min_width(meta.runs.len()),
     ];
 
-    // named for the run rather than the tool: the
-    // column header is what says which cell of the sweep a score came from
+    // named for the run rather than the tool: the column
+    // header is what says which cell of the sweep a score
+    // came from. stacked on the dashes the name is built
+    // from, so A10.0-B12.0-a1 rules three header lines
+    // rather than fourteen columns of padding on every
+    // row -- at 164 runs that padding was 46% of the file
     columns.extend(
         meta.runs
             .iter()
-            .map(|run| Column::new(run.name.clone()).fixed(1).min_width(SCORE)),
+            .map(|run| Column::stacked(run.name.split('-')).fixed(1).min_width(SCORE)),
     );
 
     columns.push(Column::new("inc").min_width(3));
@@ -280,13 +297,13 @@ fn schema(meta: &Meta) -> Schema {
 
 // -------------------------------------------------------------------- read
 
-/// Where this table's columns sit: query, target, pass, one per run, inc, dom.
+/// Where this table's columns sit: query, target, one per run, inc, dom.
 pub fn layout(meta: &Meta) -> Layout {
     let runs = meta.runs.len();
 
     Layout {
         fields: SCORES_AT + runs + 2,
-        pass: 2,
+        pass: None,
         dom: SCORES_AT + runs + 1,
     }
 }
@@ -316,7 +333,13 @@ impl<R: Read> Reader<R> {
             frame.file(),
         );
 
+        let cutoffs = Named::read(&frame.meta.cutoffs, frame.meta.c)?;
+
         frame.layout(layout(&frame.meta));
+        frame.verdict(Verdict::Score {
+            at: SCORES_AT,
+            cutoffs,
+        });
 
         Ok(Reader {
             frame,
@@ -343,9 +366,9 @@ impl<R: Read> Reader<R> {
     ///
     /// True for a run that replayed no seed list: nothing was withheld from
     /// it, which is a different answer from a seeding that looked and did not
-    /// find it, and the `-` is what carries that difference.
+    /// find it, and the `.` is what carries that difference.
     pub fn seeded(&self, run: usize) -> bool {
-        self.frame.pass().get(run) != Some(&b'-')
+        self.frame.field(self.scores + run) != NEVER.as_bytes()
     }
 
     /// Whether one run reported the pair at all, at any score.
@@ -353,7 +376,7 @@ impl<R: Read> Reader<R> {
         // presence, not a cutoff: a pair that survived to be
         // scored badly was not dropped, which is the
         // distinction the stages is built on
-        self.frame.filled(self.scores + run)
+        super::scan::score(self.frame.field(self.scores + run)).is_some()
     }
 
     /// What one run scored the pair.
@@ -367,31 +390,67 @@ impl<R: Read> Reader<R> {
 mod tests {
     use super::*;
 
+    use std::path::PathBuf;
+    use std::sync::OnceLock;
+
+    /// The cutoffs the fixture is held against, written where a reader can
+    /// open them: a reader works a run's verdict out from its score rather
+    /// than reading a character that already says so.
+    fn cutoffs() -> &'static Path {
+        // written once: the tests run together, and a second write truncates
+        // the file a reader is part way through
+        static PATH: OnceLock<PathBuf> = OnceLock::new();
+
+        PATH.get_or_init(|| {
+            let dir = std::env::temp_dir().join(format!("mgy-runs-{}", std::process::id()));
+            std::fs::create_dir_all(&dir).unwrap();
+
+            let path = dir.join("cutoffs.tbl");
+            std::fs::write(
+                &path,
+                "# family nail_1 mmseqs_1\n\
+                 # ------ ------ --------\n\
+                   alpha  24.5   30.0\n\
+                   beta   20.0   30.0\n\
+                   gamma  20.0   30.0\n",
+            )
+            .unwrap();
+
+            path
+        })
+    }
+
     /// Two cells and hmmer, over a pipeline that seeded: one pair both cells
     /// found and scored differently, one seeded pair only hmmer reported, and
-    /// one pair seeding never found.
-    const FILE: &str = "\
+    /// one pair seeding never offered the cells at all.
+    fn file() -> String {
+        format!(
+            "\
 #= format runs 1
 #= query 3 18 120
 #= target 1 3 12 40
 #= seed once 4.0000
-#= cutoffs /x/cutoffs.tbl c=0
+#= cutoffs {} c=0
 #= run A2.0-B4.0 nail 3.0000 seeds=once A=2.0 B=4.0
 #= run full nail 9.0000 seeds=once
 #= run hmmer hmmer 2.0000
-#= pass A2.0-B4.0 full hmmer
-# query target           pass A2.0-B4.0 full   hmmer  inc dom
-# ----- ---------------- ---- --------- ------ ------ --- ---
+#                       A2.0
+# query target           B4.0 full   hmmer  inc dom
+# ----- ---------------- ---- ------ ------ --- ---
 #= shard 1
-alpha MGYP000000000001 NNH  24.0      25.0   24.0   1   24.0
-beta MGYP000000000002 nnH  -         -      30.0   1   30.0
-gamma MGYP000000000003 --H  -         -      28.0   1   28.0
+alpha MGYP000000000001 24.0 25.0   24.0   1   24.0
+beta MGYP000000000002 -    -      30.0   1   30.0
+gamma MGYP000000000003 .    .      28.0   1   28.0
 #= end 3
-";
+",
+            cutoffs().display()
+        )
+    }
 
     #[test]
     fn a_cell_keeps_its_own_score() {
-        let mut reader = Reader::new(FILE.as_bytes(), "test").unwrap();
+        let file = file();
+        let mut reader = Reader::new(file.as_bytes(), "test").unwrap();
 
         assert!(reader.step().unwrap());
 
@@ -402,7 +461,8 @@ gamma MGYP000000000003 --H  -         -      28.0   1   28.0
 
     #[test]
     fn the_checkpoints_are_told_apart() {
-        let mut reader = Reader::new(FILE.as_bytes(), "test").unwrap();
+        let file = file();
+        let mut reader = Reader::new(file.as_bytes(), "test").unwrap();
 
         assert!(reader.step().unwrap());
         assert!(reader.seeded(0));
@@ -424,8 +484,28 @@ gamma MGYP000000000003 --H  -         -      28.0   1   28.0
     }
 
     #[test]
+    fn a_run_clears_the_cutoff_on_its_score_alone() {
+        let file = file();
+        let mut reader = Reader::new(file.as_bytes(), "test").unwrap();
+
+        // alpha's cutoff is 24.5, so the cell's 24.0 is under it and the
+        // full run's 25.0 is over. hmmer is held to nail's cutoff and its
+        // 24.0 is under it too
+        assert!(reader.step().unwrap());
+        assert!(!reader.row().passed(0));
+        assert!(reader.row().passed(1));
+        assert!(!reader.row().passed(2));
+
+        // a cell that reported nothing cleared nothing, whatever beta's
+        // cutoff is
+        assert!(reader.step().unwrap());
+        assert!(!reader.row().passed(0));
+        assert!(reader.row().passed(2));
+    }
+
+    #[test]
     fn a_table_of_another_format_is_refused() {
-        let other = FILE.replace(FORMAT, "#= format scores 2");
+        let other = file().replace(FORMAT, "#= format scores 2");
         assert!(Reader::new(other.as_bytes(), "test").is_err());
     }
 
@@ -433,10 +513,10 @@ gamma MGYP000000000003 --H  -         -      28.0   1   28.0
     fn a_run_that_replayed_no_seed_list_counts_as_offered_every_pair() {
         // nothing was withheld from it, which is not the same answer as a
         // seeding that looked and did not find the pair
-        let text = FILE
+        let text = file()
             .replace("#= seed once 4.0000\n", "")
             .replace(" seeds=once", "")
-            .replace("--H", "nnH");
+            .replace("gamma MGYP000000000003 .    .", "gamma MGYP000000000003 -    -");
 
         let mut reader = Reader::new(text.as_bytes(), "test").unwrap();
 

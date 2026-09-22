@@ -15,9 +15,9 @@ use anyhow::{bail, ensure};
 
 use util::tbl;
 
-use crate::frame::Frame;
+use crate::frame::{Frame, Verdict};
 use crate::runs::Reader as Runs;
-use crate::{Tool, read, runs};
+use crate::{Named, Tool, read, runs};
 
 /// What every run found, and what it cost.
 ///
@@ -25,19 +25,30 @@ use crate::{Tool, read, runs};
 /// cutoff, how much of that hmmer also found, and how much of that hmmer read
 /// as one domain rather than several. Nothing is held but the counters.
 ///
-/// This reads either table. A summary asks only what the `pass` string and
-/// the domain list say, and both tables carry those in the same place -- what
-/// tells them apart is the score columns, which a summary never opens. So it
-/// works over the frame rather than over either reader.
+/// This reads either table. A summary asks only whether each run cleared its
+/// family's cutoff and what the domain list says, and the two tables answer
+/// the first differently -- recall's out of its `pass` string, a sweep's out
+/// of the run's own score column. So it works over the frame, which is given
+/// the verdict its format calls for, rather than over either reader.
 pub fn summary(path: &Path, out: &Path) -> anyhow::Result<()> {
     let mut scores = Frame::open(path)?;
 
-    let layout = match scores.format() {
-        f if f == crate::FORMAT => read::layout(&scores.meta),
-        f if f == runs::FORMAT => runs::layout(&scores.meta),
+    let (layout, verdict) = match scores.format() {
+        f if f == crate::FORMAT => (
+            read::layout(&scores.meta),
+            Verdict::Pass(read::PASS),
+        ),
+        f if f == runs::FORMAT => (
+            runs::layout(&scores.meta),
+            Verdict::Score {
+                at: runs::SCORES_AT,
+                cutoffs: Named::read(&scores.meta.cutoffs, scores.meta.c)?,
+            },
+        ),
         other => bail!("{} opens `{other}`, which is no table here", path.display()),
     };
     scores.layout(layout);
+    scores.verdict(verdict);
 
     let hmmer = scores.meta.hmmer()?;
     let runs = scores.meta.runs.len();

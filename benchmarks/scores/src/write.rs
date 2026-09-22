@@ -50,6 +50,12 @@ pub fn collect(args: Args<'_>) -> anyhow::Result<Count> {
 
     let columns = runs(&ran)?;
     ensure!(!columns.is_empty(), "no finished runs in {}", args.dir.display());
+    ensure!(
+        columns.len() <= crate::MAX_RUNS,
+        "{} runs, and a pass string holds {}",
+        columns.len(),
+        crate::MAX_RUNS
+    );
 
     let shards = ran.shards();
     ensure!(!shards.is_empty(), "no shards in {}", args.dir.display());
