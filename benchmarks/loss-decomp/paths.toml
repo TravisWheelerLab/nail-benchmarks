@@ -7,10 +7,12 @@
 set      = "../../store/loss-decomp-toy/inputs"
 run      = "../../store/loss-decomp-toy/outputs"
 analysis = "../../store/loss-decomp-toy/analysis"
+figures  = "../../figures/loss-decomp-toy"
 tmp      = "../../store/loss-decomp-toy/tmp"
 
 [real]
 set      = "../../store/loss-decomp-real/inputs"
 run      = "../../store/loss-decomp-real/outputs"
 analysis = "../../store/loss-decomp-real/analysis"
+figures  = "../../figures/loss-decomp-real"
 tmp      = "../../store/loss-decomp-real/tmp"

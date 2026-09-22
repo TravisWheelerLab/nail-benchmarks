@@ -4,7 +4,14 @@
 //! hmmer, then run nail at its defaults, and follow a pair through every
 //! checkpoint it could be dropped at.
 
+mod plot;
 mod run;
+
+/// This crate's directory, fixed at compile time. The plot script hangs off
+/// it; everything a run produces lives in the store.
+pub fn dir() -> std::path::PathBuf {
+    std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+}
 
 use std::path::PathBuf;
 
@@ -32,6 +39,8 @@ enum Command {
     /// Turn the results into a table, and that into numbers.
     #[command(subcommand)]
     Parse(Parse),
+    /// Draw what each arm missed against what it cost.
+    Plot(plot::Args),
 }
 
 #[derive(Subcommand)]
@@ -54,6 +63,9 @@ pub struct Paths {
     pub run: PathBuf,
     /// Where the tables parse works out go.
     pub analysis: PathBuf,
+    /// Where the figures go, which is outside the store: a pdf is read by a
+    /// person rather than by another pipeline.
+    pub figures: PathBuf,
     /// Scratch, and nothing worth keeping.
     pub tmp: PathBuf,
 }
@@ -69,6 +81,7 @@ impl Paths {
             set: file.at(p.set),
             run: file.at(p.run),
             analysis: file.at(p.analysis),
+            figures: file.at(p.figures),
             tmp: file.at(p.tmp),
         })
     }
@@ -87,12 +100,14 @@ impl Command {
             Command::Run(a) => a.label.as_deref(),
             Command::Parse(Parse::Runs(a)) => a.label.as_deref(),
             Command::Parse(Parse::Stages(a)) => a.label.as_deref(),
+            Command::Plot(a) => a.label.as_deref(),
         }
     }
 
     fn run(self, paths: &Paths) -> anyhow::Result<()> {
         match self {
             Command::Run(args) => run::main(args, paths),
+            Command::Plot(args) => plot::main(args, paths),
             Command::Parse(Parse::Runs(mut a)) => {
                 a.run = paths.run.clone();
                 a.set = paths.set.clone();
