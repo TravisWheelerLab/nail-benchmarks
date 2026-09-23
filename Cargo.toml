@@ -9,7 +9,6 @@ members = [
     "benchmarks/long-seqs",
     "benchmarks/pid",
     "benchmarks/recall",
-    "benchmarks/store",
     "benchmarks/util",
 ]
 

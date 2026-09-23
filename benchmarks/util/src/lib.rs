@@ -24,9 +24,7 @@
 //!
 //! Two smaller things are shared for want of a second home: the pair that cut
 //! a query set up, [`split`] by weight, for a batch of jobs, and [`cut`] by
-//! name, for a subset or a file per record. [`time`] is
-//! for the other way a run can be recorded: timed by a shell rather than by a
-//! pipeline, on a machine this workspace never sees.
+//! name, for a subset or a file per record.
 //!
 //! Nothing here decides what counts as a *true* hit. That is the part every
 //! benchmark answers differently, and it stays with the benchmark.
@@ -40,7 +38,6 @@ pub mod search;
 pub mod set;
 pub mod split;
 pub mod tbl;
-pub mod time;
 pub mod tools;
 
 /// A profile of `leng` nodes over a two-symbol alphabet, which is the smallest
