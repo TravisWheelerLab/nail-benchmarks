@@ -720,7 +720,12 @@ rsync -a --delete \
 
 ln -sfn "$ROOT/data" "$SB/data"
 ln -sfn "$ROOT/tools" "$SB/tools"
-ln -sfn "$ROOT/benchmarks/pid/profmark" "$SB/benchmarks/pid/profmark"
+# the split is drawn lazily, so the real tree may not have one, and a
+# sandbox that drew its own would get the link nested inside it
+if [ -d "$ROOT/benchmarks/pid/profmark" ] &&
+   { [ -L "$SB/benchmarks/pid/profmark" ] || [ ! -e "$SB/benchmarks/pid/profmark" ]; }; then
+  ln -sfn "$ROOT/benchmarks/pid/profmark" "$SB/benchmarks/pid/profmark"
+fi
 
 # the workspace names tabl `../tabl`, which from the copy is this
 ln -sfn "$(dirname "$ROOT")/tabl" "$ROOT/tmp-claude/tabl"
