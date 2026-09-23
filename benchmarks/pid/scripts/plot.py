@@ -247,6 +247,22 @@ def axes():
     return fig, ax
 
 
+def read_tbl(path):
+    """Reads a `#`-headed padded table (see `benchmarks/util/src/tbl.rs`)
+    and returns its data rows -- the fields after the run name, as floats --
+    grouped by run name, in the file's order.
+    """
+    rows = {}
+    with open(path) as f:
+        for line in f:
+            line = line.strip()
+            if not line or line.startswith("#"):
+                continue
+            name, *fields = line.split()
+            rows.setdefault(name, []).append([float(v) for v in fields])
+    return rows
+
+
 class Scatter:
     x: [float]
     y: [float]
@@ -297,6 +313,26 @@ class CurveND:
                 self.data[i].append(float(v))
 
 
+def _parse_tokens(tokens: [str]) -> tuple[str, dict[str, float], [str]]:
+    """Parses `tool-param1-param2...` tokens (already split on `-`) into
+    the tool name, the `letter+number` tokens as a dict, and any other
+    tokens.
+    """
+    tool = tokens[0]
+
+    params = {}
+    extra = []
+    for tok in tokens[1:]:
+        m = re.match(r'([a-zA-Z]+)([0-9.]+)', tok)
+        if m:
+            p, v = m.groups()
+            params[p] = float(v)
+        else:
+            extra.append(tok)
+
+    return tool, params, extra
+
+
 class Curve:
     x: [float]
     y: [float]
@@ -306,38 +342,18 @@ class Curve:
     params: dict[str, float]
     extra: [str]
 
-    def __init__(self, line):
-        self.prefix, points = line.split(",", 1)
+    def __init__(self, name: str, points: [tuple[float, float]]):
+        self.prefix = name
 
-        params = self.prefix
-        if self.prefix.endswith(".prf"):
-            params = params.removesuffix(".prf")
+        params = name
+        if name.endswith(".prf"):
+            params = name.removesuffix(".prf")
             self.search_type = "prf"
-        elif self.prefix.endswith(".seq"):
-            params = params.removesuffix(".seq")
+        elif name.endswith(".seq"):
+            params = name.removesuffix(".seq")
             self.search_type = "seq"
 
-        param_tokens = params.split("-")
-
-        self.params = {}
-        self.extra = []
-        self.tool = param_tokens[0]
-
-        for tok in param_tokens[1:]:
-            m = re.match(r'([a-zA-Z]+)([0-9.]+)', tok)
-            if m:
-                p, v = m.groups()
-                self.params[p] = float(v)
-            else:
-                self.extra.append(tok)
-
-        points = [
-            (float(a), float(b))
-            for a, b in re.findall(
-                r'\(\s*(-?\d+(?:\.\d+)?)\s*,\s*(-?\d+(?:\.\d+)?)\s*\)',
-                points
-            )
-        ]
+        self.tool, self.params, self.extra = _parse_tokens(params.split("-"))
 
         self.x, self.y = map(list, zip(*points))
 
@@ -359,29 +375,13 @@ class Point:
     params: dict[str, float]
     extra: [str]
 
-    def __init__(self, line: str):
-        self.prefix, point = line.split(",", 1)
-
-        x, y = map(float, re.match(
-            r'\(\s*([-+]?\d*\.?\d+)\s*,\s*([-+]?\d*\.?\d+)\s*\)', point)
-            .groups()
-        )
+    def __init__(self, name: str, x: float, y: float):
+        self.prefix = name
         self.x = float(x)
         self.y = float(y)
 
-        prefix_tokens = self.prefix.rsplit(".", 1)[0].split('-')
-
-        self.params = {}
-        self.extra = []
-        self.tool = prefix_tokens[0]
-
-        for tok in prefix_tokens[1:]:
-            m = re.match(r'([a-zA-Z]+)([0-9.]+)', tok)
-            if m:
-                p, v = m.groups()
-                self.params[p] = float(v)
-            else:
-                self.extra.append(tok)
+        prefix_tokens = name.rsplit(".", 1)[0].split('-')
+        self.tool, self.params, self.extra = _parse_tokens(prefix_tokens)
 
 
 def partition(l: [], pred):

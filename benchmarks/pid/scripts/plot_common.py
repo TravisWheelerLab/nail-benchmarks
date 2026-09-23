@@ -121,28 +121,3 @@ def scatter_style(label):
     return d
 
 
-def parse_point(line):
-    label, tool, rest = line.split(",", 2)
-    p = rest.strip().lstrip("(").rstrip(")")
-    x, y = p.split(",")
-    x, y = float(x), float(y)
-
-    return label.strip(), x, y
-
-
-def parse_curve(line):
-    print(line)
-    label, tool, rest = line.split(",", 2)
-    print(rest)
-    pairs = rest.strip().split("),")
-    xs = []
-    ys = []
-    for p in pairs:
-        p = p.strip().lstrip("(").rstrip(")")
-        if p:
-            x, y = p.split(",")
-            x, y = float(x), float(y)
-            xs.append(x)
-            ys.append(y)
-
-    return label.strip(), xs, ys

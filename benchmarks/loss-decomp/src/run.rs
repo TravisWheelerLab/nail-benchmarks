@@ -22,11 +22,11 @@ use clap::Parser;
 
 use michi::{Cmd, PipelineBuilder, Progress, Step, Table};
 
-
-use util::search::{Bins, Dirs, SEED_S, Split};
 use util::ledger;
 use util::manifest;
+use util::search::{Bins, Dirs, SEED_S, Split};
 use util::set::Set;
+use util::split::Kind;
 
 /// The column hmmer's run becomes, which every arm is measured against.
 const HMMER: &str = "hmmer";
@@ -177,10 +177,11 @@ pub fn main(args: Args, paths: &crate::Paths) -> anyhow::Result<()> {
         // other's parts
         let split = Split::new(
             &query_hmm,
+            Kind::Hmm,
             dirs.tmp.join("hmmer-query").join(&shard),
             util::search::jobs(args.threads),
         );
-        pl = pl.step(split.step(&[(manifest::SHARD, shard.clone())]));
+        pl = pl.step(split.step("split", &[(manifest::SHARD, shard.clone())]));
 
         for arm in &arms {
             pl = pl.step(
@@ -203,7 +204,18 @@ pub fn main(args: Args, paths: &crate::Paths) -> anyhow::Result<()> {
             );
         }
 
-        let hmmer = util::search::hmmer(&bins.hmmsearch, &split, &dirs, HMMER, &shard, &target, &[]);
+        let hmmer = util::search::hmmer(
+            &bins.hmmsearch,
+            &split,
+            &dirs,
+            HMMER,
+            "hmmer",
+            &shard,
+            &target,
+            util::search::EVALUE,
+            true,
+            &[],
+        );
         pl = pl.step(hmmer.search).step(hmmer.cat);
 
         for arm in &arms {

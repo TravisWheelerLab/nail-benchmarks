@@ -93,6 +93,27 @@ impl Dirs {
             .path(self.tmp.join("hmmer"))
     }
 
+    /// Everything a run leaves behind, cleared at the front of the pipeline
+    /// rather than before it.
+    ///
+    /// A stale table from an earlier run reads as a run that simply found
+    /// less, and mmseqs refuses to overwrite an existing alignment db. Doing
+    /// it as a step is what keeps `--dry-run` from touching the disk.
+    pub fn clean(&self) -> Step {
+        Step::serial([
+            Cmd::new("rm")
+                .name("clean")
+                .flag("-rf")
+                .path(&self.results)
+                .path(&self.tmp),
+            Cmd::new("mkdir")
+                .name("dirs")
+                .flag("-p")
+                .path(&self.results),
+        ])
+        .name("clean")
+    }
+
     pub fn table(&self, name: &str, shard: &str) -> PathBuf {
         manifest::table_path(&self.results, name, shard)
     }
@@ -101,6 +122,65 @@ impl Dirs {
     pub fn seeds(&self, seeding: &str, shard: &str) -> PathBuf {
         manifest::seeds_path(&self.results, seeding, shard)
     }
+}
+
+/// What a step is called: the run, and the shard where there is one.
+fn step_name(name: &str, shard: &str) -> String {
+    match shard.is_empty() {
+        true => name.to_string(),
+        false => format!("{name}.{shard}"),
+    }
+}
+
+/// Tag one command with what the ledger reads back, and wrap it as a step.
+///
+/// The fields every search carries: the run it belongs to and the tool that
+/// produced it. `extra` is everything else the ledger reads back -- which
+/// shard, which mode, what a sweep moved.
+pub fn tag(cmd: Cmd, name: &str, tool: &str, extra: &[(&str, String)]) -> Cmd {
+    extra.iter().fold(
+        cmd.field(manifest::NAME, name).field(manifest::TOOL, tool),
+        |cmd, (key, value)| cmd.field(*key, value),
+    )
+}
+
+/// nail's search, as every benchmark here runs it.
+///
+/// `args` is what this benchmark is moving: a sensitivity, an `(A, B)` cell,
+/// a seeding to replay. `flags` is the same for the ones that take no value.
+/// `fields` is what the ledger reads back beside the run's name.
+#[allow(clippy::too_many_arguments)]
+pub fn nail(
+    bin: &Path,
+    mmseqs: &Path,
+    query: &Path,
+    target: &Path,
+    out: &Path,
+    tmp: &Path,
+    threads: usize,
+    evalue: &str,
+    args: &[(&str, String)],
+    flags: &[&str],
+    name: &str,
+    fields: &[(&str, String)],
+) -> Step {
+    let cmd = Cmd::new(bin)
+        .sub("search")
+        // nail looks for mmseqs at startup even where it will never call it,
+        // and nothing here is on PATH
+        .arg("--mmseqs-path", mmseqs)
+        .arg("-t", threads)
+        .arg("--tmp-dir", tmp)
+        .flag("--allow-overwrite")
+        .arg("-E", evalue)
+        .arg("--tbl-out", out);
+
+    let cmd = args
+        .iter()
+        .fold(cmd, |cmd, (key, value)| cmd.arg(*key, value));
+    let cmd = flags.iter().fold(cmd, |cmd, flag| cmd.flag(*flag));
+
+    Step::serial([tag(cmd.path(query).path(target), name, "nail", fields)]).name(name)
 }
 
 /// There's no shell to expand a glob, so the parts get named one by one.
@@ -119,17 +199,24 @@ fn cat(parts: impl IntoIterator<Item = PathBuf>, into: PathBuf) -> Cmd {
 /// depend on the target, and a pipeline that searches many shards splits once.
 pub struct Split {
     query: PathBuf,
+    kind: Kind,
     dir: PathBuf,
     parts: Vec<PathBuf>,
 }
 
 impl Split {
-    pub fn new(query: impl Into<PathBuf>, dir: impl Into<PathBuf>, jobs: usize) -> Split {
+    pub fn new(
+        query: impl Into<PathBuf>,
+        kind: Kind,
+        dir: impl Into<PathBuf>,
+        jobs: usize,
+    ) -> Split {
         let dir = dir.into();
-        let ext = Kind::Hmm.extension();
+        let ext = kind.extension();
 
         Split {
             query: query.into(),
+            kind,
             parts: (0..jobs).map(|i| dir.join(format!("{i}.{ext}"))).collect(),
             dir,
         }
@@ -138,14 +225,20 @@ impl Split {
     /// Rust in place of a command, so it is a closure step. Whatever a previous
     /// run left in there would be searched as if it belonged.
     ///
-    /// `extra` is whatever tells one split from another, for a pipeline that
-    /// cuts up more than one query set.
-    pub fn step(&self, extra: &[(&str, String)]) -> Step {
-        let (query, dir, jobs) = (self.query.clone(), self.dir.clone(), self.parts.len());
+    /// `name` is the step's, which is what a ledger row falls back to when a
+    /// command carries no run name. `extra` is whatever tells one split from
+    /// another, for a pipeline that cuts up more than one query set.
+    pub fn step(&self, name: &str, extra: &[(&str, String)]) -> Step {
+        let (query, kind, dir, jobs) = (
+            self.query.clone(),
+            self.kind,
+            self.dir.clone(),
+            self.parts.len(),
+        );
 
         let closure = Closure::new("split", move || {
             std::fs::remove_dir_all(&dir).ok();
-            let written = split::write_splits(&query, Kind::Hmm, jobs, &dir)?;
+            let written = split::write_splits(&query, kind, jobs, &dir)?;
 
             // empty bins are skipped, so a query with fewer models than parts
             // comes back short and the batch would be pointed at files that
@@ -165,7 +258,7 @@ impl Split {
             .iter()
             .fold(closure, |closure, (key, value)| closure.field(*key, value));
 
-        Step::from_closures([closure]).name("split")
+        Step::from_closures([closure]).name(name)
     }
 }
 
@@ -206,25 +299,31 @@ pub struct Hmmer {
 /// `extra` is whatever else tells this run apart from the pipeline's others --
 /// a repetition index, a swept setting. Without it a pipeline that runs hmmer
 /// more than once against the same shard writes rows it cannot tell apart.
+#[allow(clippy::too_many_arguments)]
 pub fn hmmer(
-    hmmsearch: &Path,
+    program: &Path,
     split: &Split,
     dirs: &Dirs,
     name: &str,
+    tool: &str,
     shard_name: &str,
     target: &Path,
+    evalue: &str,
+    dom: bool,
     extra: &[(&str, String)],
 ) -> Hmmer {
     let parts = &split.parts;
-    let scratch = dirs.tmp.join("hmmer");
+
+    // beside the parts rather than in a directory of its own, so two runs
+    // splitting two different queries do not write over each other
+    let scratch = split.dir.clone();
 
     let fields = |cmd: Cmd| {
-        extra.iter().fold(
-            cmd.field(manifest::NAME, name)
-                .field(manifest::TOOL, "hmmer")
-                .field(manifest::SHARD, shard_name),
-            |cmd, (key, value)| cmd.field(*key, value),
-        )
+        let cmd = tag(cmd, name, tool, extra);
+        match shard_name.is_empty() {
+            true => cmd,
+            false => cmd.field(manifest::SHARD, shard_name),
+        }
     };
 
     Hmmer {
@@ -232,39 +331,42 @@ pub fn hmmer(
             parts.len(),
             parts.iter().enumerate().map(|(i, part)| {
                 fields(
-                    Cmd::new(hmmsearch)
+                    Cmd::new(program)
                         .name(i.to_string())
                         .arg("--cpu", HMMER_CPU)
                         .arg("--tblout", scratch.join(format!("{i}.tbl")))
                         .arg("--domtblout", scratch.join(format!("{i}.domtbl")))
-                        .arg("-E", EVALUE)
+                        .arg("-E", evalue)
                         .path(part)
                         .path(target),
                 )
             }),
         )
-        .name(format!("{name}.{shard_name}"))
+        .name(step_name(name, shard_name))
         // per command, not per step, so this asks for HMMER_CPU x parts, which
         // is --threads again. a machine with a smaller pool than that won't
         // fail, it will just run fewer of the parts at once
         .cores(HMMER_CPU),
-        cat: Step::serial([
-            fields(
+        cat: Step::serial(
+            [fields(
                 cat(
                     (0..parts.len()).map(|i| scratch.join(format!("{i}.tbl"))),
                     manifest::table_path(&dirs.results, name, shard_name),
                 )
                 .name("tbl"),
-            ),
-            fields(
-                cat(
-                    (0..parts.len()).map(|i| scratch.join(format!("{i}.domtbl"))),
-                    manifest::dom_path(&dirs.results, name, shard_name),
+            )]
+            .into_iter()
+            .chain(dom.then(|| {
+                fields(
+                    cat(
+                        (0..parts.len()).map(|i| scratch.join(format!("{i}.domtbl"))),
+                        manifest::dom_path(&dirs.results, name, shard_name),
+                    )
+                    .name("domtbl"),
                 )
-                .name("domtbl"),
-            ),
-        ])
-        .name(format!("cat.{name}.{shard_name}")),
+            })),
+        )
+        .name(format!("cat.{}", step_name(name, shard_name))),
     }
 }
 
@@ -386,6 +488,8 @@ pub struct Mmseqs<'a> {
     /// `--max-seqs`. mmseqs' own default of 300 otherwise, which loses hits
     /// nail's seeding keeps.
     pub max_seqs: Option<usize>,
+    /// `-e`. A benchmark drawing an ROC curve wants every hit reported.
+    pub evalue: &'a str,
 }
 
 /// The two commands one mmseqs run takes.
@@ -414,7 +518,7 @@ impl Mmseqs<'_> {
 
         MmseqsCmds {
             search: search
-                .arg("-e", EVALUE)
+                .arg("-e", self.evalue)
                 .path(self.query_db)
                 .path(self.target_db)
                 .path(&self.aln_db)

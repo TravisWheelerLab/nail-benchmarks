@@ -5,16 +5,17 @@
 //! store like every other benchmark's. One label fills in every path, so a
 //! subcommand never names a directory.
 
-mod inputs;
 mod parse;
 mod plot;
 mod run;
-mod search;
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
+use anyhow::Context;
 use clap::{Parser, Subcommand};
+
 use serde::Deserialize;
+use util::set::{Set, shape};
 
 #[derive(Parser)]
 #[command(name = "pid", about = "percent-identity benchmark")]
@@ -82,7 +83,6 @@ impl Command {
             Command::Parse(parse::Cmd::Recall(a)) => a.label.as_deref(),
             Command::Parse(parse::Cmd::Cells(a)) => a.label.as_deref(),
             Command::Parse(parse::Cmd::Score(a)) => a.label.as_deref(),
-            Command::Parse(parse::Cmd::Table(a)) => a.label.as_deref(),
         }
     }
 }
@@ -103,5 +103,44 @@ fn main() -> anyhow::Result<()> {
         Command::Run(args) => run::main(args, &paths),
         Command::Parse(cmd) => parse::main(cmd, &paths),
         Command::Plot(args) => plot::main(args, &paths),
+    }
+}
+
+/// One profmark unit's files, which is what every subcommand opens.
+pub struct Inputs {
+    pub query_hmm: PathBuf,
+    pub query_fa: PathBuf,
+    pub query_sto: PathBuf,
+    /// One aligned fasta per family. psiblast takes an alignment at a time and
+    /// will not read stockholm.
+    pub afa: PathBuf,
+    pub target_fa: PathBuf,
+    /// Which pair is true, and at what identity.
+    pub truth: PathBuf,
+}
+
+impl Inputs {
+    pub fn open(set_dir: &Path) -> anyhow::Result<Inputs> {
+        let set = Set::load_as(set_dir, &shape::PROFMARK)?;
+        let unit = set
+            .units()
+            .next()
+            .with_context(|| format!("{} names no units", set_dir.display()))?;
+
+        let query_hmm = unit.query_hmm()?;
+
+        Ok(Inputs {
+            query_fa: unit.query_fa()?,
+            query_sto: unit.query_sto()?,
+            // beside the profiles rather than in the manifest: the recipe
+            // writes it and no search asks for it
+            afa: query_hmm
+                .parent()
+                .unwrap_or_else(|| Path::new("."))
+                .join("afa"),
+            target_fa: unit.target()?,
+            truth: set_dir.join(unit.need("truth")?),
+            query_hmm,
+        })
     }
 }

@@ -8,17 +8,30 @@
 //! blast is deliberately left at its default E-value: raising it to match the
 //! others makes it dramatically slower for no extra recall.
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use anyhow::{Context, ensure};
 use clap::Parser;
 
 use michi::{Cmd, OnError, Output, PipelineBuilder, Progress, Step, Table};
 use util::ledger;
-use util::manifest;
 use util::split::Kind;
 
-use crate::search::{self, Bins, Dirs, MODE, PRF, SEQ, Split};
+use util::search::{Dirs, Mmseqs, Split, hmmer, jobs, nail, tag};
+
+/// The `mode` field, and its two values: a profile searched a target, or a
+/// sequence did.
+pub const MODE: &str = "mode";
+pub const PRF: &str = "prf";
+pub const SEQ: &str = "seq";
+
+/// Every tool reports down to here. A benchmark drawing an ROC curve wants
+/// every hit, not the ones that clear a threshold.
+const EVALUE: &str = "1e9";
+
+/// How many targets the prefilters promote. mmseqs' own default is 300, which
+/// loses hits nail's seeding keeps.
+const MAX_SEQS: usize = 2000;
 
 #[derive(Parser, Debug)]
 pub struct Args {
@@ -56,9 +69,9 @@ pub struct Args {
 
 pub fn main(args: Args, paths: &crate::Paths) -> anyhow::Result<()> {
     ensure!(
-        args.threads.is_multiple_of(search::HMMER_CPU),
+        args.threads.is_multiple_of(util::search::HMMER_CPU),
         "--threads needs to be a multiple of {} (for hmmer)",
-        search::HMMER_CPU
+        util::search::HMMER_CPU
     );
     ensure!(!args.nail_s.is_empty(), "--nail-s needs at least one value");
     ensure!(
@@ -66,12 +79,23 @@ pub fn main(args: Args, paths: &crate::Paths) -> anyhow::Result<()> {
         "--mmseqs-s needs at least one value"
     );
 
-    let bins = Bins::find()?;
+    // resolved before anything runs: a sweep that dies two tools in has spent
+    // its wall time on numbers that are no longer comparable to the ones it
+    // did not reach
+    let nail_bin = util::tools::nail()?;
+    let mmseqs = util::tools::mmseqs()?;
+    let hmmsearch = util::tools::hmmsearch()?;
+    let phmmer = util::tools::phmmer()?;
+    let blastp_bin = util::tools::blastp()?;
+    let psiblast_bin = util::tools::psiblast()?;
+    let makeblastdb = util::tools::makeblastdb()?;
+    let lastal_bin = util::tools::lastal()?;
+    let lastdb = util::tools::lastdb()?;
+    let diamond_bin = util::tools::diamond()?;
 
     // Set::load_as is the check: it refuses a set that is not there and one
     // that is the wrong shape, before any tool runs
-    let inp = crate::inputs::Inputs::open(&paths.set)?;
-
+    let inp = crate::Inputs::open(&paths.set)?;
 
     let mut dirs = Dirs::new(&paths.run, &paths.tmp);
     if let Some(tmp) = args.tmp {
@@ -106,38 +130,38 @@ pub fn main(args: Args, paths: &crate::Paths) -> anyhow::Result<()> {
         )
         .step(
             Step::serial([
-                Cmd::new(&bins.mmseqs)
+                Cmd::new(&mmseqs)
                     .name("createdb-target")
                     .sub("createdb")
                     .path(&target_fa)
                     .path(&target_db),
-                Cmd::new(&bins.mmseqs)
+                Cmd::new(&mmseqs)
                     .name("createdb-query-seq")
                     .sub("createdb")
                     .path(&query_fa)
                     .path(&query_seq_db),
-                Cmd::new(&bins.mmseqs)
+                Cmd::new(&mmseqs)
                     .name("convertmsa")
                     .sub("convertmsa")
                     .path(&inp.query_sto)
                     .path(&msa_db)
                     .arg("--identifier-field", 0),
-                Cmd::new(&bins.mmseqs)
+                Cmd::new(&mmseqs)
                     .name("msa2profile")
                     .sub("msa2profile")
                     .path(&msa_db)
                     .path(&query_prf_db)
                     .arg("--match-mode", 1),
-                Cmd::new(&bins.makeblastdb)
+                Cmd::new(&makeblastdb)
                     .name("makeblastdb")
                     .arg("-in", &target_fa)
                     .arg("-dbtype", "prot")
                     .arg("-out", &blast_db),
-                Cmd::new(&bins.lastdb)
+                Cmd::new(&lastdb)
                     .name("lastdb")
                     .arg("-p", &last_db)
                     .path(&target_fa),
-                Cmd::new(&bins.diamond)
+                Cmd::new(&diamond_bin)
                     .name("diamond-makedb")
                     .sub("makedb")
                     .arg("--in", &target_fa)
@@ -150,27 +174,25 @@ pub fn main(args: Args, paths: &crate::Paths) -> anyhow::Result<()> {
 
     for &s in &args.nail_s {
         for (mode, query) in [(PRF, &query_hmm), (SEQ, &query_fa)] {
-            let name = format!("nail-s{s:.1}-ms{}.{mode}", search::MAX_SEQS);
+            let name = format!("nail-s{s:.1}-ms{}.{mode}", MAX_SEQS);
 
-            pl = pl.step(
-                Step::serial([Cmd::new(&bins.nail)
-                    .sub("search")
-                    .arg("--mmseqs-path", &bins.mmseqs)
-                    .arg("-t", args.threads)
-                    .arg("--tmp-dir", dirs.tmp.join(&name))
-                    .flag("--allow-overwrite")
-                    .arg("--mmseqs-s", format!("{s:.1}"))
-                    .arg("--mmseqs-max-seqs", search::MAX_SEQS)
-                    .arg("-E", search::EVALUE)
-                    .arg("--tbl-out", dirs.table(&name))
-                    .path(query)
-                    .path(&target_fa)
-                    .field(manifest::NAME, &name)
-                    .field(manifest::TOOL, "nail")
-                    .field(MODE, mode)
-                    .field("s", format!("{s:.1}"))])
-                .name(name),
-            );
+            pl = pl.step(nail(
+                &nail_bin,
+                &mmseqs,
+                query,
+                &target_fa,
+                &dirs.table(&name, ""),
+                &dirs.tmp.join(&name),
+                args.threads,
+                EVALUE,
+                &[
+                    ("--mmseqs-s", format!("{s:.1}")),
+                    ("--mmseqs-max-seqs", MAX_SEQS.to_string()),
+                ],
+                &[],
+                &name,
+                &[(MODE, mode.to_string()), ("s", format!("{s:.1}"))],
+            ));
         }
     }
 
@@ -180,32 +202,32 @@ pub fn main(args: Args, paths: &crate::Paths) -> anyhow::Result<()> {
     // two programs rather than one program with a flag.
 
     for (mode, tool, program, query, kind) in [
-        (PRF, "hmmer", &bins.hmmsearch, &query_hmm, Kind::Hmm),
-        (SEQ, "phmmer", &bins.phmmer, &query_fa, Kind::Fasta),
+        (PRF, "hmmer", &hmmsearch, &query_hmm, Kind::Hmm),
+        (SEQ, "phmmer", &phmmer, &query_fa, Kind::Fasta),
     ] {
         let name = format!("hmmer.{mode}");
         let split = Split::new(
             query,
             kind,
             dirs.tmp.join(format!("{name}-parts")),
-            search::jobs(args.threads),
+            jobs(args.threads),
         );
 
-        let hmmer = search::hmmer(
+        let hmmer = hmmer(
             program,
             &split,
             &dirs,
-            search::Run {
-                name: &name,
-                tool,
-                mode,
-            },
+            &name,
+            tool,
+            "",
             &target_fa,
-            args.threads,
+            EVALUE,
+            false,
+            &[(MODE, mode.to_string())],
         );
 
         pl = pl
-            .step(split.step(&name))
+            .step(split.step(&name, &[]))
             .step(hmmer.search)
             .step(hmmer.cat);
     }
@@ -214,27 +236,34 @@ pub fn main(args: Args, paths: &crate::Paths) -> anyhow::Result<()> {
 
     for &s in &args.mmseqs_s {
         for (mode, query_db) in [(PRF, &query_prf_db), (SEQ, &query_seq_db)] {
-            let name = format!("mmseqs-s{s:.1}-ms{}.{mode}", search::MAX_SEQS);
+            let name = format!("mmseqs-s{s:.1}-ms{}.{mode}", MAX_SEQS);
 
-            let cmds = search::Mmseqs {
-                bin: &bins.mmseqs,
+            let scratch = dirs.tmp.join(&name);
+
+            let cmds = Mmseqs {
+                bin: &mmseqs,
                 query_db,
                 target_db: &target_db,
-                scratch: dirs.tmp.join(&name),
-                out: dirs.table(&name),
+                aln_db: scratch.join("alnDB"),
+                work: scratch.join("work"),
+                out: dirs.table(&name, ""),
                 threads: args.threads,
-                s: format!("{s:.1}"),
+                s: Some(format!("{s:.1}")),
+                max_seqs: Some(MAX_SEQS),
+                evalue: EVALUE,
             }
             .cmds();
 
-            let searched = cmds.search.map(|cmd| {
-                cmd.field(manifest::NAME, &name)
-                    .field(manifest::TOOL, "mmseqs")
-                    .field(MODE, mode)
-                    .field("s", format!("{s:.1}"))
-            });
+            let prep = [
+                Cmd::new("rm").name("clean").flag("-rf").path(&scratch),
+                Cmd::new("mkdir").name("dirs").flag("-p").path(&scratch),
+            ];
+            let search = [cmds.search, cmds.convert];
 
-            pl = pl.step(Step::serial(cmds.prep.into_iter().chain(searched)).name(name));
+            let fields = [(MODE, mode.to_string()), ("s", format!("{s:.1}"))];
+            let searched = search.map(|cmd| tag(cmd, &name, "mmseqs", &fields));
+
+            pl = pl.step(Step::serial(prep.into_iter().chain(searched)).name(name));
         }
     }
 
@@ -242,43 +271,34 @@ pub fn main(args: Args, paths: &crate::Paths) -> anyhow::Result<()> {
 
     // sequence mode: one blastp call. deliberately no -evalue: matching the
     // other tools' 1e9 makes blast dramatically slower for no extra recall
-    pl = pl.step(
-        Step::serial([Cmd::new(&bins.blastp)
-            .arg("-query", &query_fa)
-            .arg("-db", &blast_db)
-            .arg("-out", dirs.table("blast.seq"))
-            .arg("-outfmt", 6)
-            .arg("-num_threads", args.threads)
-            .field(manifest::NAME, "blast.seq")
-            .field(manifest::TOOL, "blast")
-            .field(MODE, SEQ)])
-        .name("blast.seq"),
-    );
+    pl = pl.step(blastp(
+        &blastp_bin,
+        &query_fa,
+        &blast_db,
+        &dirs.table("blast.seq", ""),
+        args.threads,
+    ));
 
     // profile mode: psiblast takes one alignment at a time, so a run is one
     // invocation per family, output collected into a single table
-    let blast_prf_tbl = dirs.table("blast.prf");
+    let blast_prf_tbl = dirs.table("blast.prf", "");
+
+    let mut afa: Vec<PathBuf> = std::fs::read_dir(&inp.afa)
+        .with_context(|| format!("failed to read {}", inp.afa.display()))?
+        .filter_map(|e| e.ok().map(|e| e.path()))
+        .filter(|p| p.extension().is_some_and(|x| x == "afa"))
+        .collect();
+
+    // sorted so two runs search the families in the same order, which is what
+    // makes their wall times comparable
+    afa.sort();
+
     pl = pl.step(
-        Step::serial(inp.afa_files()?.iter().enumerate().map(|(i, msa)| {
-            let cmd = Cmd::new(&bins.psiblast)
-                .name(
-                    msa.file_stem()
-                        .and_then(|s| s.to_str())
-                        .unwrap_or("family")
-                        .to_string(),
-                )
-                .arg("-in_msa", msa)
-                .arg("-db", &blast_db)
-                .arg("-outfmt", 6)
-                .arg("-num_threads", args.threads)
-                .arg("-comp_based_stats", 1)
-                .arg("-num_iterations", 1)
-                // one family's search is a fraction of the run, not a separate
-                // run of its own, so its wall time is summed into blast.prf's
-                // rather than reported as its own name
-                .field(manifest::NAME, "blast.prf")
-                .field(manifest::TOOL, "blast")
-                .field(MODE, PRF);
+        Step::serial(afa.iter().enumerate().map(|(i, msa)| {
+            // one family's search is a fraction of the run rather than a run
+            // of its own, so every command carries blast.prf's name and their
+            // wall times sum into it
+            let cmd = psiblast(&psiblast_bin, msa, &blast_db, args.threads);
 
             // the first invocation truncates whatever an earlier run left
             // behind; the rest append to it
@@ -293,42 +313,26 @@ pub fn main(args: Args, paths: &crate::Paths) -> anyhow::Result<()> {
 
     // ---------------------------------------------------------------- last
 
-    pl = pl.step(
-        Step::serial([Cmd::new(&bins.lastal)
-            .path(&last_db)
-            .path(&query_fa)
-            .arg("-f", "BlastTab")
-            .arg("-P", args.threads)
-            .arg("-E", search::EVALUE)
-            .stdout_to(dirs.table("last.seq"))
-            .field(manifest::NAME, "last.seq")
-            .field(manifest::TOOL, "last")
-            .field(MODE, SEQ)])
-        .name("last.seq"),
-    );
+    pl = pl.step(lastal(
+        &lastal_bin,
+        &last_db,
+        &query_fa,
+        &dirs.table("last.seq", ""),
+        args.threads,
+    ));
 
     // ------------------------------------------------------------- diamond
 
     for preset in ["default", "ultra-sensitive"] {
         let name = format!("diamond-{preset}.seq");
-        let mut cmd = Cmd::new(&bins.diamond)
-            .sub("blastp")
-            .arg("--query", &query_fa)
-            .arg("--db", &diamond_db)
-            .arg("--out", dirs.table(&name))
-            .arg("--outfmt", 6)
-            .arg("--threads", args.threads)
-            .arg("--evalue", search::EVALUE)
-            .field(manifest::NAME, &name)
-            .field(manifest::TOOL, "diamond")
-            .field(MODE, SEQ)
-            .field("preset", preset);
-
-        if preset == "ultra-sensitive" {
-            cmd = cmd.flag("--ultra-sensitive");
-        }
-
-        pl = pl.step(Step::serial([cmd]).name(name));
+        pl = pl.step(diamond(
+            &diamond_bin,
+            &query_fa,
+            &diamond_db,
+            &dirs.table(&name, ""),
+            args.threads,
+            preset,
+        ));
     }
 
     let pipeline = pl
@@ -348,4 +352,74 @@ pub fn main(args: Args, paths: &crate::Paths) -> anyhow::Result<()> {
     ledger::clear(&dirs.root);
     pipeline.run()?;
     ledger::record(&dirs.root)
+}
+
+/// blastp over sequences: one call, its own table.
+fn blastp(bin: &Path, query: &Path, db: &Path, out: &Path, threads: usize) -> Step {
+    // deliberately no -evalue: matching the other tools' 1e9 makes blast
+    // dramatically slower for no extra recall
+    let cmd = Cmd::new(bin)
+        .arg("-query", query)
+        .arg("-db", db)
+        .arg("-out", out)
+        .arg("-outfmt", 6)
+        .arg("-num_threads", threads);
+
+    Step::serial([tag(cmd, "blast.seq", "blast", &[(MODE, SEQ.to_string())])]).name("blast.seq")
+}
+
+/// psiblast over one family's alignment. It takes an alignment at a time, so
+/// a run is one of these per family and the caller collects them.
+fn psiblast(bin: &Path, msa: &Path, db: &Path, threads: usize) -> Cmd {
+    let cmd = Cmd::new(bin)
+        .name(
+            msa.file_stem()
+                .and_then(|s| s.to_str())
+                .unwrap_or("family")
+                .to_string(),
+        )
+        .arg("-in_msa", msa)
+        .arg("-db", db)
+        .arg("-outfmt", 6)
+        .arg("-num_threads", threads)
+        .arg("-comp_based_stats", 1)
+        .arg("-num_iterations", 1);
+
+    // one family's search is a fraction of the run rather than a run of its
+    // own, so every command carries blast.prf's name and their wall times sum
+    tag(cmd, "blast.prf", "blast", &[(MODE, PRF.to_string())])
+}
+
+/// lastal over sequences, writing blast's tabular format to stdout.
+fn lastal(bin: &Path, db: &Path, query: &Path, out: &Path, threads: usize) -> Step {
+    let cmd = Cmd::new(bin)
+        .path(db)
+        .path(query)
+        .arg("-f", "BlastTab")
+        .arg("-P", threads)
+        .arg("-E", EVALUE)
+        .stdout_to(out);
+
+    Step::serial([tag(cmd, "last.seq", "last", &[(MODE, SEQ.to_string())])]).name("last.seq")
+}
+
+/// diamond blastp at one of its presets.
+fn diamond(bin: &Path, query: &Path, db: &Path, out: &Path, threads: usize, preset: &str) -> Step {
+    let name = format!("diamond-{preset}.seq");
+
+    let mut cmd = Cmd::new(bin)
+        .sub("blastp")
+        .arg("--query", query)
+        .arg("--db", db)
+        .arg("--out", out)
+        .arg("--outfmt", 6)
+        .arg("--threads", threads)
+        .arg("--evalue", EVALUE);
+
+    if preset == "ultra-sensitive" {
+        cmd = cmd.flag("--ultra-sensitive");
+    }
+
+    let fields = [(MODE, SEQ.to_string()), ("preset", preset.to_string())];
+    Step::serial([tag(cmd, &name, "diamond", &fields)]).name(name)
 }

@@ -2,7 +2,9 @@
 import argparse
 from pathlib import Path
 
-from plot import axes, Curve, COLORS, TOOL_COLORS, prefix_label, annotate, theta
+from plot import (
+    axes, read_tbl, Curve, COLORS, TOOL_COLORS, prefix_label, annotate, theta
+)
 
 import matplotlib.pyplot as plt
 import numpy as np
@@ -66,17 +68,22 @@ def main(args):
     curves = []
 
     with open(args.pid) as f:
-        lines = list(
-            filter(lambda line: not line.startswith("#"), f.readlines()))
+        fpr = float(f.readline().split()[-1])
 
-        fpr = float(lines[0].split()[-1])
-        bin_cnt = Curve(lines[1])
+    rows = read_tbl(args.pid)
 
-        for line in lines[2:]:
-            curve = Curve(line)
-            if curve.prefix in PLOTTED:
-                curve.auc = np.trapezoid(curve.y, curve.x)
-                curves.append(curve)
+    # `n` is the size of a run's identity bin, and it is the same for every
+    # run, so any one of them gives the counts the `bins` line used to
+    bin_cnt = None
+
+    for name, recs in rows.items():
+        if bin_cnt is None:
+            bin_cnt = Curve(name, [(pid, n) for pid, n, _recall in recs])
+
+        if name in PLOTTED:
+            curve = Curve(name, [(pid, recall) for pid, _n, recall in recs])
+            curve.auc = np.trapezoid(curve.y, curve.x)
+            curves.append(curve)
 
     curves.sort(key=lambda c: c.auc, reverse=True)
 

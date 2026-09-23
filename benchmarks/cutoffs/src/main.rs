@@ -400,7 +400,6 @@ pub struct AllArgs {
     #[arg(long, value_enum, default_value_t = Strategy::Fanout)]
     pub strategy: Strategy,
 
-
     #[arg(short, long, default_value_t = 4)]
     pub threads: usize,
 
@@ -414,7 +413,10 @@ pub struct AllArgs {
 pub const SHAPE: &util::set::Shape = &util::set::shape::REVERSED;
 
 #[derive(Parser)]
-#[command(name = "cutoffs", about = "per-family score cutoffs from reversed decoys")]
+#[command(
+    name = "cutoffs",
+    about = "per-family score cutoffs from reversed decoys"
+)]
 struct Cli {
     #[command(subcommand)]
     command: Cmd,
@@ -566,6 +568,7 @@ fn recruit(args: RecruitArgs, paths: &Paths) -> anyhow::Result<()> {
                         threads: args.threads,
                         s: Some(RECRUIT_S.to_string()),
                         max_seqs: Some(RECRUIT_MAX_SEQS),
+                        evalue: util::search::EVALUE,
                     }
                     .cmds();
 
@@ -803,8 +806,8 @@ fn accession(name: &str) -> Option<String> {
 fn recruits_by_family(dir: &Path) -> anyhow::Result<HashMap<String, HashSet<String>>> {
     let mut out: HashMap<String, HashSet<String>> = HashMap::new();
 
-    for entry in std::fs::read_dir(dir)
-        .with_context(|| format!("failed to read {}", dir.display()))?
+    for entry in
+        std::fs::read_dir(dir).with_context(|| format!("failed to read {}", dir.display()))?
     {
         let path = entry?.path();
         if path.extension().is_none_or(|x| x != "fa") {
@@ -844,8 +847,7 @@ fn union_fasta(from: &Path, to: &Path) -> anyhow::Result<usize> {
     let mut seen: HashSet<Vec<u8>> = HashSet::new();
     let mut out = std::io::BufWriter::with_capacity(
         1 << 20,
-        std::fs::File::create(to)
-            .with_context(|| format!("failed to create {}", to.display()))?,
+        std::fs::File::create(to).with_context(|| format!("failed to create {}", to.display()))?,
     );
 
     let mut files: Vec<PathBuf> = std::fs::read_dir(from)?
@@ -926,11 +928,12 @@ fn reject_union(
     // same query, so the cut happens once.
     let split = util::search::Split::new(
         &query_hmm,
+        util::split::Kind::Hmm,
         tmp.join("hmmer-query"),
         util::search::jobs(threads),
     );
 
-    let mut pl = PipelineBuilder::new().step(split.step(&[]));
+    let mut pl = PipelineBuilder::new().step(split.step("split", &[]));
 
     for (form, target) in &targets {
         let scratch = tmp.join(form);
@@ -988,6 +991,7 @@ fn reject_union(
             threads,
             s: Some(DECOY_S.to_string()),
             max_seqs: Some(DECOY_MAX_SEQS),
+            evalue: util::search::EVALUE,
         }
         .cmds();
 
@@ -1014,8 +1018,11 @@ fn reject_union(
             &split,
             &util::search::Dirs::new(&stage.root, &scratch),
             &run_name(HMMER, form),
+            "hmmer",
             ALL,
             target,
+            util::search::EVALUE,
+            true,
             &[(FORM, form.to_string())],
         );
 
@@ -1178,11 +1185,7 @@ fn reject(args: RejectArgs, paths: &Paths) -> anyhow::Result<()> {
         // the family is the shard and the direction is the run, so a table is
         // named the way every other pipeline names one
         let run_of = |tool: &'static str, family: &str| {
-            (
-                run_name(tool, direction),
-                tool,
-                family.to_string(),
-            )
+            (run_name(tool, direction), tool, family.to_string())
         };
 
         pl = pl
@@ -1243,6 +1246,7 @@ fn reject(args: RejectArgs, paths: &Paths) -> anyhow::Result<()> {
                             threads: 1,
                             s: Some(DECOY_S.to_string()),
                             max_seqs: Some(DECOY_MAX_SEQS),
+                            evalue: util::search::EVALUE,
                         }
                         .cmds()
                         .search
@@ -1269,6 +1273,7 @@ fn reject(args: RejectArgs, paths: &Paths) -> anyhow::Result<()> {
                             threads: 1,
                             s: Some(DECOY_S.to_string()),
                             max_seqs: Some(DECOY_MAX_SEQS),
+                            evalue: util::search::EVALUE,
                         }
                         .cmds()
                         .convert
@@ -1499,7 +1504,12 @@ fn learn(args: LearnArgs, paths: &Paths) -> anyhow::Result<()> {
                     ),
                     None => (
                         decoy_scores::<NailTable>(&results, NAIL, family, args.reverse_e_cutoff)?,
-                        decoy_scores::<BlastTable>(&results, MMSEQS, family, args.reverse_e_cutoff)?,
+                        decoy_scores::<BlastTable>(
+                            &results,
+                            MMSEQS,
+                            family,
+                            args.reverse_e_cutoff,
+                        )?,
                         decoy_scores::<HmmerTable>(&results, HMMER, family, args.reverse_e_cutoff)?,
                     ),
                 };
@@ -1630,17 +1640,23 @@ where
 // --------------------------------------------------------------------- all
 
 fn all(args: AllArgs, paths: &Paths) -> anyhow::Result<()> {
-    recruit(RecruitArgs {
-        place: args.place.clone(),
-        threads: args.threads,
-        dry_run: false,
-    }, paths)?;
+    recruit(
+        RecruitArgs {
+            place: args.place.clone(),
+            threads: args.threads,
+            dry_run: false,
+        },
+        paths,
+    )?;
 
-    gather(GatherArgs {
-        place: args.place.clone(),
-        strategy: args.strategy,
-        threads: args.threads,
-    }, paths)?;
+    gather(
+        GatherArgs {
+            place: args.place.clone(),
+            strategy: args.strategy,
+            threads: args.threads,
+        },
+        paths,
+    )?;
 
     reject(
         RejectArgs {
@@ -1685,10 +1701,7 @@ mod tests {
     /// zero without anything failing.
     #[test]
     fn an_accession_is_read_out_of_a_piped_name() {
-        assert_eq!(
-            accession("sp|Q7PKQ5|SQUT_ECO57").as_deref(),
-            Some("Q7PKQ5")
-        );
+        assert_eq!(accession("sp|Q7PKQ5|SQUT_ECO57").as_deref(), Some("Q7PKQ5"));
         assert_eq!(accession("tr|A0A1B2|SOME_NAME").as_deref(), Some("A0A1B2"));
     }
 

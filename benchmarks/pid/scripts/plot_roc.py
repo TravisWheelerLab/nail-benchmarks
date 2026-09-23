@@ -2,7 +2,7 @@
 import argparse
 from pathlib import Path
 
-from plot import axes, Curve, TOOL_COLORS, prefix_label, annotate
+from plot import axes, read_tbl, Curve, TOOL_COLORS, prefix_label, annotate
 
 
 import matplotlib.pyplot as plt
@@ -66,14 +66,11 @@ PLOTTED = [
 def main(args):
     curves = []
 
-    with open(args.roc) as f:
-        lines = list(
-            filter(lambda line: not line.startswith("#"), f.readlines()))
-
-        for line in lines:
-            curve = Curve(line)
-            if curve.prefix in PLOTTED:
-                curves.append(curve)
+    rows = read_tbl(args.roc)
+    for name, recs in rows.items():
+        if name in PLOTTED:
+            points = [(fpr, recall) for fpr, recall in recs]
+            curves.append(Curve(name, points))
 
     fig, ax = axes()
 

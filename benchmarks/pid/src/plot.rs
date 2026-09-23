@@ -16,7 +16,6 @@ use clap::Parser;
 
 use michi::{Cmd, PipelineBuilder, Progress, Step};
 
-
 /// A figure: which script draws it, and which of `parse`'s files it reads.
 ///
 /// `plot_params` and `plot_threads` are not here. They read a points file and
@@ -33,17 +32,17 @@ const FIGURES: &[Figure] = &[
     Figure {
         name: "roc",
         script: "plot_roc.py",
-        inputs: &["roc.txt"],
+        inputs: &["roc.tbl"],
     },
     Figure {
         name: "pid",
         script: "plot_pid.py",
-        inputs: &["pid.txt"],
+        inputs: &["pid.tbl"],
     },
     Figure {
         name: "time",
         script: "plot_time.py",
-        inputs: &["time.txt"],
+        inputs: &["time.tbl"],
     },
     Figure {
         name: "cells",

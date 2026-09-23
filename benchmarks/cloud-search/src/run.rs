@@ -22,11 +22,11 @@ use clap::Parser;
 
 use michi::{Cmd, PipelineBuilder, Progress, Step, Table};
 
-
-use util::search::{Bins, Dirs, SEED_MODE, SEED_S, Split};
 use util::ledger;
 use util::manifest;
+use util::search::{Bins, Dirs, SEED_MODE, SEED_S, Split};
 use util::set::Set;
+use util::split::Kind;
 
 /// The column hmmer's run becomes, which every cell is measured against.
 const HMMER: &str = "hmmer";
@@ -168,12 +168,13 @@ pub fn main(args: Args, paths: &crate::Paths) -> anyhow::Result<()> {
         // each other's parts
         let split = Split::new(
             &query_hmm,
+            Kind::Hmm,
             dirs.tmp.join("hmmer-query").join(&shard),
             util::search::jobs(args.threads),
         );
 
         pl = pl
-            .step(split.step(&[(manifest::SHARD, shard.clone())]))
+            .step(split.step("split", &[(manifest::SHARD, shard.clone())]))
             .step(util::search::seed(
                 &bins.nail,
                 &bins.mmseqs,
@@ -190,7 +191,18 @@ pub fn main(args: Args, paths: &crate::Paths) -> anyhow::Result<()> {
                 ],
             ));
 
-        let hmmer = util::search::hmmer(&bins.hmmsearch, &split, &dirs, HMMER, &shard, &target, &[]);
+        let hmmer = util::search::hmmer(
+            &bins.hmmsearch,
+            &split,
+            &dirs,
+            HMMER,
+            "hmmer",
+            &shard,
+            &target,
+            util::search::EVALUE,
+            true,
+            &[],
+        );
         pl = pl.step(hmmer.search).step(hmmer.cat);
 
         // the cells run in the order the grid gives them, which is ascending, so

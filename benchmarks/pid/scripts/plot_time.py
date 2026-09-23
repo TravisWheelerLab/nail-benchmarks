@@ -2,7 +2,7 @@
 import argparse
 from pathlib import Path
 
-from plot import axes, Point, TOOL_COLORS, prefix_label, annotate
+from plot import axes, read_tbl, Point, TOOL_COLORS, prefix_label, annotate
 
 
 import matplotlib.pyplot as plt
@@ -127,14 +127,13 @@ def plot(args):
     points = []
 
     with open(args.time) as f:
-        lines = list(
-            filter(lambda line: not line.startswith("#"), f.readlines()))
-        fpr = float(lines[0].split()[-1])
+        fpr = float(f.readline().split()[-1])
 
-        for line in lines[1:]:
-            pt = Point(line)
-            if pt.prefix in PLOTTED:
-                points.append(pt)
+    rows = read_tbl(args.time)
+    for name, recs in rows.items():
+        if name in PLOTTED:
+            for (wall_s, recall) in recs:
+                points.append(Point(name, wall_s, recall))
 
     points.sort(key=lambda c: c.x, reverse=True)
 

@@ -11,7 +11,6 @@
 
 use std::{
     collections::HashMap,
-    fmt::Display,
     fs::File,
     io::{BufRead, BufReader, BufWriter, Write},
     path::{Path, PathBuf},
@@ -25,20 +24,38 @@ use libsail::tbl::hmmer::HmmerTable;
 use libsail::tbl::nail::NailTable;
 use libsail::tbl::{Hit, HitColumns, HitParser, Table};
 
-use anyhow::{Context, bail};
+use anyhow::Context;
 use clap::{Parser, Subcommand};
 use util::ledger::{self, Ledger};
 use util::manifest;
+use util::tbl;
 
-use crate::search::MODE;
+use crate::run::MODE;
 
 const PRECISION: usize = 4;
 const FIXED_FPR: f32 = 0.01;
 
-fn e_value_cmp(a: &Hit2, b: &Hit2) -> std::cmp::Ordering {
-    a.e_value
-        .partial_cmp(&b.e_value)
-        .expect("NaN encountered in E-value cmp")
+/// The E-value a run has to beat to sit at [`FIXED_FPR`], which is the score
+/// of the decoy that many places down its own list.
+//
+// TODO: why decoy_cnt + 1 rather than decoy_cnt?
+fn threshold(tbl: &HitTable2, positive_cnt: usize) -> f64 {
+    let decoy_cnt = (positive_cnt as f32 * FIXED_FPR).ceil() as usize;
+
+    match tbl.adjusted_decoys.get(decoy_cnt + 1) {
+        Some(e_value) => *e_value,
+        None => {
+            println!(
+                "warning: not enough decoys to produce E-value threshold for: {}",
+                tbl.name
+            );
+            f64::INFINITY
+        }
+    }
+}
+
+fn e_value_cmp(a: f64, b: f64) -> std::cmp::Ordering {
+    a.partial_cmp(&b).expect("NaN encountered in E-value cmp")
 }
 
 /// Where an analysis writes. Every one of them takes it.
@@ -97,30 +114,11 @@ pub struct ScoreArgs {
     which: Which,
 }
 
-#[derive(Parser)]
-pub struct TableArgs {
-    /// Which label of paths.toml to read. Omit to list them
-    #[arg(long = "in", value_name = "label")]
-    pub label: Option<String>,
-
-    #[command(flatten)]
-    which: Which,
-
-    #[arg(short = 'e', long, default_value_t = false)]
-    e_value: bool,
-
-    #[arg(long, default_value_t = 6, default_value_if("e_value", "true", "9"))]
-    min_width: usize,
-}
-
-/// Analysis subcommands for this benchmark. Kept here rather than in the `run`
-/// library because what counts as a result is benchmark-specific.
 #[derive(Subcommand)]
 pub enum Cmd {
     Recall(RecallArgs),
     Cells(CellsArgs),
     Score(ScoreArgs),
-    Table(TableArgs),
 }
 
 pub fn main(cmd: Cmd, paths: &crate::Paths) -> anyhow::Result<()> {
@@ -134,185 +132,6 @@ pub fn main(cmd: Cmd, paths: &crate::Paths) -> anyhow::Result<()> {
         Cmd::Score(args) => {
             score(args, paths)?;
         }
-        Cmd::Table(args) => {
-            table(args, paths)?;
-        }
-    }
-
-    Ok(())
-}
-
-fn table(args: TableArgs, paths: &crate::Paths) -> anyhow::Result<()> {
-    let inp = crate::inputs::Inputs::open(&paths.set)?;
-    let bm = Benchmark::new(inp.truth)?;
-
-    let out_dir = args.which.out_dir(&paths.analysis);
-    std::fs::create_dir_all(&out_dir)?;
-    let mut out = BufWriter::new(File::create(out_dir.join("results.tbl"))?);
-
-    let mut tuples = vec![];
-
-    for run in runs(&paths.run)? {
-        fn true_hit_filter(hit: &Hit) -> bool {
-            if hit.target.starts_with("decoy") {
-                return false;
-            }
-
-            let q = hit.query.split('|').next().unwrap_or_default();
-            let t = hit.target.split('|').next().unwrap_or_default();
-
-            q == t
-        }
-
-        let hits: Vec<Hit> = run.hits()?.into_iter().filter(true_hit_filter).collect();
-
-        // a target's name carries which pair it is; everything past that is
-        // the family it came from and the identity it was drawn at
-        let target_of = |hit: &Hit| -> anyhow::Result<String> {
-            hit.target
-                .split('|')
-                .nth(1)
-                .map(str::to_string)
-                .with_context(|| format!("target {:?} names no sequence", hit.target))
-        };
-
-        let value = |hit: &Hit| match args.e_value {
-            true => hit.e_value,
-            false => hit.score as f64,
-        };
-
-        let mut map: HashMap<String, f64> = HashMap::new();
-        for hit in &hits {
-            let target = target_of(hit)?;
-            let v = value(hit);
-
-            match run.mode {
-                // one profile per family, so a pair is reported once
-                SearchType::Profile | SearchType::Consensus => {
-                    map.insert(target, v);
-                }
-                // several query sequences can reach the same target, so the
-                // best of them is the one a threshold would see
-                SearchType::Sequence => {
-                    map.entry(target)
-                        .and_modify(|best| {
-                            *best = match args.e_value {
-                                true => best.min(v),
-                                false => best.max(v),
-                            }
-                        })
-                        .or_insert(v);
-                }
-            }
-        }
-
-        // the run name is <prefix>.<mode>, and the prefix's `-` pieces are what
-        // the header stacks up
-        let prefix = run
-            .name
-            .rsplit_once('.')
-            .map_or(run.name.as_str(), |(p, _)| p);
-        let prefix_tokens: Vec<String> = prefix.split('-').map(str::to_string).collect();
-
-        tuples.push((prefix_tokens, run.mode.to_string(), map));
-    }
-
-    fn cmp_component(a: &str, b: &str) -> std::cmp::Ordering {
-        let na = a.chars().find(|c| c.is_ascii_digit()).map(|_| {
-            a.chars()
-                .skip_while(|c| !c.is_ascii_digit())
-                .collect::<String>()
-                .parse::<f64>()
-                .unwrap()
-        });
-
-        let nb = b.chars().find(|c| c.is_ascii_digit()).map(|_| {
-            b.chars()
-                .skip_while(|c| !c.is_ascii_digit())
-                .collect::<String>()
-                .parse::<f64>()
-                .unwrap()
-        });
-
-        match (na, nb) {
-            (Some(a), Some(b)) => a.partial_cmp(&b).unwrap(),
-            _ => a.cmp(b),
-        }
-    }
-
-    fn cmp_keys(a: &[String], b: &[String]) -> std::cmp::Ordering {
-        for (x, y) in a.iter().zip(b) {
-            let ord = cmp_component(x, y);
-            if ord != std::cmp::Ordering::Equal {
-                return ord;
-            }
-        }
-
-        a.len().cmp(&b.len())
-    }
-
-    tuples.sort_by(|a, b| a.1.cmp(&b.1).then_with(|| cmp_keys(&a.0, &b.0)));
-
-    let n_rows = tuples.iter().map(|(p, _, _)| p.len()).max().unwrap();
-
-    let target_width = bm.entries.iter().map(|e| e.target.len()).max().unwrap();
-    let fam_width = bm.entries.iter().map(|e| e.family.len()).max().unwrap();
-
-    let widths = tuples
-        .iter()
-        .map(|(p, _, _)| p.iter().map(|s| s.len().max(args.min_width)).max().unwrap())
-        .collect::<Vec<_>>();
-
-    let total_width = widths.iter().map(|w| w + 1).sum::<usize>();
-
-    // first header line
-    write!(out, "#{:<W$} ", "target", W = target_width)?;
-    write!(out, "{:<W$} ", "family", W = fam_width)?;
-    write!(out, "{:<W$} ", "%id", W = 3)?;
-    tuples
-        .iter()
-        .zip(&widths)
-        .try_for_each(|((_, s, _), w)| write!(out, "{s:<W$} ", W = w))?;
-    writeln!(out)?;
-
-    // variable header lines
-    for r in 0..n_rows {
-        write!(out, "#{:W$} ", "", W = target_width)?;
-        write!(out, "{:W$} ", "", W = fam_width)?;
-        write!(out, "{:W$} ", "", W = 3)?;
-        tuples.iter().zip(&widths).try_for_each(|((p, _, _), w)| {
-            let val = p.get(r).map_or("", |v| v);
-            write!(out, "{val:<W$} ", W = w)
-        })?;
-        writeln!(out)?;
-    }
-
-    writeln!(
-        out,
-        "#{}",
-        "-".repeat(total_width + target_width + fam_width + 3)
-    )?;
-
-    // entries
-    for entry in bm.entries {
-        write!(out, "{:<W$} ", entry.target, W = target_width)?;
-        write!(out, " {:<W$} ", entry.family, W = fam_width)?;
-        write!(out, " {:>W$}% ", entry.pid, W = 2)?;
-        tuples
-            .iter()
-            .zip(&widths)
-            .try_for_each(|((_, _, m), w)| match m.get(&entry.target) {
-                Some(val) => {
-                    if args.e_value {
-                        write!(out, "{val:<W$.1e} ", W = w)
-                    } else {
-                        write!(out, "{val:<W$.1} ", W = w)
-                    }
-                }
-                None => write!(out, "{:<W$} ", "-", W = w),
-            })?;
-
-        writeln!(out)?;
     }
 
     Ok(())
@@ -363,7 +182,7 @@ fn cells(args: CellsArgs, paths: &crate::Paths) -> anyhow::Result<()> {
     // read out of the files rather than shelled out to hmmstat and
     // esl-seqstat: neither is a dependency this benchmark declares, and both
     // were being found on PATH rather than through `tools`
-    let inp = crate::inputs::Inputs::open(&paths.set)?;
+    let inp = crate::Inputs::open(&paths.set)?;
     let query_lens: HashMap<String, usize> = Hmm::open(&inp.query_hmm)
         .with_context(|| format!("failed to parse {}", inp.query_hmm.display()))?
         .iter()
@@ -419,20 +238,16 @@ fn cells(args: CellsArgs, paths: &crate::Paths) -> anyhow::Result<()> {
 fn recall(args: RecallArgs, paths: &crate::Paths) -> anyhow::Result<()> {
     let start = std::time::Instant::now();
 
-    let inp = crate::inputs::Inputs::open(&paths.set)?;
+    let inp = crate::Inputs::open(&paths.set)?;
     let benchmark = Benchmark::new(inp.truth)?;
     let data = RecallData::new(&paths.run, &benchmark)?;
 
     let figures = args.which.out_dir(&paths.analysis);
     std::fs::create_dir_all(&figures)?;
 
-    let mut roc_path = File::create(figures.join("roc.txt"))?;
-    let mut pid_path = File::create(figures.join("pid.txt"))?;
-    let mut runtime_path = File::create(figures.join("time.txt"))?;
-
-    data.write_roc(&mut roc_path)?;
-    data.write_pid(&mut pid_path)?;
-    data.write_runtime(&mut runtime_path)?;
+    data.write_roc(&figures.join("roc.tbl"))?;
+    data.write_pid(&figures.join("pid.tbl"))?;
+    data.write_runtime(&figures.join("time.tbl"))?;
 
     println!("recall data took: {:?}", start.elapsed());
     Ok(())
@@ -440,17 +255,13 @@ fn recall(args: RecallArgs, paths: &crate::Paths) -> anyhow::Result<()> {
 
 struct BenchmarkEntry {
     pid: usize,
-    target: String,
     query: String,
     family: String,
 }
 
 struct Benchmark {
     entries: Vec<BenchmarkEntry>,
-    idx_by_pid: HashMap<usize, Vec<usize>>,
     idx_by_target: HashMap<String, usize>,
-    idx_by_query: HashMap<String, Vec<usize>>,
-    idx_by_family: HashMap<String, Vec<usize>>,
 }
 
 impl Benchmark {
@@ -458,10 +269,7 @@ impl Benchmark {
         let tbl_reader = BufReader::new(File::open(tbl_path)?);
 
         let mut entries = vec![];
-        let mut idx_by_pid: HashMap<usize, Vec<usize>> = HashMap::new();
         let mut idx_by_target: HashMap<String, usize> = HashMap::new();
-        let mut idx_by_query: HashMap<String, Vec<usize>> = HashMap::new();
-        let mut idx_by_family: HashMap<String, Vec<usize>> = HashMap::new();
 
         for line in tbl_reader
             .lines()
@@ -481,81 +289,24 @@ impl Benchmark {
 
             let entry = BenchmarkEntry {
                 pid,
-                target: target.clone(),
                 query: query.clone(),
                 family: family.clone(),
             };
 
-            let at = entries.len();
-            idx_by_pid.entry(pid).or_default().push(at);
-            idx_by_target.insert(target, at);
-            idx_by_query.entry(query).or_default().push(at);
-            idx_by_family.entry(family).or_default().push(at);
-
+            idx_by_target.insert(target, entries.len());
             entries.push(entry);
         }
 
         Ok(Self {
             entries,
-            idx_by_pid,
             idx_by_target,
-            idx_by_query,
-            idx_by_family,
         })
     }
 }
 
-#[allow(dead_code)]
 impl Benchmark {
-    fn entries_by_pid(&self, pid: usize) -> Vec<&BenchmarkEntry> {
-        self.idx_by_pid
-            .get(&pid)
-            .unwrap()
-            .iter()
-            .map(|i| &self.entries[*i])
-            .collect()
-    }
-
     fn entry_by_target(&self, target: &str) -> &BenchmarkEntry {
         &self.entries[*self.idx_by_target.get(target).unwrap()]
-    }
-
-    fn entries_by_query(&self, query: &str) -> Vec<&BenchmarkEntry> {
-        self.idx_by_query
-            .get(query)
-            .unwrap()
-            .iter()
-            .map(|i| &self.entries[*i])
-            .collect()
-    }
-
-    fn entries_by_family(&self, family: &str) -> Vec<&BenchmarkEntry> {
-        self.idx_by_family
-            .get(family)
-            .unwrap()
-            .iter()
-            .map(|i| &self.entries[*i])
-            .collect()
-    }
-}
-
-#[derive(Clone, Copy, PartialEq)]
-enum SearchType {
-    Profile,
-    Consensus,
-    Sequence,
-}
-
-impl SearchType {
-    /// Reads the search type off the `mode` field, which the run records
-    /// rather than the filename spelling it.
-    fn parse(mode: &str) -> anyhow::Result<SearchType> {
-        match mode {
-            "prf" => Ok(SearchType::Profile),
-            "cons" => Ok(SearchType::Consensus),
-            "seq" => Ok(SearchType::Sequence),
-            other => bail!("unknown search mode {other:?} in ledger.tbl"),
-        }
     }
 }
 
@@ -564,7 +315,8 @@ impl SearchType {
 struct Run {
     name: String,
     tool: String,
-    mode: SearchType,
+    /// `prf`, `cons` or `seq`, as the run recorded it.
+    mode: String,
     wall_s: f32,
     table: PathBuf,
 }
@@ -612,9 +364,14 @@ fn runs(dir: &Path) -> anyhow::Result<Vec<Run>> {
                 .get(MODE)
                 .with_context(|| format!("run {:?} has no mode", column.name))?;
 
+            anyhow::ensure!(
+                matches!(mode.as_str(), "prf" | "cons" | "seq"),
+                "unknown search mode {mode:?} in ledger.tbl"
+            );
+
             Ok(Run {
                 table: manifest::table_path(&results, &column.name, ""),
-                mode: SearchType::parse(mode)?,
+                mode: mode.clone(),
                 name: column.name,
                 tool: column.tool,
                 wall_s: column.wall_s as f32,
@@ -627,139 +384,85 @@ fn runs(dir: &Path) -> anyhow::Result<Vec<Run>> {
     Ok(out)
 }
 
-impl Display for SearchType {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        let s = match self {
-            SearchType::Profile => "prf",
-            SearchType::Consensus => "cons",
-            SearchType::Sequence => "seq",
-        };
-        write!(f, "{s}")
-    }
-}
-
-#[derive(Clone)]
-struct Hit2 {
-    target: String,
-    query: String,
-    target_fam: Option<String>,
-    query_fam: String,
-    e_value: f64,
-    pid: Option<usize>,
-}
-
-impl Hit2 {
-    fn new(hit: &Hit) -> Self {
-        let query_tokens: Vec<&str> = hit.query.split('|').collect();
-        let query_family = query_tokens[0].to_string();
-
-        let query = if query_tokens.len() > 1 {
-            query_tokens[1].to_string()
-        } else {
-            query_family.clone()
-        };
-
-        let (target, target_family, pid) = if hit.target.starts_with("decoy") {
-            (hit.target.clone(), None, None)
-        } else {
-            let target_tokens: Vec<&str> = hit.target.split('|').collect();
-            let target_family = target_tokens[0].to_string();
-            let target = target_tokens[1].to_string();
-            let pid = target_tokens[2]
-                .split('%')
-                .next()
-                .expect("failed to parse pid: no %")
-                .parse::<usize>()
-                .expect("failed to parse pid");
-            (target, Some(target_family), Some(pid))
-        };
-
-        Self {
-            target,
-            query,
-            e_value: hit.e_value,
-            target_fam: target_family,
-            query_fam: query_family,
-            pid,
-        }
-    }
-}
-
-impl std::fmt::Display for Hit2 {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "{} {} {:.2e}", self.target, self.query, self.e_value)
-    }
-}
-
 struct HitTable2 {
     name: String,
-    positives: Vec<Hit2>,
+    /// Every true pair this run reported, as the identity it was drawn at and
+    /// the E-value the run gave it, worst last.
+    positives: Vec<(usize, f64)>,
     /// The decoys this run's own queries reported, in the benchmark's order.
     ///
     /// What the ROC walks: a false positive only counts against a query that
     /// was actually asked, so the list is rebuilt per benchmark entry rather
     /// than taken as everything the run called a decoy.
-    adjusted_decoys: Vec<Hit2>,
+    adjusted_decoys: Vec<f64>,
 }
 
 impl HitTable2 {
-    fn new(hits: &[Hit], name: &str, bm: &Benchmark, search_type: SearchType) -> Self {
-        let mut hits_by_target_query_pair: HashMap<(String, String), Vec<Hit2>> = HashMap::new();
-        hits.iter().map(Hit2::new).for_each(|h| {
-            hits_by_target_query_pair
-                .entry((h.target.clone(), h.query.clone()))
-                .or_default()
-                .push(h);
-        });
+    fn new(hits: &[Hit], name: &str, bm: &Benchmark, search_type: &str) -> Self {
+        // a run can report one pair more than once; the best of them is the
+        // one a threshold would see
+        let mut best: HashMap<(&str, &str), f64> = HashMap::new();
+        for hit in hits {
+            best.entry((&hit.target, &hit.query))
+                .and_modify(|e| *e = e.min(hit.e_value))
+                .or_insert(hit.e_value);
+        }
 
-        let filtered_hits: Vec<Hit2> = hits_by_target_query_pair
-            .into_values()
-            .map(|hits| hits.into_iter().min_by(e_value_cmp).expect("empty"))
-            .collect();
+        let mut positives: Vec<(usize, f64)> = vec![];
+        let mut decoys_by_query: HashMap<&str, Vec<f64>> = HashMap::new();
 
-        let mut positives: Vec<Hit2> = vec![];
-        let mut decoys_by_query: HashMap<String, Vec<Hit2>> = HashMap::new();
-        filtered_hits.into_iter().for_each(|h| {
-            if h.target.starts_with("decoy") {
-                decoys_by_query.entry(h.query.clone()).or_default().push(h);
-            } else {
-                match search_type {
-                    SearchType::Profile | SearchType::Consensus => match h.target_fam {
-                        Some(ref target_fam) => {
-                            if &h.query_fam == target_fam {
-                                positives.push(h.clone())
-                            }
-                        }
-                        _ => panic!("hit has no target family"),
-                    },
-                    SearchType::Sequence => {
-                        let paired_query = &bm.entry_by_target(&h.target).query;
-                        if &h.query == paired_query {
-                            positives.push(h.clone())
-                        }
-                    }
-                }
+        for ((target, query), e_value) in best {
+            // a query is <family> for a profile and <family>|<id> for a
+            // sequence, and the second is what a decoy list is keyed by
+            let (family, id) = match query.split_once('|') {
+                Some((family, id)) => (family, id),
+                None => (query, query),
+            };
+
+            if target.starts_with("decoy") {
+                decoys_by_query.entry(id).or_default().push(e_value);
+                continue;
             }
-        });
 
-        let mut adjusted_decoys: Vec<Hit2> = bm
+            // a target's name carries the pair it is: <family>|<id>|<pid>%
+            let target = target
+                .split('|')
+                .nth(1)
+                .unwrap_or_else(|| panic!("target {target:?} names no sequence"));
+
+            let entry = bm.entry_by_target(target);
+
+            let matched = match search_type {
+                "seq" => id == entry.query,
+                _ => family == entry.family,
+            };
+
+            if matched {
+                positives.push((entry.pid, e_value));
+            }
+        }
+
+        // a false positive only counts against a query that was asked, so the
+        // decoys are gathered per benchmark entry rather than taken whole
+        let mut adjusted_decoys: Vec<f64> = bm
             .entries
             .iter()
             .flat_map(|entry| {
-                let name = match search_type {
-                    SearchType::Profile => &entry.family,
-                    SearchType::Consensus => &format!("{}-consensus", entry.family),
-                    SearchType::Sequence => &entry.query,
+                let asked = match search_type {
+                    "cons" => &format!("{}-consensus", entry.family),
+                    "seq" => &entry.query,
+                    _ => &entry.family,
                 };
-                match decoys_by_query.get(name) {
-                    Some(hits) => hits.clone(),
-                    None => vec![],
-                }
+
+                decoys_by_query
+                    .get(asked.as_str())
+                    .cloned()
+                    .unwrap_or_default()
             })
             .collect();
 
-        positives.sort_by(e_value_cmp);
-        adjusted_decoys.sort_by(e_value_cmp);
+        positives.sort_by(|a, b| e_value_cmp(a.1, b.1));
+        adjusted_decoys.sort_by(|a, b| e_value_cmp(*a, *b));
 
         Self {
             name: name.to_string(),
@@ -790,7 +493,7 @@ impl RecallData {
         let mut times = vec![];
 
         for run in runs(dir)? {
-            tables.push(HitTable2::new(&run.hits()?, &run.name, bm, run.mode));
+            tables.push(HitTable2::new(&run.hits()?, &run.name, bm, &run.mode));
             times.push(run.wall_s);
         }
 
@@ -802,150 +505,150 @@ impl RecallData {
         })
     }
 
-    fn write_pid<W: Write>(&self, out: &mut W) -> anyhow::Result<()> {
-        writeln!(out, "fpr {FIXED_FPR}")?;
+    /// One row per run per identity bin: what fraction of that bin's true
+    /// pairs the run kept at [`FIXED_FPR`].
+    fn write_pid(&self, path: &Path) -> anyhow::Result<()> {
+        let mut rows = vec![];
 
-        write!(out, "bins")?;
-        self.bin_sizes
-            .iter()
-            .enumerate()
-            .try_for_each(|p| write!(out, ",({}, {})", p.0, p.1))?;
-        writeln!(out)?;
+        for tbl in &self.tables {
+            let cutoff = threshold(tbl, self.positive_cnt);
 
-        let decoy_cnt = (self.positive_cnt as f32 * FIXED_FPR).ceil() as usize;
-        self.tables.iter().try_for_each(|tbl| {
-            write!(out, "{}", tbl.name)?;
-
-            // TODO: why decoy_cnt + 1 rather than decoy_cnt? the same
-            //       indexing is in write_runtime
-            let e_value_threshold = match tbl.adjusted_decoys.get(decoy_cnt + 1) {
-                Some(hit) => hit.e_value,
-                None => {
-                    println!(
-                        "warning: not enough decoys to produce E-value threshold for: {}",
-                        tbl.name
-                    );
-                    f64::INFINITY
+            let mut kept = vec![0usize; self.bin_sizes.len()];
+            for (pid, e_value) in &tbl.positives {
+                if *e_value <= cutoff {
+                    kept[*pid] += 1;
                 }
-            };
-            let mut bin_cnts = vec![0usize; self.bin_sizes.len()];
-            tbl.positives
-                .iter()
-                .filter(|h| h.e_value <= e_value_threshold)
-                .for_each(|h| {
-                    bin_cnts[h.pid.expect("positive hit has no pid")] += 1;
-                });
-
-            bin_cnts
-                .into_iter()
-                .zip(self.bin_sizes.iter())
-                .enumerate()
-                .try_for_each(|(pid, (cnt, &sz))| {
-                    assert!(
-                        cnt <= sz,
-                        "error: (bin count > bin size): {pid}% | {cnt} > {sz}"
-                    );
-                    if sz > 0 {
-                        write!(
-                            out,
-                            ",({}, {:.p$})",
-                            pid,
-                            (cnt as f64 / sz as f64),
-                            p = PRECISION
-                        )
-                    } else {
-                        Ok(())
-                    }
-                })?;
-            writeln!(out)
-        })?;
-        Ok(())
-    }
-
-    fn write_roc<W: Write>(&self, out: &mut W) -> anyhow::Result<()> {
-        let mut out = BufWriter::new(out);
-
-        let p = 10.0f64.powi(PRECISION as i32);
-
-        self.tables.iter().try_for_each(|tbl| {
-            write!(out, "{}", tbl.name)?;
-
-            let mut e_values: Vec<f64> = tbl.adjusted_decoys.iter().map(|h| h.e_value).collect();
-            e_values.push(f64::INFINITY);
-
-            let mut counts = vec![];
-            let mut last_cnt = 0usize;
-            for e in e_values.into_iter() {
-                let cnt = tbl.positives[last_cnt..]
-                    .iter()
-                    .take_while(|h| h.e_value < e)
-                    .count();
-
-                last_cnt += cnt;
-                counts.push(last_cnt);
             }
 
-            let all_points: Vec<(f64, f64)> = counts
+            for (pid, (&kept, &size)) in kept.iter().zip(&self.bin_sizes).enumerate() {
+                if size == 0 {
+                    continue;
+                }
+
+                assert!(
+                    kept <= size,
+                    "bin count > bin size: {pid}% | {kept} > {size}"
+                );
+
+                rows.push(vec![
+                    tbl.name.clone(),
+                    pid.to_string(),
+                    size.to_string(),
+                    format!("{:.p$}", kept as f64 / size as f64, p = PRECISION),
+                ]);
+            }
+        }
+
+        tbl::write(
+            path,
+            tbl::Table {
+                meta: &format!("#= fpr {FIXED_FPR}\n"),
+                headers: &names(["run", "pid", "n", "recall"]),
+                rows: &rows,
+                ragged_last: false,
+            },
+        )
+    }
+
+    /// One row per run per change point of its ROC curve.
+    fn write_roc(&self, path: &Path) -> anyhow::Result<()> {
+        let p = 10.0f64.powi(PRECISION as i32);
+        let mut rows = vec![];
+
+        for tbl in &self.tables {
+            let mut e_values = tbl.adjusted_decoys.clone();
+            e_values.push(f64::INFINITY);
+
+            // each decoy admitted is one more false positive, and what moves
+            // is how many true pairs came in under it
+            let mut counts = vec![];
+            let mut found = 0usize;
+            for e in e_values {
+                found += tbl.positives[found..]
+                    .iter()
+                    .take_while(|(_, e_value)| *e_value < e)
+                    .count();
+
+                counts.push(found);
+            }
+
+            let all: Vec<(f64, f64)> = counts
                 .into_iter()
                 .enumerate()
                 .map(|(i, c)| {
-                    (
-                        i as f64 / self.positive_cnt as f64,
-                        c as f64 / self.positive_cnt as f64,
-                    )
+                    let x = i as f64 / self.positive_cnt as f64;
+                    let y = c as f64 / self.positive_cnt as f64;
+                    ((x * p).round() / p, (y * p).round() / p)
                 })
-                .map(|(x, y)| ((x * p).round() / p, (y * p).round() / p))
                 .collect();
 
-            let mut points: Vec<(f64, f64)> = vec![all_points[0]];
-            all_points
-                .windows(2)
-                .filter(|p| p[0].1 != p[1].1)
-                .for_each(|p| {
-                    points.push(p[0]);
-                    points.push(p[1]);
-                });
-
+            // only where the curve turns: a run of points at one recall draws
+            // the same line as its two ends
+            let mut points = vec![all[0]];
+            for pair in all.windows(2) {
+                if pair[0].1 != pair[1].1 {
+                    points.push(pair[0]);
+                    points.push(pair[1]);
+                }
+            }
             points.dedup();
 
-            points
-                .iter()
-                .try_for_each(|(x, y)| write!(out, ",({x:.p$}, {y:.p$})", p = PRECISION))?;
+            for (x, y) in points {
+                rows.push(vec![
+                    tbl.name.clone(),
+                    format!("{x:.p$}", p = PRECISION),
+                    format!("{y:.p$}", p = PRECISION),
+                ]);
+            }
+        }
 
-            writeln!(out)
-        })?;
-        Ok(())
+        tbl::write(
+            path,
+            tbl::Table {
+                meta: "",
+                headers: &names(["run", "fpr", "recall"]),
+                rows: &rows,
+                ragged_last: false,
+            },
+        )
     }
 
-    fn write_runtime<W: Write>(&self, out: &mut W) -> anyhow::Result<()> {
-        writeln!(out, "fpr {FIXED_FPR}")?;
-
-        let decoy_cnt = (self.positive_cnt as f32 * FIXED_FPR).ceil() as usize;
-        self.tables
+    /// One row per run: what it cost, and what it found for the cost.
+    fn write_runtime(&self, path: &Path) -> anyhow::Result<()> {
+        let rows: Vec<Vec<String>> = self
+            .tables
             .iter()
-            .zip(self.times.iter())
-            .try_for_each(|(tbl, time)| {
-                let e_value_threshold = match tbl.adjusted_decoys.get(decoy_cnt + 1) {
-                    Some(hit) => hit.e_value,
-                    None => {
-                        println!(
-                            "warning: not enough decoys to produce E-value threshold for: {}",
-                            tbl.name
-                        );
-                        f64::INFINITY
-                    }
-                };
+            .zip(&self.times)
+            .map(|(tbl, wall_s)| {
+                let cutoff = threshold(tbl, self.positive_cnt);
 
-                let count = tbl
+                let found = tbl
                     .positives
                     .iter()
-                    .take_while(|h| h.e_value < e_value_threshold)
+                    .take_while(|(_, e_value)| *e_value < cutoff)
                     .count();
 
-                let recall = count as f64 / self.positive_cnt as f64;
+                vec![
+                    tbl.name.clone(),
+                    format!("{wall_s:.4}"),
+                    format!("{:.4}", found as f64 / self.positive_cnt as f64),
+                ]
+            })
+            .collect();
 
-                writeln!(out, "{},({:.4},{:.4})", tbl.name, time, recall)
-            })?;
-        Ok(())
+        tbl::write(
+            path,
+            tbl::Table {
+                meta: &format!("#= fpr {FIXED_FPR}\n"),
+                headers: &names(["run", "wall_s", "recall"]),
+                rows: &rows,
+                ragged_last: false,
+            },
+        )
     }
+}
+
+/// Column names, which `tbl` wants owned.
+fn names<const N: usize>(headers: [&str; N]) -> Vec<String> {
+    headers.iter().map(|h| h.to_string()).collect()
 }

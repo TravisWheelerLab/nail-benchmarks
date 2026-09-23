@@ -17,11 +17,11 @@ use clap::Parser;
 
 use michi::{Cmd, PipelineBuilder, Progress, Step, Table};
 
-
-use util::search::{Bins, Dirs, SEED_MODE, Split};
 use util::ledger;
 use util::manifest;
+use util::search::{Bins, Dirs, SEED_MODE, Split};
 use util::set::{Set, Unit};
+use util::split::Kind;
 
 /// The column hmmer's run becomes, which the other two are measured against.
 const HMMER: &str = "hmmer";
@@ -114,7 +114,9 @@ pub fn main(args: Args, paths: &crate::Paths) -> anyhow::Result<()> {
     let query_db = units[0].query_db()?;
 
     ensure!(
-        units.iter().all(|u| u.query_hmm().ok() == Some(query_hmm.clone())),
+        units
+            .iter()
+            .all(|u| u.query_hmm().ok() == Some(query_hmm.clone())),
         "{} moves the query between units; recall searches one query set",
         paths.set.display()
     );
@@ -124,11 +126,14 @@ pub fn main(args: Args, paths: &crate::Paths) -> anyhow::Result<()> {
     // belonged
     let split = Split::new(
         &query_hmm,
+        Kind::Hmm,
         dirs.tmp.join("hmmer-query"),
         util::search::jobs(args.threads),
     );
 
-    let mut pl = PipelineBuilder::new().step(dirs.mkdir()).step(split.step(&[]));
+    let mut pl = PipelineBuilder::new()
+        .step(dirs.mkdir())
+        .step(split.step("split", &[]));
 
     for unit in &units {
         let shard = unit.name().to_string();
@@ -196,6 +201,7 @@ pub fn main(args: Args, paths: &crate::Paths) -> anyhow::Result<()> {
                             threads: args.threads,
                             s: Some(format!("{s:.1}")),
                             max_seqs: Some(MMSEQS_MAX_SEQS),
+                            evalue: util::search::EVALUE,
                         }
                         .cmds();
 
@@ -218,7 +224,18 @@ pub fn main(args: Args, paths: &crate::Paths) -> anyhow::Result<()> {
 
         // ---- hmmer
 
-        let hmmer = util::search::hmmer(&bins.hmmsearch, &split, &dirs, HMMER, &shard, target, &[]);
+        let hmmer = util::search::hmmer(
+            &bins.hmmsearch,
+            &split,
+            &dirs,
+            HMMER,
+            "hmmer",
+            &shard,
+            target,
+            util::search::EVALUE,
+            true,
+            &[],
+        );
         pl = pl.step(hmmer.search).step(hmmer.cat);
 
         // only this shard's scratch: the query splits live on for the shards
