@@ -98,7 +98,6 @@ dependencies = [
  "anyhow",
  "clap",
  "michi",
- "search",
  "serde",
  "util",
 ]
@@ -168,7 +167,6 @@ dependencies = [
  "clap",
  "michi",
  "scores",
- "search",
  "serde",
  "util",
 ]
@@ -241,7 +239,6 @@ dependencies = [
  "libsail",
  "michi",
  "rayon",
- "search",
  "serde",
  "util",
 ]
@@ -369,7 +366,6 @@ dependencies = [
  "clap",
  "michi",
  "scores",
- "search",
  "serde",
  "util",
 ]
@@ -481,7 +477,6 @@ dependencies = [
  "clap",
  "michi",
  "scores",
- "search",
  "serde",
  "util",
 ]
@@ -526,15 +521,6 @@ dependencies = [
  "memchr",
  "rayon",
  "tabl",
- "util",
-]
-
-[[package]]
-name = "search"
-version = "0.1.0"
-dependencies = [
- "anyhow",
- "michi",
  "util",
 ]
 
@@ -682,6 +668,7 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "libsail",
+ "michi",
  "serde",
  "sha2",
  "toml",

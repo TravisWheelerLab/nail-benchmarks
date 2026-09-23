@@ -11,6 +11,5 @@ path = "src/main.rs"
 anyhow = { workspace = true }
 clap = { workspace = true }
 michi = { workspace = true }
-search = { workspace = true }
 serde = { workspace = true }
 util = { workspace = true }

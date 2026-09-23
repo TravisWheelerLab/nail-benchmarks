@@ -522,7 +522,7 @@ fn recruit(args: RecruitArgs, paths: &Paths) -> anyhow::Result<()> {
                         .flag("-p")
                         .path(scratch.join("targetDB"))
                         .path(scratch.join("alnDB")),
-                    search::createdb(
+                    util::search::createdb(
                         &mmseqs_bin,
                         shard,
                         &target_db,
@@ -542,9 +542,9 @@ fn recruit(args: RecruitArgs, paths: &Paths) -> anyhow::Result<()> {
                     .arg("-t", args.threads)
                     .arg("--tmp-dir", scratch.join("nail"))
                     .arg("--mmseqs-s", RECRUIT_S)
-                    .arg("--seed-mode", search::sweeps::SEED_MODE)
+                    .arg("--seed-mode", util::search::SEED_MODE)
                     .arg("--mmseqs-max-seqs", RECRUIT_MAX_SEQS)
-                    .arg("-E", search::EVALUE)
+                    .arg("-E", util::search::EVALUE)
                     .arg(
                         "--tbl-out",
                         manifest::table_path(&results, NAIL, &idx.to_string()),
@@ -556,7 +556,7 @@ fn recruit(args: RecruitArgs, paths: &Paths) -> anyhow::Result<()> {
             )
             .step(
                 Step::serial({
-                    let cmds = search::Mmseqs {
+                    let cmds = util::search::Mmseqs {
                         bin: &mmseqs_bin,
                         query_db: &query_db,
                         target_db: &target_db,
@@ -921,13 +921,13 @@ fn reject_union(
     let table = |tool: &str, form: &str| manifest::table_path(&results, &run_name(tool, form), ALL);
 
     // hmmsearch does not scale past a couple of threads, so it gets the query
-    // cut into parts and the parts run together at search::HMMER_CPU each,
+    // cut into parts and the parts run together at util::search::HMMER_CPU each,
     // rather than one invocation holding the whole pool. Both forms search the
     // same query, so the cut happens once.
-    let split = search::Split::new(
+    let split = util::search::Split::new(
         &query_hmm,
         tmp.join("hmmer-query"),
-        search::jobs(threads),
+        util::search::jobs(threads),
     );
 
     let mut pl = PipelineBuilder::new().step(split.step(&[]));
@@ -953,9 +953,9 @@ fn reject_union(
                     .arg("-t", threads)
                     .arg("--tmp-dir", scratch.join("nail"))
                     .arg("--mmseqs-s", DECOY_S)
-                    .arg("--seed-mode", search::sweeps::SEED_MODE)
+                    .arg("--seed-mode", util::search::SEED_MODE)
                     .arg("--mmseqs-max-seqs", DECOY_MAX_SEQS)
-                    .arg("-E", search::EVALUE)
+                    .arg("-E", util::search::EVALUE)
                     .flag("--allow-overwrite")
                     .arg("--tbl-out", table(NAIL, form))
                     .path(&query_hmm)
@@ -968,7 +968,7 @@ fn reject_union(
                 .cores(threads),
             )
             .step(
-                Step::serial([search::createdb(
+                Step::serial([util::search::createdb(
                     &mmseqs_bin,
                     target,
                     &scratch.join("targetDB/targetDB"),
@@ -978,7 +978,7 @@ fn reject_union(
                 .name(format!("createdb.{form}")),
             );
 
-        let cmds = search::Mmseqs {
+        let cmds = util::search::Mmseqs {
             bin: &mmseqs_bin,
             query_db: &query_db,
             target_db: &scratch.join("targetDB/targetDB"),
@@ -1009,10 +1009,10 @@ fn reject_union(
 
         // the one command in this stage built through `search` rather than by
         // hand, because the batching is the whole point of it
-        let hmmer = search::hmmer(
+        let hmmer = util::search::hmmer(
             &hmmsearch_bin,
             &split,
-            &search::Dirs::new(&stage.root, &scratch),
+            &util::search::Dirs::new(&stage.root, &scratch),
             &run_name(HMMER, form),
             ALL,
             target,
@@ -1197,9 +1197,9 @@ fn reject(args: RejectArgs, paths: &Paths) -> anyhow::Result<()> {
                             .arg("-t", 1)
                             .arg("--tmp-dir", dir_scratch(family, direction).join("nail"))
                             .arg("--mmseqs-s", DECOY_S)
-                            .arg("--seed-mode", search::sweeps::SEED_MODE)
+                            .arg("--seed-mode", util::search::SEED_MODE)
                             .arg("--mmseqs-max-seqs", DECOY_MAX_SEQS)
-                            .arg("-E", search::EVALUE)
+                            .arg("-E", util::search::EVALUE)
                             .flag("--allow-overwrite")
                             .arg("--tbl-out", table(NAIL, family))
                             .path(hmm(family))
@@ -1216,7 +1216,7 @@ fn reject(args: RejectArgs, paths: &Paths) -> anyhow::Result<()> {
                 Step::batched(
                     jobs,
                     per_family(&|family| {
-                        search::createdb(
+                        util::search::createdb(
                             &mmseqs_bin,
                             &target(family),
                             &dir_scratch(family, direction).join("targetDB/targetDB"),
@@ -1233,7 +1233,7 @@ fn reject(args: RejectArgs, paths: &Paths) -> anyhow::Result<()> {
                     per_family(&|family| {
                         let (name, tool, shard) = run_of(MMSEQS, family);
                         let d = dir_scratch(family, direction);
-                        search::Mmseqs {
+                        util::search::Mmseqs {
                             bin: &mmseqs_bin,
                             query_db: &query_db(family),
                             target_db: &d.join("targetDB/targetDB"),
@@ -1259,7 +1259,7 @@ fn reject(args: RejectArgs, paths: &Paths) -> anyhow::Result<()> {
                     jobs,
                     per_family(&|family| {
                         let d = dir_scratch(family, direction);
-                        search::Mmseqs {
+                        util::search::Mmseqs {
                             bin: &mmseqs_bin,
                             query_db: &query_db(family),
                             target_db: &d.join("targetDB/targetDB"),
@@ -1281,7 +1281,7 @@ fn reject(args: RejectArgs, paths: &Paths) -> anyhow::Result<()> {
                 Step::batched(
                     jobs,
                     // hmmsearch is the one command here not built through
-                    // `search`. search::hmmer returns a whole Step, batched
+                    // `search`. util::search::hmmer returns a whole Step, batched
                     // over the parts of one split query and followed by a cat
                     // that joins their tables. this searches one family per
                     // command and batches over families instead, and each
@@ -1291,7 +1291,7 @@ fn reject(args: RejectArgs, paths: &Paths) -> anyhow::Result<()> {
                         let (name, tool, shard) = run_of(HMMER, family);
                         PCmd::new(&hmmsearch_bin)
                             .arg("--cpu", 1)
-                            .arg("-E", search::EVALUE)
+                            .arg("-E", util::search::EVALUE)
                             .arg("-o", "/dev/null")
                             .arg("--tblout", table(HMMER, family))
                             .arg(

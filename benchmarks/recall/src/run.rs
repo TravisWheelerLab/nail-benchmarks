@@ -17,8 +17,8 @@ use clap::Parser;
 
 use michi::{Cmd, PipelineBuilder, Progress, Step, Table};
 
-use search::sweeps::{MMSEQS_MAX_SEQS, MMSEQS_S, NAIL_S, SEED_MODE};
-use search::{self, Bins, Dirs, Split};
+
+use util::search::{Bins, Dirs, SEED_MODE, Split};
 use util::ledger;
 use util::manifest;
 use util::set::{Set, Unit};
@@ -64,11 +64,20 @@ pub struct Args {
     dry_run: bool,
 }
 
+/// The sensitivities recall sweeps.
+pub const NAIL_S: &str = "9.0,10.0,12.0";
+pub const MMSEQS_S: &str = "7.5,12.0";
+
+/// How many targets mmseqs' prefilter promotes.
+//
+// its own default is 300, which loses hits nail's seeding keeps
+const MMSEQS_MAX_SEQS: usize = 2000;
+
 pub fn main(args: Args, paths: &crate::Paths) -> anyhow::Result<()> {
     ensure!(
-        args.threads.is_multiple_of(search::HMMER_CPU),
+        args.threads.is_multiple_of(util::search::HMMER_CPU),
         "--threads needs to be a multiple of {} (for hmmer)",
-        search::HMMER_CPU
+        util::search::HMMER_CPU
     );
     ensure!(!args.nail_s.is_empty(), "--nail-s needs at least one value");
     ensure!(
@@ -116,7 +125,7 @@ pub fn main(args: Args, paths: &crate::Paths) -> anyhow::Result<()> {
     let split = Split::new(
         &query_hmm,
         dirs.tmp.join("hmmer-query"),
-        search::jobs(args.threads),
+        util::search::jobs(args.threads),
     );
 
     let mut pl = PipelineBuilder::new().step(dirs.mkdir()).step(split.step(&[]));
@@ -136,7 +145,7 @@ pub fn main(args: Args, paths: &crate::Paths) -> anyhow::Result<()> {
                         .path(scratch.join("targetDB")),
                     |cmd, s| cmd.path(scratch.join(format!("alnDB-s{s:.1}"))),
                 ),
-                search::createdb(&bins.mmseqs, target, &target_db, &shard, args.threads),
+                util::search::createdb(&bins.mmseqs, target, &target_db, &shard, args.threads),
             ])
             .name(format!("prep.{shard}")),
         );
@@ -154,7 +163,7 @@ pub fn main(args: Args, paths: &crate::Paths) -> anyhow::Result<()> {
                     .arg("--tmp-dir", scratch.join(&name))
                     .arg("--mmseqs-s", format!("{s:.1}"))
                     .arg("--seed-mode", SEED_MODE)
-                    .arg("-E", search::EVALUE)
+                    .arg("-E", util::search::EVALUE)
                     .arg("--tbl-out", dirs.table(&name, &shard))
                     .flag("--allow-overwrite")
                     .path(&query_hmm)
@@ -177,7 +186,7 @@ pub fn main(args: Args, paths: &crate::Paths) -> anyhow::Result<()> {
                     .flat_map(|&s| {
                         let name = format!("mmseqs-s{s:.1}-ms{MMSEQS_MAX_SEQS}");
 
-                        let cmds = search::Mmseqs {
+                        let cmds = util::search::Mmseqs {
                             bin: &bins.mmseqs,
                             query_db: &query_db,
                             target_db: &target_db,
@@ -209,7 +218,7 @@ pub fn main(args: Args, paths: &crate::Paths) -> anyhow::Result<()> {
 
         // ---- hmmer
 
-        let hmmer = search::hmmer(&bins.hmmsearch, &split, &dirs, HMMER, &shard, target, &[]);
+        let hmmer = util::search::hmmer(&bins.hmmsearch, &split, &dirs, HMMER, &shard, target, &[]);
         pl = pl.step(hmmer.search).step(hmmer.cat);
 
         // only this shard's scratch: the query splits live on for the shards

@@ -22,8 +22,8 @@ use clap::Parser;
 
 use michi::{Cmd, PipelineBuilder, Progress, Step, Table};
 
-use search::sweeps::SEED_S;
-use search::{self, Bins, Dirs, Split};
+
+use util::search::{Bins, Dirs, SEED_S, Split};
 use util::ledger;
 use util::manifest;
 use util::set::Set;
@@ -38,14 +38,14 @@ const HMMER: &str = "hmmer";
 // is the same for every arm, and it is most of the wall clock
 struct Arm {
     name: String,
-    seeding: search::Seeding<'static>,
+    seeding: util::search::Seeding<'static>,
 }
 
 impl Arm {
     fn static_(max_seqs: usize) -> Arm {
         Arm {
             name: format!("static-ms{max_seqs}"),
-            seeding: search::Seeding {
+            seeding: util::search::Seeding {
                 mmseqs_s: SEED_S,
                 mode: "static",
                 max_seqs: Some(max_seqs),
@@ -58,7 +58,7 @@ impl Arm {
     fn prog(n: usize, f: f64) -> Arm {
         Arm {
             name: format!("prog-n{n}-f{f}"),
-            seeding: search::Seeding {
+            seeding: util::search::Seeding {
                 mmseqs_s: SEED_S,
                 mode: "prog",
                 max_seqs: None,
@@ -121,9 +121,9 @@ pub struct Args {
 
 pub fn main(args: Args, paths: &crate::Paths) -> anyhow::Result<()> {
     ensure!(
-        args.threads.is_multiple_of(search::HMMER_CPU),
+        args.threads.is_multiple_of(util::search::HMMER_CPU),
         "--threads needs to be a multiple of {} (for hmmer)",
-        search::HMMER_CPU
+        util::search::HMMER_CPU
     );
 
     let bins = Bins::find()?;
@@ -178,13 +178,13 @@ pub fn main(args: Args, paths: &crate::Paths) -> anyhow::Result<()> {
         let split = Split::new(
             &query_hmm,
             dirs.tmp.join("hmmer-query").join(&shard),
-            search::jobs(args.threads),
+            util::search::jobs(args.threads),
         );
         pl = pl.step(split.step(&[(manifest::SHARD, shard.clone())]));
 
         for arm in &arms {
             pl = pl.step(
-                search::seed(
+                util::search::seed(
                     &bins.nail,
                     &bins.mmseqs,
                     &query_hmm,
@@ -195,7 +195,7 @@ pub fn main(args: Args, paths: &crate::Paths) -> anyhow::Result<()> {
                     args.threads,
                     &arm.seeding,
                     &[
-                        (manifest::STAGE, search::SEED.to_string()),
+                        (manifest::STAGE, util::search::SEED.to_string()),
                         (manifest::SEEDS, arm.name.clone()),
                     ],
                 )
@@ -203,7 +203,7 @@ pub fn main(args: Args, paths: &crate::Paths) -> anyhow::Result<()> {
             );
         }
 
-        let hmmer = search::hmmer(&bins.hmmsearch, &split, &dirs, HMMER, &shard, &target, &[]);
+        let hmmer = util::search::hmmer(&bins.hmmsearch, &split, &dirs, HMMER, &shard, &target, &[]);
         pl = pl.step(hmmer.search).step(hmmer.cat);
 
         for arm in &arms {

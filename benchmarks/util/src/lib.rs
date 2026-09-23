@@ -36,6 +36,7 @@ pub mod cut;
 pub mod ledger;
 pub mod manifest;
 pub mod paths;
+pub mod search;
 pub mod set;
 pub mod split;
 pub mod tbl;

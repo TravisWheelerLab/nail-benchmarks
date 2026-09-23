@@ -32,7 +32,9 @@ use util::ledger::{self, Ledger};
 
 use super::fit::Model;
 use super::{FILE, Part};
-use search::sweeps::{MMSEQS_S, NAIL_S, SEED_S};
+use util::search::SEED_S;
+
+use crate::run::{MMSEQS_S, NAIL_S};
 
 #[derive(Parser, Debug)]
 pub struct Args {
@@ -83,7 +85,7 @@ pub fn main(args: Args, paths: &crate::Paths) -> anyhow::Result<()> {
         pipeline: args.pipeline.clone(),
         t_res: args.seqs as f64 * args.seq_len,
         shards: args.shards,
-        jobs: search::jobs(args.threads),
+        jobs: util::search::jobs(args.threads),
     };
 
     let steps = plan.steps(&model)?;

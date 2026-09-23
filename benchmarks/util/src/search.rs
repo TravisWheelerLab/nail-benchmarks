@@ -17,37 +17,23 @@ use anyhow::Context;
 
 use michi::{Closure, Cmd, Step};
 
-use util::manifest;
-use util::split::{self, Kind};
+use crate::manifest;
+use crate::split::{self, Kind};
 
-/// What the pipelines here sweep, and what they hold fixed while sweeping it.
-///
-/// These are settings of the comparison rather than of any one pipeline. They
-/// sat on whichever pipeline first needed them, which left `calibrate` reading
-/// three other pipelines' constants to price them, and left cloud-search and
-/// loss-decomp holding a value each had to keep equal to the other by hand.
-pub mod sweeps {
-    /// nail's seeding mode. Every pipeline that seeds uses this one, so a
-    /// seed set from one is the seed set another would have got.
-    pub const SEED_MODE: &str = "prog";
+// the four settings below are held equal across the benchmarks so
+// that their tools compare: a seed set from one pipeline is the
+// seed set another would have got, and a hit one reports is one
+// the others would have reported. what a benchmark sweeps is its
+// own and lives with it
 
-    /// The sensitivity the pipelines that seed once seed at.
-    ///
-    /// Named apart from [`MMSEQS_S`] because it is one setting rather than a
-    /// sweep: cloud-search and loss-decomp seed at this and then vary something
-    /// else. They used to spell it `MMSEQS_S` separately, with a comment on
-    /// each saying it had to match the other.
-    pub const SEED_S: &str = "12.0";
+/// nail's seeding mode, for every pipeline that seeds.
+pub const SEED_MODE: &str = "prog";
 
-    /// The sensitivities recall sweeps, which `calibrate` reads so a cost
-    /// model is fitted at the settings it will be asked to price.
-    pub const NAIL_S: &str = "9.0,10.0,12.0";
-    pub const MMSEQS_S: &str = "7.5,12.0";
-
-    /// mmseqs' own default is 300, which loses hits nail's seeding keeps. 2000
-    /// is what every pipeline here searches at, so the columns stay comparable.
-    pub const MMSEQS_MAX_SEQS: usize = 2000;
-}
+/// The sensitivity the pipelines that seed once seed at.
+//
+// cloud-search and loss-decomp used to spell this `MMSEQS_S` apart, with a
+// comment on each saying it had to match the other
+pub const SEED_S: &str = "12.0";
 
 /// hmmsearch doesn't scale past a couple of threads, so its query gets split
 /// threads/HMMER_CPU ways and the parts run at the same time.
@@ -81,7 +67,7 @@ const CONVERT: &str = "convert";
 /// produced and what it merely needed are never the same tree.
 pub struct Dirs {
     pub root: PathBuf,
-    pub results: PathBuf,
+    results: PathBuf,
     pub tmp: PathBuf,
 }
 
@@ -118,7 +104,7 @@ impl Dirs {
 }
 
 /// There's no shell to expand a glob, so the parts get named one by one.
-pub fn cat(parts: impl IntoIterator<Item = PathBuf>, into: PathBuf) -> Cmd {
+fn cat(parts: impl IntoIterator<Item = PathBuf>, into: PathBuf) -> Cmd {
     parts
         .into_iter()
         .fold(Cmd::new("cat"), |cmd, part| cmd.path(part))
@@ -290,7 +276,7 @@ pub fn hmmer(
 // a standalone run left on 0 would be searching with a
 // different k at every rung of the ladder, and a different
 // one again from the k inside nail
-pub const MMSEQS_K: usize = 6;
+const MMSEQS_K: usize = 6;
 
 /// The stage a seeding belongs to, for the pipelines that record it as one.
 //
@@ -462,9 +448,9 @@ pub struct Bins {
 impl Bins {
     pub fn find() -> anyhow::Result<Bins> {
         Ok(Bins {
-            nail: util::tools::nail().context("nail")?,
-            mmseqs: util::tools::mmseqs().context("mmseqs")?,
-            hmmsearch: util::tools::hmmsearch().context("hmmsearch")?,
+            nail: crate::tools::nail().context("nail")?,
+            mmseqs: crate::tools::mmseqs().context("mmseqs")?,
+            hmmsearch: crate::tools::hmmsearch().context("hmmsearch")?,
         })
     }
 }

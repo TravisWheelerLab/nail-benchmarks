@@ -12,6 +12,5 @@ anyhow = { workspace = true }
 clap = { workspace = true }
 michi = { workspace = true }
 scores = { workspace = true }
-search = { workspace = true }
 serde = { workspace = true }
 util = { workspace = true }

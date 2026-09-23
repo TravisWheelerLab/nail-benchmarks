@@ -22,8 +22,8 @@ use clap::Parser;
 
 use michi::{Cmd, PipelineBuilder, Progress, Step, Table};
 
-use search::sweeps::{SEED_MODE, SEED_S};
-use search::{self, Bins, Dirs, Split};
+
+use util::search::{Bins, Dirs, SEED_MODE, SEED_S, Split};
 use util::ledger;
 use util::manifest;
 use util::set::Set;
@@ -135,9 +135,9 @@ fn cells(alphas: &[f32], betas: &[f32]) -> Vec<Cell> {
 
 pub fn main(args: Args, paths: &crate::Paths) -> anyhow::Result<()> {
     ensure!(
-        args.threads.is_multiple_of(search::HMMER_CPU),
+        args.threads.is_multiple_of(util::search::HMMER_CPU),
         "--threads needs to be a multiple of {} (for hmmer)",
-        search::HMMER_CPU
+        util::search::HMMER_CPU
     );
     ensure!(!args.alpha.is_empty(), "--alpha needs at least one value");
     ensure!(!args.beta.is_empty(), "--beta needs at least one value");
@@ -169,12 +169,12 @@ pub fn main(args: Args, paths: &crate::Paths) -> anyhow::Result<()> {
         let split = Split::new(
             &query_hmm,
             dirs.tmp.join("hmmer-query").join(&shard),
-            search::jobs(args.threads),
+            util::search::jobs(args.threads),
         );
 
         pl = pl
             .step(split.step(&[(manifest::SHARD, shard.clone())]))
-            .step(search::seed(
+            .step(util::search::seed(
                 &bins.nail,
                 &bins.mmseqs,
                 &query_hmm,
@@ -183,14 +183,14 @@ pub fn main(args: Args, paths: &crate::Paths) -> anyhow::Result<()> {
                 &dirs.seeds(SEEDING, &shard),
                 &dirs,
                 args.threads,
-                &search::Seeding::new(SEED_S, SEED_MODE),
+                &util::search::Seeding::new(SEED_S, SEED_MODE),
                 &[
-                    (manifest::STAGE, search::SEED.to_string()),
+                    (manifest::STAGE, util::search::SEED.to_string()),
                     (manifest::SEEDS, SEEDING.to_string()),
                 ],
             ));
 
-        let hmmer = search::hmmer(&bins.hmmsearch, &split, &dirs, HMMER, &shard, &target, &[]);
+        let hmmer = util::search::hmmer(&bins.hmmsearch, &split, &dirs, HMMER, &shard, &target, &[]);
         pl = pl.step(hmmer.search).step(hmmer.cat);
 
         // the cells run in the order the grid gives them, which is ascending, so
@@ -206,7 +206,7 @@ pub fn main(args: Args, paths: &crate::Paths) -> anyhow::Result<()> {
                 .arg("--mmseqs-path", &bins.mmseqs)
                 .arg("-t", args.threads)
                 .arg("--seeds", dirs.seeds(SEEDING, &shard))
-                .arg("-E", search::EVALUE)
+                .arg("-E", util::search::EVALUE)
                 .arg("--tmp-dir", dirs.tmp.join("cell"))
                 .arg("--tbl-out", dirs.table(&label, &shard))
                 .flag("--allow-overwrite")

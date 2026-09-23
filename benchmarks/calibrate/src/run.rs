@@ -23,8 +23,8 @@ use michi::{Cmd, PipelineBuilder, Progress, Sink, Step, Table};
 
 use util::set::Set;
 
-use search::sweeps::{MMSEQS_MAX_SEQS, MMSEQS_S, NAIL_S, SEED_MODE};
-use search::{self, Bins, Dirs, Split};
+
+use util::search::{Bins, Dirs, SEED_MODE, Split};
 use util::ledger;
 use util::manifest;
 
@@ -32,6 +32,14 @@ use super::Part;
 
 /// The field naming which search a run is.
 pub const PART: &str = "part";
+
+/// The sensitivities a cost model is fitted at, which are the ones recall
+/// sweeps.
+pub const NAIL_S: &str = "9.0,10.0,12.0";
+pub const MMSEQS_S: &str = "7.5,12.0";
+
+/// How many targets mmseqs' prefilter promotes.
+const MMSEQS_MAX_SEQS: usize = 2000;
 
 #[derive(Parser, Debug)]
 pub struct Args {
@@ -79,9 +87,9 @@ fn rung_residues(units: &[util::set::Unit<'_>]) -> anyhow::Result<BTreeMap<usize
 
 pub fn main(args: Args, paths: &crate::Paths) -> anyhow::Result<()> {
     ensure!(
-        args.threads.is_multiple_of(search::HMMER_CPU),
+        args.threads.is_multiple_of(util::search::HMMER_CPU),
         "--threads needs to be a multiple of {} (for hmmer)",
-        search::HMMER_CPU
+        util::search::HMMER_CPU
     );
     ensure!(args.reps > 0, "--reps needs to be at least 1");
 
@@ -130,7 +138,7 @@ pub fn main(args: Args, paths: &crate::Paths) -> anyhow::Result<()> {
     let split = Split::new(
         &query_hmm,
         dirs.tmp.join("hmmer-query"),
-        search::jobs(args.threads),
+        util::search::jobs(args.threads),
     );
 
     let scratch = dirs.tmp.join("scratch");
@@ -163,7 +171,7 @@ pub fn main(args: Args, paths: &crate::Paths) -> anyhow::Result<()> {
         ];
 
         if timing(Part::Mmseqs) {
-            prep.push(search::createdb(
+            prep.push(util::search::createdb(
                 &bins.mmseqs,
                 &target_fa,
                 &target_db,
@@ -191,7 +199,7 @@ pub fn main(args: Args, paths: &crate::Paths) -> anyhow::Result<()> {
                 let name = format!("seed-{at}");
                 if timing(Part::Seed) {
                     pl = pl.step(
-                        search::seed(
+                        util::search::seed(
                             &bins.nail,
                             &bins.mmseqs,
                             &query_hmm,
@@ -200,7 +208,7 @@ pub fn main(args: Args, paths: &crate::Paths) -> anyhow::Result<()> {
                             &seeds,
                             &dirs,
                             args.threads,
-                            &search::Seeding::new(s, SEED_MODE),
+                            &util::search::Seeding::new(s, SEED_MODE),
                             &[
                                 (manifest::NAME, name.clone()),
                                 (manifest::TOOL, "nail".to_string()),
@@ -225,7 +233,7 @@ pub fn main(args: Args, paths: &crate::Paths) -> anyhow::Result<()> {
                                 .arg("--mmseqs-path", &bins.mmseqs)
                                 .arg("-t", args.threads)
                                 .arg("--seeds", &seeds)
-                                .arg("-E", search::EVALUE)
+                                .arg("-E", util::search::EVALUE)
                                 .arg("--tmp-dir", scratch.join("align"))
                                 .arg("--tbl-out", dirs.table(&name, &shard))
                                 .flag("--allow-overwrite")
@@ -246,7 +254,7 @@ pub fn main(args: Args, paths: &crate::Paths) -> anyhow::Result<()> {
 
             for s in args.mmseqs_s.iter().filter(|_| timing(Part::Mmseqs)) {
                 let name = format!("mmseqs-s{s}.r{rep}");
-                let cmds = search::Mmseqs {
+                let cmds = util::search::Mmseqs {
                     bin: &bins.mmseqs,
                     query_db: &query_db,
                     target_db: &target_db,
@@ -279,7 +287,7 @@ pub fn main(args: Args, paths: &crate::Paths) -> anyhow::Result<()> {
             }
 
             let name = format!("hmmer.r{rep}");
-            let hmmer = search::hmmer(
+            let hmmer = util::search::hmmer(
                 &bins.hmmsearch,
                 &split,
                 &dirs,
