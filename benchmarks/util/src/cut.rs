@@ -132,9 +132,7 @@ pub fn scatter_sto(
     check_file_names(names)?;
 
     for_each_named(src.as_ref(), names, |rec| {
-        let id = rec
-            .id_str()?
-            .expect("named by the walk that selected it");
+        let id = rec.id_str()?.expect("named by the walk that selected it");
 
         write_one(&dst_dir.join(id).join("query.sto"), |w| {
             rec.write_to(w).map_err(Into::into)

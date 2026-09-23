@@ -310,7 +310,6 @@ impl<R: Read> Frame<R> {
             }
         }
 
-
         // the pair as `query\0target`, which orders as the pair does and costs
         // a copy of thirty bytes rather than two strings
         let (query, target) = (self.spans[0], self.spans[1]);
@@ -339,7 +338,6 @@ impl<R: Read> Frame<R> {
         let (start, end) = self.spans[at];
         &self.buf[start..end]
     }
-
 
     /// One character per run, in the order `#= pass` names them.
     pub fn pass(&self) -> &[u8] {

@@ -283,11 +283,11 @@ fn schema(meta: &Meta) -> Schema {
     // from, so A10.0-B12.0-a1 rules three header lines
     // rather than fourteen columns of padding on every
     // row -- at 164 runs that padding was 46% of the file
-    columns.extend(
-        meta.runs
-            .iter()
-            .map(|run| Column::stacked(run.name.split('-')).fixed(1).min_width(SCORE)),
-    );
+    columns.extend(meta.runs.iter().map(|run| {
+        Column::stacked(run.name.split('-'))
+            .fixed(1)
+            .min_width(SCORE)
+    }));
 
     columns.push(Column::new("inc").min_width(3));
     columns.push(Column::new("dom").ragged());
@@ -515,7 +515,10 @@ gamma MGYP000000000003 .    .      28.0   1   28.0
         let text = file()
             .replace("#= seed once 4.0000\n", "")
             .replace(" seeds=once", "")
-            .replace("gamma MGYP000000000003 .    .", "gamma MGYP000000000003 -    -");
+            .replace(
+                "gamma MGYP000000000003 .    .",
+                "gamma MGYP000000000003 -    -",
+            );
 
         let mut reader = Reader::new(text.as_bytes(), "test").unwrap();
 

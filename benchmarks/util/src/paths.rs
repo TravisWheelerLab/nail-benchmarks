@@ -51,8 +51,8 @@ impl File {
         let text = std::fs::read_to_string(&path)
             .with_context(|| format!("failed to read {}", path.display()))?;
 
-        let labels: toml::Table = toml::from_str(&text)
-            .with_context(|| format!("failed to parse {}", path.display()))?;
+        let labels: toml::Table =
+            toml::from_str(&text).with_context(|| format!("failed to parse {}", path.display()))?;
 
         if labels.is_empty() {
             bail!("{} names no labels", path.display());
@@ -77,7 +77,10 @@ impl File {
             .with_context(|| format!("no label {label:?} in {}", self.path.display()))?;
 
         table.clone().try_into().with_context(|| {
-            format!("failed to read label {label:?} from {}", self.path.display())
+            format!(
+                "failed to read label {label:?} from {}",
+                self.path.display()
+            )
         })
     }
 
@@ -203,7 +206,10 @@ run = \"../sets/mgy-fixed/outputs/recall\"
 
     #[test]
     fn a_key_that_does_not_belong_is_refused() {
-        let dir = file("unknown-key", "[toy]\nset = \"a\"\nrun = \"b\"\nthreads = 8\n");
+        let dir = file(
+            "unknown-key",
+            "[toy]\nset = \"a\"\nrun = \"b\"\nthreads = 8\n",
+        );
         let f = File::open(&dir).unwrap();
 
         let err = f.get::<Paths>("toy").unwrap_err().to_string();
@@ -214,7 +220,10 @@ run = \"../sets/mgy-fixed/outputs/recall\"
 
     #[test]
     fn the_dots_a_relative_path_picks_up_are_folded_away() {
-        assert_eq!(tidy(Path::new("/a/b/../../store/x")), PathBuf::from("/store/x"));
+        assert_eq!(
+            tidy(Path::new("/a/b/../../store/x")),
+            PathBuf::from("/store/x")
+        );
         assert_eq!(tidy(Path::new("/a/./b")), PathBuf::from("/a/b"));
         // nothing above the root to pop, so it stays as written
         assert_eq!(tidy(Path::new("../x")), PathBuf::from("../x"));

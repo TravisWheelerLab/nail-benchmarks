@@ -93,7 +93,8 @@ pub fn binary_of(tool: &str) -> &str {
 pub fn identity(tool: &str) -> anyhow::Result<Identity> {
     let name = binary_of(tool);
     let path = bin()?.join(name);
-    let bytes = std::fs::read(&path).with_context(|| format!("couldn't read {}", path.display()))?;
+    let bytes =
+        std::fs::read(&path).with_context(|| format!("couldn't read {}", path.display()))?;
 
     let digest = <sha2::Sha256 as sha2::Digest>::digest(&bytes);
     let hash: String = digest.iter().take(6).map(|b| format!("{b:02x}")).collect();

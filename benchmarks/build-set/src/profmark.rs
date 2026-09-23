@@ -27,7 +27,6 @@ use rand::rngs::StdRng;
 use rand::seq::{IndexedRandom, SliceRandom};
 use rand::{RngExt, SeedableRng};
 
-
 /// Decoys per true pair in the target database.
 const DECOY_RATIO: usize = 100;
 /// Pairs above this percent identity are discarded; the benchmark targets the
@@ -163,10 +162,10 @@ pub fn build(
                 Step::from_closures([Closure::new("rename", {
                     let at2 = at.clone();
                     move || {
-                    fs::rename(stem.with_extension("train.msa"), at2.split_query())?;
-                    fs::rename(stem.with_extension("test.msa"), at2.split_target())?;
-                    fs::remove_file(stem.with_extension("tbl")).ok();
-                    Ok(())
+                        fs::rename(stem.with_extension("train.msa"), at2.split_query())?;
+                        fs::rename(stem.with_extension("test.msa"), at2.split_target())?;
+                        fs::remove_file(stem.with_extension("tbl")).ok();
+                        Ok(())
                     }
                 })])
                 .name("rename"),
@@ -234,8 +233,8 @@ fn assemble(
     println!("loading alignments...");
     let mut query_sto =
         families(&at.split_query()).context("failed to parse the profmark query split")?;
-    let mut target_sto = families(&at.split_target())
-        .context("failed to parse the profmark target split")?;
+    let mut target_sto =
+        families(&at.split_target()).context("failed to parse the profmark target split")?;
     let src_sto = families(src_sto_path).context("failed to parse source sto")?;
     let src_fa = Fasta::open(src_fa_path).context("failed to parse source fasta")?;
 
@@ -391,9 +390,8 @@ fn assemble(
 
     println!("{} benchmark pairs", pairs.len());
 
-    let mut tbl_writer = BufWriter::new(
-        File::create(at.truth()).context("failed to open truth.tbl")?,
-    );
+    let mut tbl_writer =
+        BufWriter::new(File::create(at.truth()).context("failed to open truth.tbl")?);
     writeln!(tbl_writer, "#identity family target query")?;
 
     let mut targets: Vec<FastaRecord> = Vec::new();

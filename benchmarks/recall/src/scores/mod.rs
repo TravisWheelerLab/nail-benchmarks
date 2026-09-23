@@ -62,8 +62,8 @@
 
 pub mod analyze;
 pub mod collect;
-pub mod parse;
 pub mod frame;
+pub mod parse;
 pub mod read;
 mod scan;
 pub mod shard;
@@ -529,12 +529,7 @@ impl Meta {
             writeln!(out, "#= seed {} {wall:.4}", label(name))?;
         }
 
-        writeln!(
-            out,
-            "#= cutoffs {} c={}",
-            self.cutoffs.display(),
-            self.c
-        )?;
+        writeln!(out, "#= cutoffs {} c={}", self.cutoffs.display(), self.c)?;
 
         for run in &self.runs {
             // written with the settings and read back out of them, so the
@@ -608,7 +603,9 @@ impl Preamble {
             "query" => self.query = Some(size(fields)?),
             "target" => self.targets.push((shard_of(fields)?, size(&fields[1..])?)),
             "seed" => {
-                let wall = fields.get(1).context("a `#= seed` line wants a wall time")?;
+                let wall = fields
+                    .get(1)
+                    .context("a `#= seed` line wants a wall time")?;
                 self.seeds.push((shard_of(fields)?, wall.parse()?));
             }
             "cutoffs" => {

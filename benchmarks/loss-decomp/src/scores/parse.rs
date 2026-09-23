@@ -75,7 +75,6 @@ pub struct ScoresArgs {
     mem: Option<f64>,
 }
 
-
 fn runs(args: ScoresArgs) -> anyhow::Result<()> {
     let set = Inputs::resolve(args, "runs.tbl")?;
 
@@ -203,7 +202,6 @@ pub struct TableArgs {
     out: Option<PathBuf>,
 }
 
-
 fn stages(args: TableArgs) -> anyhow::Result<()> {
     let path = table(&args, &["runs.tbl"])?;
     let out = beside(&path, args.out, "stages.tbl")?;
@@ -227,7 +225,11 @@ fn table(args: &TableArgs, names: &[&str]) -> anyhow::Result<PathBuf> {
 
     let dir = &args.analysis;
 
-    match names.iter().map(|name| dir.join(name)).find(|p| p.is_file()) {
+    match names
+        .iter()
+        .map(|name| dir.join(name))
+        .find(|p| p.is_file())
+    {
         Some(path) => Ok(path),
         None => {
             let wanted: Vec<String> = names
@@ -257,4 +259,3 @@ fn beside(path: &Path, out: Option<PathBuf>, name: &str) -> anyhow::Result<PathB
             .join(name)),
     }
 }
-

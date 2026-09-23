@@ -157,9 +157,9 @@ mod tests {
         assert!(mgyp(b"MGYP999999999999").unwrap() < 1 << 40);
 
         for name in [
-            &b"MGYP00052268347"[..],    // eleven digits
-            b"MGYP0005226834799",       // thirteen
-            b"MGYA000522683479",        // another prefix
+            &b"MGYP00052268347"[..], // eleven digits
+            b"MGYP0005226834799",    // thirteen
+            b"MGYA000522683479",     // another prefix
             b"MGYP00052268347x",
             b"MGYP",
             b"7tm_1",

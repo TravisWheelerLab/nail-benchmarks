@@ -31,8 +31,8 @@ use libsail::tbl::nail::NailTable;
 use util::manifest;
 
 use crate::scores::scan;
-use libsail::lines::Rows as TableRows;
 use crate::scores::{Column, Cutoffs, Queries, Tool};
+use libsail::lines::Rows as TableRows;
 
 /// How many bits of a key the target holds.
 const TID: u32 = 41;
@@ -467,7 +467,11 @@ impl Rows<'_> {
             Some((name, id)) if name == query => *id,
             _ => {
                 let name = std::str::from_utf8(query).with_context(|| {
-                    format!("{}:{} has a query name that is not text", path.display(), line)
+                    format!(
+                        "{}:{} has a query name that is not text",
+                        path.display(),
+                        line
+                    )
                 })?;
 
                 let id = self.queries.id(name).with_context(|| {

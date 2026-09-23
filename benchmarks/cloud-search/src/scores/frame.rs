@@ -347,12 +347,10 @@ impl<R: Read> Frame<R> {
         &self.buf[start..end]
     }
 
-
     /// Which block the current row is in -- the unit it was searched against.
     pub fn shard(&self) -> &str {
         &self.shard
     }
-
 
     /// Whether one run reported this pair at or above its family's cutoff.
     pub fn passed(&self, run: usize) -> bool {

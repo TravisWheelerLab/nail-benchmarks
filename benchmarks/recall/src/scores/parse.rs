@@ -92,7 +92,6 @@ fn scores(args: ScoresArgs) -> anyhow::Result<()> {
     Ok(())
 }
 
-
 /// What both collectors are pointed at, once the defaults are filled in.
 struct Inputs {
     dir: PathBuf,
@@ -214,7 +213,6 @@ fn summary(args: TableArgs) -> anyhow::Result<()> {
     Ok(())
 }
 
-
 /// Where the table an analysis reads is, given either as a path or by
 /// pipeline.
 ///
@@ -228,7 +226,11 @@ fn table(args: &TableArgs, names: &[&str]) -> anyhow::Result<PathBuf> {
 
     let dir = &args.analysis;
 
-    match names.iter().map(|name| dir.join(name)).find(|p| p.is_file()) {
+    match names
+        .iter()
+        .map(|name| dir.join(name))
+        .find(|p| p.is_file())
+    {
         Some(path) => Ok(path),
         None => {
             let wanted: Vec<String> = names
@@ -258,4 +260,3 @@ fn beside(path: &Path, out: Option<PathBuf>, name: &str) -> anyhow::Result<PathB
             .join(name)),
     }
 }
-

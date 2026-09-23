@@ -184,9 +184,6 @@ fn preamble(meta: &crate::scores::Meta, truth: usize, rows: u64) -> String {
     )
 }
 
-
-
-
 fn frac(n: usize, of: usize) -> f64 {
     match of {
         0 => 0.0,

@@ -49,7 +49,11 @@ pub fn collect(args: Args<'_>) -> anyhow::Result<Count> {
     ledger::warn(ran.failed(), "command(s)");
 
     let columns = runs(&ran)?;
-    ensure!(!columns.is_empty(), "no finished runs in {}", args.dir.display());
+    ensure!(
+        !columns.is_empty(),
+        "no finished runs in {}",
+        args.dir.display()
+    );
     ensure!(
         columns.len() <= crate::scores::MAX_RUNS,
         "{} runs, and a pass string holds {}",
@@ -307,11 +311,7 @@ mod tests {
         let results = dir.join("results");
 
         // shard 1: MGnify names, which key as the numbers they carry
-        let (t1, t2, t3) = (
-            "MGYP000000000001",
-            "MGYP000000000002",
-            "MGYP000000000003",
-        );
+        let (t1, t2, t3) = ("MGYP000000000001", "MGYP000000000002", "MGYP000000000003");
 
         write(
             results.join("nail-a.1.tbl"),
@@ -363,15 +363,26 @@ mod tests {
         // shard 2: names that are not MGnify's, which are interned and ranked
         write(
             results.join("nail-a.2.tbl"),
-            &format!("{}{}", nail("gamma", "seqA", 100.0), nail("beta", "seqB", 11.0)),
+            &format!(
+                "{}{}",
+                nail("gamma", "seqA", 100.0),
+                nail("beta", "seqB", 11.0)
+            ),
         );
 
         write(results.join("nail-b.2.tbl"), "");
         write(results.join("mm.2.tbl"), "");
-        write(results.join("hmmer.2.tbl"), &hmmer("gamma", "seqA", 100.0, 2));
+        write(
+            results.join("hmmer.2.tbl"),
+            &hmmer("gamma", "seqA", 100.0, 2),
+        );
         write(
             results.join("hmmer.2.domtbl"),
-            &format!("{}{}", dom("gamma", "seqA", 60.0), dom("gamma", "seqA", 40.0)),
+            &format!(
+                "{}{}",
+                dom("gamma", "seqA", 60.0),
+                dom("gamma", "seqA", 40.0)
+            ),
         );
 
         let rows: Vec<Row> = RUNS

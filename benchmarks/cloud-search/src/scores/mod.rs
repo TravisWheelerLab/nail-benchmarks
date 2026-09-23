@@ -62,8 +62,8 @@
 
 pub mod analyze;
 pub mod collect;
-pub mod parse;
 pub mod frame;
+pub mod parse;
 pub mod runs;
 mod scan;
 pub mod shard;
@@ -88,7 +88,6 @@ pub const FORMAT: &str = "#= format scores 2";
 /// carrying enough of a hit to count as its own.
 pub const SIGNIFICANT: f32 = 0.1;
 
-
 // ---
 
 /// Which program produced a results table, which settles both how to read it
@@ -101,7 +100,6 @@ pub enum Tool {
 }
 
 impl Tool {
-
     pub fn parse(name: &str) -> anyhow::Result<Tool> {
         match name {
             "nail" => Ok(Tool::Nail),
@@ -119,8 +117,6 @@ impl Tool {
             Tool::Hmmer => b'h',
         }
     }
-
-
 }
 
 impl fmt::Display for Tool {
@@ -234,7 +230,6 @@ pub fn runs(ran: &Ledger) -> anyhow::Result<Vec<Column>> {
         })
         .collect()
 }
-
 
 // -------------------------------------------------------------------- query
 
@@ -411,7 +406,8 @@ impl Named {
         })?;
 
         ensure!(
-            out.values().any(|(nail, mmseqs)| nail.is_some() || mmseqs.is_some()),
+            out.values()
+                .any(|(nail, mmseqs)| nail.is_some() || mmseqs.is_some()),
             "no usable cutoffs at index {c} in {}",
             path.display()
         );
@@ -526,12 +522,7 @@ impl Meta {
             writeln!(out, "#= seed {} {wall:.4}", label(name))?;
         }
 
-        writeln!(
-            out,
-            "#= cutoffs {} c={}",
-            self.cutoffs.display(),
-            self.c
-        )?;
+        writeln!(out, "#= cutoffs {} c={}", self.cutoffs.display(), self.c)?;
 
         for run in &self.runs {
             // written with the settings and read back out of them, so the
@@ -578,7 +569,6 @@ impl Meta {
 
         Ok(i)
     }
-
 }
 
 /// A [`Meta`] as its lines arrive, since a reader meets them one at a time.
@@ -601,7 +591,9 @@ impl Preamble {
             "query" => self.query = Some(size(fields)?),
             "target" => self.targets.push((shard_of(fields)?, size(&fields[1..])?)),
             "seed" => {
-                let wall = fields.get(1).context("a `#= seed` line wants a wall time")?;
+                let wall = fields
+                    .get(1)
+                    .context("a `#= seed` line wants a wall time")?;
                 self.seeds.push((shard_of(fields)?, wall.parse()?));
             }
             "cutoffs" => {

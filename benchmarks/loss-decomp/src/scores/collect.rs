@@ -280,13 +280,15 @@ pub fn ram() -> u64 {
     const FALLBACK: u64 = 8 << 30;
 
     #[cfg(target_os = "linux")]
-    let total = std::fs::read_to_string("/proc/meminfo").ok().and_then(|text| {
-        text.lines()
-            .find_map(|line| line.strip_prefix("MemTotal:"))
-            .and_then(|rest| rest.split_whitespace().next())
-            .and_then(|kb| kb.parse::<u64>().ok())
-            .map(|kb| kb * 1024)
-    });
+    let total = std::fs::read_to_string("/proc/meminfo")
+        .ok()
+        .and_then(|text| {
+            text.lines()
+                .find_map(|line| line.strip_prefix("MemTotal:"))
+                .and_then(|rest| rest.split_whitespace().next())
+                .and_then(|kb| kb.parse::<u64>().ok())
+                .map(|kb| kb * 1024)
+        });
 
     #[cfg(target_os = "macos")]
     let total = std::process::Command::new("sysctl")

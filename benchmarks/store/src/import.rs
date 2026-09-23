@@ -24,11 +24,10 @@ use std::path::{Path, PathBuf};
 use anyhow::{Context, bail, ensure};
 use clap::Parser;
 
-use util::set::Set;
 use util::ledger;
 use util::manifest;
+use util::set::Set;
 use util::time::{self, Timing};
-
 
 /// The tools a name can identify itself as, which is what says how to read the
 /// table.

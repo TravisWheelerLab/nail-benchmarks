@@ -51,7 +51,10 @@ pub fn main(args: Args) -> anyhow::Result<()> {
     let file = util::paths::File::open(dir)?;
 
     let Some(label) = args.label else {
-        println!("{}", file.listing("store clean --paths <paths.toml> --in <label>"));
+        println!(
+            "{}",
+            file.listing("store clean --paths <paths.toml> --in <label>")
+        );
         return Ok(());
     };
 
@@ -71,5 +74,8 @@ pub fn main(args: Args) -> anyhow::Result<()> {
         (false, _) => {}
     }
 
-    util::clean::run(file.path().parent().unwrap_or(std::path::Path::new(".")), &targets)
+    util::clean::run(
+        file.path().parent().unwrap_or(std::path::Path::new(".")),
+        &targets,
+    )
 }

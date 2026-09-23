@@ -718,6 +718,15 @@ manifest's `query_fa` column is for, and its shape is `pairs`: one query
 against one target, with the two sources separate directories so a sequence is
 never on both sides.
 
+## Formatting
+
+rustfmt is the standard here. Run `cargo fmt --all` and commit what it does.
+
+A file it reformats is a file that was committed unformatted, so the churn is
+a fix rather than noise, and keeping it out of a commit to make that commit
+read better only leaves the next person to do it. There is no house style that
+overrides it and no file exempt from it.
+
 ## Testing behaviour: work in your own copy
 
 This working tree belongs to whoever is at the keyboard. A pipeline writes into

@@ -51,7 +51,9 @@ pub fn write_splits(
         Kind::Hmm => {
             let c = IndexedHmm::open(path).with_context(opened)?;
             ensure!(!c.is_empty(), empty());
-            deal(c, n, out_dir, kind.extension(), |rec| rec.header.leng as u64)
+            deal(c, n, out_dir, kind.extension(), |rec| {
+                rec.header.leng as u64
+            })
         }
         Kind::Fasta => {
             let c = IndexedFasta::open(path).with_context(opened)?;
@@ -89,8 +91,8 @@ where
 
     for part in c.split_weighted(n, weight).iter().filter(|p| !p.is_empty()) {
         let path = out_dir.join(format!("{}.{ext}", written.len()));
-        let file = File::create(&path)
-            .with_context(|| format!("failed to create {}", path.display()))?;
+        let file =
+            File::create(&path).with_context(|| format!("failed to create {}", path.display()))?;
 
         let mut w = BufWriter::new(file);
         for rec in part.iter() {
@@ -134,7 +136,10 @@ mod tests {
 
     #[test]
     fn weighs_a_profile_by_its_model_length() {
-        let path = tmp("a.hmm", &format!("{}{}", profile("one", 3), profile("two", 7)));
+        let path = tmp(
+            "a.hmm",
+            &format!("{}{}", profile("one", 3), profile("two", 7)),
+        );
         let c = IndexedHmm::open(&path).unwrap();
 
         let lengs: Vec<usize> = c.iter().map(|r| r.header.leng).collect();

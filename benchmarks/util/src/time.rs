@@ -135,9 +135,7 @@ impl Found {
             "Percent of CPU this job got" => {
                 push(&mut self.cpu, value.trim_end_matches('%').parse().ok())
             }
-            "Maximum resident set size (kbytes)" => {
-                push(&mut self.max_rss, value.parse().ok())
-            }
+            "Maximum resident set size (kbytes)" => push(&mut self.max_rss, value.parse().ok()),
             "Exit status" => push(&mut self.exit, value.parse().ok()),
             _ => {}
         }
@@ -149,8 +147,7 @@ impl Found {
     /// written, which [`duration`] settles.
     fn labelled(&mut self, line: &str) {
         let mut fields = line.split_whitespace();
-        let (Some(label), Some(value), None) = (fields.next(), fields.next(), fields.next())
-        else {
+        let (Some(label), Some(value), None) = (fields.next(), fields.next(), fields.next()) else {
             return;
         };
 
@@ -180,7 +177,10 @@ impl Found {
         if let [value, rest @ ..] = &fields[..]
             && rest.join(" ") == "maximum resident set size"
         {
-            push(&mut self.max_rss, value.parse::<u64>().ok().map(|b| b / 1024));
+            push(
+                &mut self.max_rss,
+                value.parse::<u64>().ok().map(|b| b / 1024),
+            );
             return;
         }
 

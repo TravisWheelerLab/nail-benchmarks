@@ -14,9 +14,8 @@ use anyhow::ensure;
 
 use util::tbl;
 
-use crate::scores::runs::Reader as Runs;
 use crate::scores::Tool;
-
+use crate::scores::runs::Reader as Runs;
 
 /// What was searched, what the fractions are fractions of, and the two times
 /// the figures use as reference lines.

@@ -398,8 +398,7 @@ fn tool_meta(meta: &[String]) -> Vec<tools::Identity> {
             continue;
         }
 
-        let (Some(name), Some(version), Some(hash)) =
-            (fields.next(), fields.next(), fields.next())
+        let (Some(name), Some(version), Some(hash)) = (fields.next(), fields.next(), fields.next())
         else {
             continue;
         };
