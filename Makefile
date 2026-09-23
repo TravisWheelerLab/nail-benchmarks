@@ -53,6 +53,10 @@ SWISSPROT_DIR := $(DATA_DIR)/uniprot_sprot/
 SWISSPROT_FA_GZ := $(SWISSPROT_DIR)/uniprot_sprot.fasta.gz 
 SWISSPROT_FA := $(DATA_DIR)/swissprot.fa
 
+TREMBL_URL := https://ftp.uniprot.org/pub/databases/uniprot/current_release/knowledgebase/complete/uniprot_trembl.fasta.gz
+TREMBL_FA_GZ := $(DATA_DIR)/trembl.fa.gz
+TREMBL_FA := $(DATA_DIR)/trembl.fa
+
 MGY_URL = https://ftp.ebi.ac.uk/pub/databases/metagenomics/peptide_database/2024_04
 MGY_DIR = $(DATA_DIR)/mgnify
 MGY_SHARDS = 25
@@ -75,6 +79,16 @@ $(SWISSPROT_FA): | $(DATA_DIR)
 	@rm -rf $(SWISSPROT_TGZ)
 	@rm -rf $(SWISSPROT_DIR)
 
+$(TREMBL_FA): | $(DATA_DIR)
+	@set -e; \
+	if command -v aria2c >/dev/null 2>&1; then \
+	  aria2c -x8 -s8 -d $(DATA_DIR) -o trembl.fa.gz $(TREMBL_URL); \
+	else \
+	  wget -O $(TREMBL_FA_GZ) $(TREMBL_URL); \
+	fi
+	@gunzip -c $(TREMBL_FA_GZ) > $(TREMBL_FA)
+	@rm -f $(TREMBL_FA_GZ)
+
 $(PFAM_STO): | $(DATA_DIR)
 	@wget -O $(PFAM_GZ) $(PFAM_URL)
 	@gunzip $(PFAM_GZ)
@@ -85,12 +99,14 @@ $(PFAM_HMM): $(PFAM_STO)
 	$(call need_tool,$(HMMBUILD),hmmer)
 	$(HMMBUILD) --cpu $(HMMBUILD_CPU) $@ $(PFAM_STO)
 
-.PHONY: pfam pfam-hmm swissprot mgnify
+.PHONY: pfam pfam-hmm swissprot trembl mgnify
 pfam: $(PFAM_STO)
 
 pfam-hmm: $(PFAM_HMM)
 
 swissprot: $(SWISSPROT_FA)
+
+trembl: $(TREMBL_FA)
 
 mgnify: | $(MGY_DIR)
 	@set -e; \
