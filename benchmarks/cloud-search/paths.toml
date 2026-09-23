@@ -6,26 +6,15 @@
 # figures/<set>/ at the root where they can be found together.
 
 [toy]
-set      = "../../store/cloud-search-toy/inputs"
-run      = "../../store/cloud-search-toy/outputs"
-analysis = "../../store/cloud-search-toy/analysis"
-figures  = "../../figures/cloud-search-toy"
-tmp      = "../../store/cloud-search-toy/tmp"
+set      = "../../sets-toy/cloud-search/inputs"
+run      = "../../sets-toy/cloud-search/outputs"
+analysis = "../../sets-toy/cloud-search/analysis"
+figures  = "../../figures-toy"
+tmp      = "../../sets-toy/cloud-search/tmp"
 
 [real]
-set      = "../../store/cloud-search-real/inputs"
-run      = "../../store/cloud-search-real/outputs"
-analysis = "../../store/cloud-search-real/analysis"
-figures  = "../../figures/cloud-search-real"
-tmp      = "../../store/cloud-search-real/tmp"
-
-# The same sweep over a profmark split instead of MGnify shards, which is what
-# says whether the (A, B) surface moves with the type of the search rather than
-# its size. pid built the set; this reads it, and writes into a directory of
-# its own beside pid's own run.
-[pid-toy]
-set      = "../../store/pid-toy/inputs"
-run      = "../../store/pid-toy/outputs/cloud-search"
-analysis = "../../store/pid-toy/analysis/cloud-search"
-figures  = "../../figures/pid-toy-cloud-search"
-tmp      = "../../store/pid-toy/tmp/cloud-search"
+set      = "../../sets/cloud-search/inputs"
+run      = "../../sets/cloud-search/outputs"
+analysis = "../../sets/cloud-search/analysis"
+figures  = "../../figures"
+tmp      = "../../sets/cloud-search/tmp"

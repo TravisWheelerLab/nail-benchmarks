@@ -5,8 +5,8 @@ search tool, against the tools it is compared to: HMMER, MMseqs2, BLAST, LAST
 and DIAMOND.
 
 A Cargo workspace at the repo root. Binaries are the interface. There is one
-per benchmark, and what each of them builds, runs and works out goes in the
-store.
+per benchmark, and what each of them builds, runs and works out goes under
+`sets/`.
 
 Each binary has a shim beside its `Cargo.toml`, named after it, so the
 `recall run` and `pid parse` spellings used throughout this file are what you
@@ -40,15 +40,13 @@ second rather than a twentieth.
 Makefile                  downloads data, builds tools, nothing else
 data/                     what the Makefile downloaded
 tools/bin/                what the Makefile built
-store/                    what a build, a run or an analysis produced
+sets/                     what a build, a run or an analysis produced
+sets-toy/                 the same, for the toy of each
 benchmarks/shim           the build-and-run shim every binary links to
 
-benchmarks/util/          set, store, ledger, tbl, tools, split, cut, ...
-benchmarks/search/        the tool command builders every pipeline composes
-benchmarks/scores/        the pair tables, the analyses, and parse
+benchmarks/util/          set, search, ledger, tbl, tools, split, cut, ...
 
 benchmarks/build-set/     cuts sources into a set: fixed | cross | ladder | pairs
-benchmarks/store/         what can be done to the store: import | clean
 
 benchmarks/recall/        recall against prefilter sensitivity   [fixed]
 benchmarks/cloud-search/  the (A, B) pruning surface             [fixed]
@@ -59,14 +57,14 @@ benchmarks/long-seqs/     how the tools scale with length         [pairs]
 benchmarks/pid/           recall against percent identity          [profmark]
 ```
 
-One binary per benchmark, and the shape in brackets is the set it reads. Three
-libraries sit under them, and two binaries that belong to no benchmark:
-`build-set` makes the sets, `store` handles what a run left behind.
+One binary per benchmark, and the shape in brackets is the set it reads. One
+library sits under them, and one binary that belongs to no benchmark:
+`build-set` makes the sets.
 
 `benchmarks/mgy/` is empty. It held the `inputs/` and `outputs/` trees the old
-`mgy` crate wrote before the store existed, and those moved into the store on
+`mgy` crate wrote before the sets tree existed, and those moved into it on
 16 September 2026 -- see the warning under **What is tracked**, which is the
-one thing in this file to read before running anything near `store/`.
+one thing in this file to read before running anything near `sets/`.
 
 ### How much of the libraries is actually shared
 
@@ -166,7 +164,7 @@ searched against is the directory it sits in. The figures are the exception,
 and the reason is below:
 
 ```
-store/<set>/
+sets/<benchmark>/
 ├── inputs/
 │   ├── set.tbl                  one row per search unit, and what it is made of
 │   └── ...                      the queries and targets it names
@@ -177,7 +175,7 @@ store/<set>/
 ├── analysis/                    what parse worked out
 └── tmp/                         scratch, and nothing worth keeping
 
-figures/<set>/                   the pdfs, outside the store
+figures/                         the pdfs, outside the set
 ```
 
 A benchmark that runs in one pass writes straight into `outputs/`. cutoffs
@@ -186,10 +184,16 @@ because each of those is a pipeline of its own with its own manifest and its
 own results. So the level, where it exists, is a stage rather than a repeat of
 the benchmark's name.
 
-The figures are the one thing that leaves the store. A pdf is read by a person
-rather than by another pipeline, so digging five levels down to find one is
-cost with nothing on the other side of it. They go to `figures/<set>/` at the
-root, keeping the set name so a toy figure and a real one are told apart.
+The figures are the one thing that does not live with the set. A pdf is read
+by a person rather than by another pipeline, so digging five levels down to
+find one is cost with nothing on the other side of it. They go to `figures/`
+at the root, flat, named for what they draw.
+
+A toy is a whole tree of its own rather than a suffix: `sets-toy/recall/`
+beside `sets/recall/`, and `figures-toy/` beside `figures/`. That is what lets
+the set directories and the figure names drop the `-toy` and `-real` they used
+to carry, and what keeps a toy figure from overwriting the real one it is
+named the same as.
 
 Nothing in the code knows that layout. It is what the `paths.toml` files happen
 to say, and moving a set to a scratch disk is editing a line rather than
@@ -201,11 +205,11 @@ can go at any time without touching it. The search pipelines still
 take `--tmp` to put their own scratch somewhere else, a scratch disk being the
 usual reason; `build` and `cutoffs` have no such flag and never had one.
 
-`store clean --paths <crate>/paths.toml --in <label>` removes what that label
-names as produced -- the run, the analysis and the scratch -- after printing how
-many files and how many bytes are about to go and waiting for a `y`. The set
-goes only with `--all`, since a build is expensive. Never point it at recall's
-`real` label: see **What is tracked**.
+Nothing here removes a run. `build-set --rebuild` takes a set back, printing
+how many files and how many bytes are about to go and waiting for a `y`, and
+what a run left is removed by hand. There used to be a `store clean` that did
+the second; git has it. Never point any of this at recall's `real` label: see
+**What is tracked**.
 
 ### set.tbl, and why it looks like ledger.tbl
 
@@ -310,11 +314,11 @@ one table per label:
 
 ```toml
 [toy]
-set      = "../../store/toy/inputs"
-run      = "../../store/toy/outputs"
-analysis = "../../store/toy/analysis"
-figures  = "../../figures/toy"
-tmp      = "../../store/toy/tmp"
+set      = "../../sets-toy/recall/inputs"
+run      = "../../sets-toy/recall/outputs"
+analysis = "../../sets-toy/recall/analysis"
+figures  = "../../figures-toy"
+tmp      = "../../sets-toy/recall/tmp"
 ```
 
 A label is a whole set of paths under one name, so a toy run and a real run
@@ -368,10 +372,11 @@ reading the ledger of the run before it and reporting numbers for results that
 have since been overwritten.
 
 Results that came back from a cluster have no manifest and cannot have one,
-since nothing here ran those commands and an exit code or an argv would have to
-be invented. They arrive with `.time` files beside the tables, and
-`store import` reads those. It is the only command that writes a ledger by
-hand.
+since nothing here ran those commands and an exit code or an argv would have
+to be invented. They arrive with `.time` files beside the tables, and a
+`store import` used to read those into a ledger. It was the only thing that
+wrote a ledger by hand, and `sets/recall/outputs/ledger.tbl` is what it wrote.
+The crate is deleted; restore it from git when a cluster run next lands.
 
 ## benchmarks/util
 
@@ -398,13 +403,11 @@ hand.
 - `split` cuts a query set into balanced parts for a batch of jobs.
 - `nail` reads the one column of nail's table that `libsail`'s layout does not
   carry.
-- `time` reads the `.time` file of a run made outside the harness, in any of
-  the six formats a `time` command might have written.
 
 ## The Pfam-against-MGnify benchmarks
 
 Pfam profiles against MGnify metagenomic sequences, and the largest sets here
-by a long way. `build-set` cuts the sources into a set under `store/`:
+by a long way. `build-set` cuts the sources into a set under `sets/`:
 `fixed` is one query set against target shards of equal size, `ladder` is
 nested rungs on both axes, each a prefix of the one above. Each writes a
 `set.tbl`, and every pipeline here takes `--in <label>` to say which one to
@@ -674,17 +677,11 @@ sequential sampler and `build-set` deals through it, so a full reversed MGnify
 set is buildable rather than blocked. What it costs in practice has not been
 timed.
 
-`store import` writes a `ledger.tbl` for result tables produced elsewhere, out of
-the `.time` files that came back with them, which turns a search run on a
-cluster into an ordinary run directory in the store. It takes `--set` so it can
-check the shards it was handed against the ones the build made.
-`benchmarks/store/scripts/rename-old-results.sh` renames the older harness's
-files into the names it expects.
-
-One dev tool sits beside all of that and belongs to no pipeline.
-`benchmarks/scores/scripts/compare-scores.py` reduces a `scores.tbl` and one in
-the older shape to the same sets of pairs, tool scores and pass flags, and says
-where they differ.
+Two things that were here are not any more, and git has both. `store import`
+turned a cluster run into an ordinary run directory, reading the `.time` files
+that came back with the tables, with a `rename-old-results.sh` beside it for
+the older harness's filenames. `compare-scores.py` held a `scores.tbl` against
+one in the older shape and said where they differed.
 
 ## benchmarks/pid
 
@@ -730,7 +727,7 @@ overrides it and no file exempt from it.
 ## Testing behaviour: work in your own copy
 
 This working tree belongs to whoever is at the keyboard. A pipeline writes into
-`store/`, a `build` subcommand writes a set there, and when two people write
+`sets/`, a `build` subcommand writes a set there, and when two people write
 there at once neither can tell which results are theirs. So run nothing here.
 Copy the source into `tmp-claude/sandbox/`, link the expensive directories, and
 work in the copy.
@@ -742,7 +739,7 @@ SB=$ROOT/tmp-claude/sandbox
 rsync -a --delete \
   --exclude '.git/' --exclude 'target/' --exclude 'tmp-claude/' \
   --exclude '/data' --exclude '/tools' --exclude '/benchmarks/pid/profmark' \
-  --exclude '/store' \
+  --exclude '/sets' --exclude '/sets-toy' \
   --exclude 'outputs/' --exclude 'tmp/' \
   --exclude '/benchmarks/mgy/inputs/' --exclude '/benchmarks/pid/inputs/' \
   "$ROOT/" "$SB/"
@@ -758,17 +755,17 @@ ln -sfn "$(dirname "$ROOT")/tabl" "$ROOT/tmp-claude/tabl"
 Run that before testing anything, and again after every edit: a copy goes
 stale, and a result from stale source is worth nothing. `--delete` is what
 keeps it current, and it drops what was deleted from the source without
-touching the sandbox's own `store/`, `target/`, pid `inputs/` or links, since
+touching the sandbox's own `sets/`, `target/`, pid `inputs/` or links, since
 rsync leaves excluded paths on the receiving side alone. The link paths and
-`/store` are excluded without a trailing slash on purpose: a pattern ending in
+`/sets` are excluded without a trailing slash on purpose: a pattern ending in
 `/` matches only a directory, and on the receiving side three of these are
 symlinks, so `--delete` removes them. It copies uncommitted edits, which is the
 point: what wants testing is usually not committed yet.
 
-The sandbox gets its own `store/`, which is what makes a build or a run in the
+The sandbox gets its own `sets/`, which is what makes a build or a run in the
 copy safe: `util::tools::repo()` resolves from `util`'s own
 `CARGO_MANIFEST_DIR`, so a build inside the copy resolves the copy's root and
-writes the copy's store.
+writes the copy's sets.
 
 Then run inside `$SB`, through its own shims. Every binary links to the same
 `benchmarks/shim`, which builds the crate the link is named after and runs what
@@ -776,7 +773,7 @@ it built: `benchmarks/recall/recall run --in toy`, and so on. Every path these
 crates resolve comes from a `CARGO_MANIFEST_DIR` (`util/src/tools.rs:18` for
 the repo root, and pid's own for its tree), so a build in the sandbox reads the
 sandbox's `data/` and
-`tools/` links and writes the sandbox's `store/`. Re-syncing an
+`tools/` links and writes the sandbox's `sets/`. Re-syncing an
 existing copy is near instant, and the build from cold takes about fifteen
 seconds.
 
@@ -787,13 +784,13 @@ reads all three; nothing in it should write them, so do not run `make data` or
 built from wherever that link points, so an edit to it reaches the sandbox
 without a sync.
 
-`/store` and pid's `inputs/` are excluded for the same reason: a build writes
+`/sets` and pid's `inputs/` are excluded for the same reason: a build writes
 them and nothing commits them, so the copy builds its own. Without the exclude,
 `--delete` removes the set a `build-set` in the sandbox just wrote, since the
 real tree has nothing there to match it. long-seqs' set is checked in under
 `data/long-seqs/`, which is a link, so the copy reads the real one.
 
-`/store` is the exclude that matters most, and dropping it is expensive rather
+`/sets` is the exclude that matters most, and dropping it is expensive rather
 than wrong: a checkout that has the mgy results holds about 3.5 TB there, and
 rsync will copy every byte of it into the sandbox. That has happened once
 already, from dropping a single exclude line, and it took the home filesystem
@@ -805,22 +802,22 @@ same way.
 
 Edit in the real tree and re-sync, never in the sandbox: an edit in the copy is
 gone at the next sync. To check an analysis against a run that finished
-elsewhere, copy that run's `store/runs/<run>/` into the sandbox and parse it
+elsewhere, copy that run's `sets/<benchmark>/outputs/` into the sandbox and parse it
 there.
 
 ## What is tracked
 
 The downloads under `data/` and the builds under `tools/bin/` are not, and
-neither is anything under `store/`: a set, a run and an analysis are usually
+neither is anything under `sets/` or `sets-toy/`: a set, a run and an analysis are usually
 things this repository can make again.
 
-**`store/recall-real/` is the exception, and it is not backed up by being
+**`sets/recall/` is the exception, and it is not backed up by being
 reproducible.** It holds about 3.5 TB of results searched on a cluster -- the
 hmmer set alone is 1000 shards representing some 21,926 hours of wall clock --
-and nothing here can produce them again. It is ignored by git like the rest of
-the store, so the only thing protecting it is that nobody deletes it. Read it,
-never write it, and never point `store clean`, an `rsync --delete` or a
-`build-set --rebuild` at that label. Its `set.tbl` was reconstructed from the
+and nothing here can produce them again. Git ignores it like every other set,
+so the only thing protecting it is that nobody deletes it. Read it,
+never write it, and never point an `rsync --delete` or a `build-set --rebuild`
+at that label. Its `set.tbl` was reconstructed from the
 shard sizes the old harness left, and says so in its `#= imported` line: the
 deal predates `set.tbl`, so the set cannot be rebuilt from its own manifest
 either.

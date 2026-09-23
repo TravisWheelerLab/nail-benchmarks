@@ -1,7 +1,7 @@
 //! Cuts a query source and a target source into a set the benchmarks can
 //! search.
 //!
-//! A build produces one directory under `store/`, holding the files and a
+//! A build produces one directory under `sets/`, holding the files and a
 //! `set.tbl` describing them. Nothing downstream reads the directory layout:
 //! a pipeline loads the manifest and gets the query, the target and whatever
 //! the recipe wrote down about each unit, so a search does not learn which of

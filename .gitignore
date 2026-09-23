@@ -13,16 +13,18 @@
 # matters, or this also swallows the benchmarks/ source tree.
 **/benchmark-*/
 **/benchmark/
-# everything mgy and long-seqs build, run or work out goes in one tree at the
-# root, so one line covers the sets, the runs, the analyses and the scratch.
+# everything a benchmark builds, runs or works out goes in one tree per set,
+# so two lines cover the sets, the runs, the analyses and the scratch.
 # long-seqs' set ships with the repo rather than being built, so it sits under
 # data/ and is tracked like the pairs it describes
-/store/
-# the figures are the one thing a benchmark makes that does not go in the
-# store: a pdf is read by a person rather than by another pipeline, so it sits
-# one level under the root where all of them can be found together
+/sets/
+/sets-toy/
+# the figures are the one thing a benchmark makes that does not go in with
+# its set: a pdf is read by a person rather than by another pipeline, so they
+# sit at the root where all of them can be found together
 /figures/
-# pid still keeps its own, since it has not moved to the store
+/figures-toy/
+# pid still keeps its own, since it has not moved in with the sets
 /benchmarks/pid/inputs/
 /benchmarks/pid/outputs/
 # what the mgy crate wrote before the store. that crate is gone and nothing

@@ -4,15 +4,15 @@
 # actually reads. A set and everything derived from it share a directory.
 
 [toy]
-set      = "../../store/loss-decomp-toy/inputs"
-run      = "../../store/loss-decomp-toy/outputs"
-analysis = "../../store/loss-decomp-toy/analysis"
-figures  = "../../figures/loss-decomp-toy"
-tmp      = "../../store/loss-decomp-toy/tmp"
+set      = "../../sets-toy/loss-decomp/inputs"
+run      = "../../sets-toy/loss-decomp/outputs"
+analysis = "../../sets-toy/loss-decomp/analysis"
+figures  = "../../figures-toy"
+tmp      = "../../sets-toy/loss-decomp/tmp"
 
 [real]
-set      = "../../store/loss-decomp-real/inputs"
-run      = "../../store/loss-decomp-real/outputs"
-analysis = "../../store/loss-decomp-real/analysis"
-figures  = "../../figures/loss-decomp-real"
-tmp      = "../../store/loss-decomp-real/tmp"
+set      = "../../sets/loss-decomp/inputs"
+run      = "../../sets/loss-decomp/outputs"
+analysis = "../../sets/loss-decomp/analysis"
+figures  = "../../figures"
+tmp      = "../../sets/loss-decomp/tmp"

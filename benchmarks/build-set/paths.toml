@@ -19,7 +19,7 @@ shape      = "fixed"
 queries    = "../../data/pfam.hmm"
 alignments = "../../data/pfam.sto"
 targets    = "../../data/mgnify"
-out        = "../../store/recall-toy/inputs"
+out        = "../../sets-toy/recall/inputs"
 shards     = 2
 seqs       = 400
 fams       = 5
@@ -29,7 +29,7 @@ shape      = "fixed"
 queries    = "../../data/pfam.hmm"
 alignments = "../../data/pfam.sto"
 targets    = "../../data/mgnify"
-out        = "../../store/recall-real/inputs"
+out        = "../../sets/recall/inputs"
 shards     = 1000
 
 # ------------------------------------------------- cloud-search and loss-decomp
@@ -41,7 +41,7 @@ shards     = 1000
 # than a cost that reads directly against a recall column.
 [cloud-search-toy]
 shape = "cross"
-out   = "../../store/cloud-search-toy/inputs"
+out   = "../../sets-toy/cloud-search/inputs"
 
 [[cloud-search-toy.queries]]
 name       = "pfam"
@@ -65,7 +65,7 @@ seqs = 50000
 # be read against each other, so the smaller source sets it.
 [cloud-search-real]
 shape = "cross"
-out   = "../../store/cloud-search-real/inputs"
+out   = "../../sets/cloud-search/inputs"
 
 [[cloud-search-real.queries]]
 name       = "pfam"
@@ -84,7 +84,7 @@ seqs = 500000
 
 [loss-decomp-toy]
 shape = "cross"
-out   = "../../store/loss-decomp-toy/inputs"
+out   = "../../sets-toy/loss-decomp/inputs"
 
 [[loss-decomp-toy.queries]]
 name       = "pfam"
@@ -107,7 +107,7 @@ seqs = 50000
 # same size, and the two benchmarks' answers can be read side by side.
 [loss-decomp-real]
 shape = "cross"
-out   = "../../store/loss-decomp-real/inputs"
+out   = "../../sets/loss-decomp/inputs"
 
 [[loss-decomp-real.queries]]
 name       = "pfam"
@@ -136,7 +136,7 @@ shape      = "fixed"
 queries    = "../../data/pfam.hmm"
 alignments = "../../data/pfam.sto"
 targets    = "../../data/mgnify"
-out        = "../../store/cutoffs-toy/inputs"
+out        = "../../sets-toy/cutoffs/inputs"
 shards     = 2
 seqs       = 400
 fams       = 5
@@ -147,32 +147,14 @@ shape      = "fixed"
 queries    = "../../data/pfam.hmm"
 alignments = "../../data/pfam.sto"
 targets    = "../../data/mgnify"
-out        = "../../store/cutoffs-real/inputs"
+out        = "../../sets/cutoffs/inputs"
 shards     = 1000
 reversed   = true
 
 # ---------------------------------------------------------------- calibrate
-
-# One query rung and only one: calibrate holds the query at all of Pfam and
-# moves the target, so a ladder with two would be refused. The target rungs
-# double from 1,000 to 128,000, with a rung of one sequence at the bottom to
-# measure the fixed cost on its own.
-[calibrate-toy]
-shape        = "ladder"
-queries      = "../../data/pfam.hmm"
-alignments   = "../../data/pfam.sto"
-targets      = "../../data/mgnify"
-out          = "../../store/calibrate-toy/inputs"
-query-rungs  = [5]
+[5]
 target-rungs = [1, 100, 200, 400]
-
-[calibrate-real]
-shape        = "ladder"
-queries      = "../../data/pfam.hmm"
-alignments   = "../../data/pfam.sto"
-targets      = "../../data/mgnify"
-out          = "../../store/calibrate-real/inputs"
-query-rungs  = [20795]
+[20795]
 target-rungs = [1, 1000, 2000, 4000, 8000, 16000, 32000, 64000, 128000]
 
 # ---------------------------------------------------------------- long-seqs
@@ -185,14 +167,14 @@ target-rungs = [1, 1000, 2000, 4000, 8000, 16000, 32000, 64000, 128000]
 shape   = "pairs"
 queries = "../../data/long-seqs/query"
 targets = "../../data/long-seqs/target"
-out     = "../../store/long-seqs-toy/inputs"
+out     = "../../sets-toy/long-seqs/inputs"
 pairs   = 2
 
 [long-seqs-real]
 shape   = "pairs"
 queries = "../../data/long-seqs/query"
 targets = "../../data/long-seqs/target"
-out     = "../../store/long-seqs-real/inputs"
+out     = "../../sets/long-seqs/inputs"
 
 # ---------------------------------------------------------------------- pid
 
@@ -205,7 +187,7 @@ shape      = "profmark"
 alignments = "../../data/pfam.sto"
 decoys     = "../../data/swissprot.fa"
 split      = "../pid/profmark"
-out        = "../../store/pid-toy/inputs"
+out        = "../../sets-toy/pid/inputs"
 pairs      = 200
 
 [pid-real]
@@ -213,7 +195,7 @@ shape      = "profmark"
 alignments = "../../data/pfam.sto"
 decoys     = "../../data/swissprot.fa"
 split      = "../pid/profmark"
-out        = "../../store/pid-real/inputs"
+out        = "../../sets/pid/inputs"
 
 # ------------------------------------------------------ cutoffs, on swissprot
 
@@ -226,7 +208,7 @@ shape      = "fixed"
 queries    = "../../data/pfam.hmm"
 alignments = "../../data/pfam.sto"
 targets    = "../../data/swissprot.fa"
-out        = "../../store/cutoffs-sp-10k/inputs"
+out        = "../../sets/cutoffs-sp-10k/inputs"
 shards     = 1
 seqs       = 10000
 reversed   = true
@@ -236,7 +218,7 @@ shape      = "fixed"
 queries    = "../../data/pfam.hmm"
 alignments = "../../data/pfam.sto"
 targets    = "../../data/swissprot.fa"
-out        = "../../store/cutoffs-sp-100k/inputs"
+out        = "../../sets/cutoffs-sp-100k/inputs"
 shards     = 1
 seqs       = 100000
 reversed   = true
@@ -246,7 +228,7 @@ shape      = "fixed"
 queries    = "../../data/pfam.hmm"
 alignments = "../../data/pfam.sto"
 targets    = "../../data/swissprot.fa"
-out        = "../../store/cutoffs-sp-250k/inputs"
+out        = "../../sets/cutoffs-sp-250k/inputs"
 shards     = 1
 seqs       = 250000
 reversed   = true
@@ -256,6 +238,6 @@ shape      = "fixed"
 queries    = "../../data/pfam.hmm"
 alignments = "../../data/pfam.sto"
 targets    = "../../data/swissprot.fa"
-out        = "../../store/cutoffs-sp-all/inputs"
+out        = "../../sets/cutoffs-sp-all/inputs"
 shards     = 1
 reversed   = true

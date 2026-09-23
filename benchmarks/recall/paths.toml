@@ -4,13 +4,13 @@
 # actually reads. A set and everything derived from it share a directory.
 
 [toy]
-set      = "../../store/recall-toy/inputs"
-run      = "../../store/recall-toy/outputs"
-analysis = "../../store/recall-toy/analysis"
-tmp      = "../../store/recall-toy/tmp"
+set      = "../../sets-toy/recall/inputs"
+run      = "../../sets-toy/recall/outputs"
+analysis = "../../sets-toy/recall/analysis"
+tmp      = "../../sets-toy/recall/tmp"
 
 [real]
-set      = "../../store/recall-real/inputs"
-run      = "../../store/recall-real/outputs"
-analysis = "../../store/recall-real/analysis"
-tmp      = "../../store/recall-real/tmp"
+set      = "../../sets/recall/inputs"
+run      = "../../sets/recall/outputs"
+analysis = "../../sets/recall/analysis"
+tmp      = "../../sets/recall/tmp"
