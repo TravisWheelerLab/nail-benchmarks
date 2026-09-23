@@ -42,29 +42,31 @@ data/                     what the Makefile downloaded
 tools/bin/                what the Makefile built
 sets/                     what a build, a run or an analysis produced
 sets-toy/                 the same, for the toy of each
+figures/                  the pdfs, flat
+figures-toy/              the same, for the toys
 benchmarks/shim           the build-and-run shim every binary links to
 
-benchmarks/util/          set, search, ledger, tbl, tools, split, cut, ...
+benchmarks/util/          set, search, ledger, tbl, tools, split, cut, clean
 
-benchmarks/build-set/     cuts sources into a set: fixed | cross | ladder | pairs
+benchmarks/build-set/     cuts sources into a set: fixed | reversed | cross |
+                          pairs | profmark
 
 benchmarks/recall/        recall against prefilter sensitivity   [fixed]
-benchmarks/cloud-search/  the (A, B) pruning surface             [fixed]
-benchmarks/loss-decomp/   where nail loses hmmer's hits, by stage [fixed]
-benchmarks/calibrate/     what a run will cost  [ladder]  ON ICE, see below
-benchmarks/cutoffs/       per-family score cutoffs from decoys    [fixed]
+benchmarks/cloud-search/  the (A, B) pruning surface             [cross]
+benchmarks/loss-decomp/   where nail loses hmmer's hits, by stage [cross]
+benchmarks/cutoffs/       per-family score cutoffs from decoys    [reversed]
 benchmarks/long-seqs/     how the tools scale with length         [pairs]
 benchmarks/pid/           recall against percent identity          [profmark]
 ```
 
-One binary per benchmark, and the shape in brackets is the set it reads. One
-library sits under them, and one binary that belongs to no benchmark:
-`build-set` makes the sets.
+One binary per benchmark, and the shape in brackets is the set it reads.
+`cloud-search` and `loss-decomp` name no shape and would read any set with a
+query and a target; `cross` is what their labels build. One library sits under
+them all, and one binary that belongs to no benchmark: `build-set` makes the
+sets.
 
-`benchmarks/mgy/` is empty. It held the `inputs/` and `outputs/` trees the old
-`mgy` crate wrote before the sets tree existed, and those moved into it on
-16 September 2026 -- see the warning under **What is tracked**, which is the
-one thing in this file to read before running anything near `sets/`.
+The warning under **What is tracked** is the one thing in this file to read
+before running anything near `sets/`.
 
 ### How much of the libraries is actually shared
 
@@ -72,31 +74,19 @@ Counted per public item, by how many binaries reference it. A part with one
 consumer belongs in that consumer rather than in a library, and the count is
 the test rather than how well the library reads from the inside.
 
-About a sixth of the two libraries has a single consumer, and all of it is
-recall's:
+`util` is what is left after applying that. The `scores` crate was three
+benchmarks' tables sharing an envelope, and it is now a private `src/scores/`
+module inside each of `recall`, `cloud-search` and `loss-decomp`, each holding
+only what its own benchmark reaches. The `search` crate became
+`util::search`, and the sweep constants that were in it went to the benchmarks
+that sweep them.
 
-- `search`, 428 lines. Roughly 87 are recall alone -- `NAIL_S`, `MMSEQS_S`,
-  `MMSEQS_MAX_SEQS`, `createdb` and the whole `Mmseqs` builder, since recall is
-  the only benchmark that sweeps mmseqs. Another 16 have no consumer at all:
-  `cat`, `MMSEQS_K`, `Dirs.results`. The remaining ~325 -- `Dirs`, `Split`,
-  `Hmmer`, `Bins`, `jobs`, `HMMER_CPU` -- are used by recall, cloud-search and
-  loss-decomp alike.
-- `scores`, 4,200 lines. Roughly 680 are recall alone: `write.rs` and
-  `read.rs`, which are the `scores.tbl` grammar. Nothing at all is exclusive to
-  cloud-search or to loss-decomp.
-
-The seam that shows up is the one the two table grammars already draw, rather
-than a split between reading and analysing: `scores.tbl` is recall's and
-nobody else's, `runs.tbl` is cloud-search's and loss-decomp's. loss-decomp's use of
-the crate is a strict subset of cloud-search's -- both write `runs.tbl` and
-read `stages`, and cloud-search also reads `summary`.
-
-All three reach `scores` only through `scores::parse`. No binary names
-`analyze`, `write`, `runs`, `frame`, `read`, `shard` or `collect`, so what sits
-behind that one door can move without touching a caller.
-
-`cutoffs` is the benchmark that uses neither library. It runs the same three
-tools and builds every command by hand, at `cutoffs/src/main.rs:471` and after.
+What stays shared is the envelope: where a run's directories are, how a query
+is split and its parts joined back up, which binary to run, how a command is
+tagged so the ledger can read it back. A tool's own flags belong to the
+benchmark that runs it, except where more than one runs it the same way --
+`nail`, `hmmsearch` and `mmseqs` have builders in `util::search` for that
+reason.
 
 No benchmark looks on `PATH`. `util::tools` holds the path to every binary and
 every download, and a benchmark reads it rather than guessing, so a run uses
@@ -122,11 +112,13 @@ those into `runs.tbl` and `scores.tbl`. The run is the only moment this can be
 read honestly, since an analysis may happen after a rebuild. A table written
 before this existed has no such line and still reads.
 
-`pid` reads a set like everything else now. What kept it out was a
-record-level truth table, and the answer was for `set.tbl` to name the file
-rather than carry it -- see the `profmark` shape. It still keeps its own copy of
-the command builders in `src/search.rs`, and its `profmark/` split at the crate
-root.
+`pid` reads a set like everything else. What kept it out was a record-level
+truth table, and the answer was for `set.tbl` to name the file rather than
+carry it -- see the `profmark` shape. It builds its own commands for the four
+tools nobody else runs -- blastp, psiblast, lastal and diamond -- and takes
+nail, hmmsearch and mmseqs from `util::search`. Its `profmark/` split lives at
+the crate root and is not in a fresh checkout; `build-set` draws one when it is
+missing.
 
 ## External crates
 
@@ -237,10 +229,10 @@ manifest that says one thing while the directory says another.
 
 ### The shapes
 
-An open manifest lets one format describe a deal of shards and a nest of rungs.
-The cost is that a set and the benchmark reading it can disagree with nothing
-saying so, and a `ladder` searched as if it were `fixed` is a sweep over the
-product of both axes reported as a list of targets. A shape closes that: the
+An open manifest lets one format describe a deal of shards and a grid of
+sources. The cost is that a set and the benchmark reading it can disagree with
+nothing saying so, and a `reversed` set searched as if it were `fixed` reports
+every score against a sequence written backwards. A shape closes that: the
 builder stamps `#= shape` and the benchmark names the one it reads, and
 `Set::load_as` holds them to each other before a tool runs.
 
@@ -248,7 +240,6 @@ builder stamps `#= shape` and the benchmark names the one it reads, and
 |---|---|---|---|
 | `fixed` | `query_hmm`, `query_sto`, `query_db`, `target` | `shard`, `seqs`, `residues`, `bytes` | recall |
 | `reversed` | the same as `fixed` | the same as `fixed` | cutoffs |
-| `ladder` | the same | `query_rung`, `target_rung`, `query_residues`, `target_residues` | calibrate |
 | `cross` | the same as `fixed` | `query_src`, `target_src`, `seqs`, `residues`, `bytes` | cloud-search, loss-decomp |
 | `pairs` | `query_fa`, `target` | `pair`, `query_residues`, `residues` | long-seqs |
 | `profmark` | `query_hmm`, `query_sto`, `query_fa`, `target` | `truth` | pid |
@@ -297,14 +288,15 @@ opens.
 A set built before shapes existed says nothing about itself, and is then checked
 on its columns alone.
 
-Two benchmarks name no shape at all. cloud-search and loss-decomp search one
-query against one target and read no attribute, so `Set::load_needing` holds
-them to `query_hmm` and `target` and to the set having a single unit, and
-nothing else. That is what lets the same sweep run over a `fixed` shard of
-MGnify and a `profmark` split of Pfam, which is the only way to ask whether the
-surface moves with the type of the search rather than its size. A reader that
-wants an attribute, or a `ladder`'s two axes, names the shape instead, because
-then the recipe is what it depends on.
+`util::set::shape` also declares `ladder`, nested rungs on both axes. Nothing
+builds one and nothing reads one since `calibrate` went, so it and its recipe
+in `build-set` are dead code.
+
+Two benchmarks name no shape at all. cloud-search and loss-decomp read
+`query_hmm` and `target` and no attribute, so `Set::load_needing` holds them to
+those and to nothing else, and either would read any set that has them. Their
+own labels build a `cross`. A reader that wants an attribute names the shape
+instead, because then the recipe is what it depends on.
 
 ## paths.toml
 
@@ -325,12 +317,14 @@ A label is a whole set of paths under one name, so a toy run and a real run
 differ by a word: `recall run --in toy`. Running a tool without `--in` prints
 the labels its file holds.
 
-Every benchmark has exactly two, `toy` and `real`, over two sets of its own:
-`build-set` names them `<benchmark>-toy` and `<benchmark>-real`. A benchmark
-sharing a set with another needs a reason, because a shared set hides what a
-benchmark reads. cloud-search and loss-decomp search a single unit, and they did
-that by opening shard 1 of recall's thousand, so their real sets are one shard
-the size of one of recall's rather than a thousand of them.
+Every benchmark has `toy` and `real`, over two sets of its own:
+`sets-toy/<benchmark>/` and `sets/<benchmark>/`, which `build-set` builds
+under the labels `<benchmark>-toy` and `<benchmark>-real`. cutoffs has four
+more, `sp-10k` through `sp-all`, which are neither toy nor real and sit in
+`sets/` beside the rest.
+
+No benchmark reads a set another one built. cloud-search used to, running its
+grid over the profmark split pid assembles, and that label is gone.
 
 Relative paths resolve against the file's own directory, which is why a crate
 needs no notion of a repository, and an absolute path is left alone -- a set on
@@ -401,8 +395,14 @@ The crate is deleted; restore it from git when a cluster run next lands.
 - `tbl` writes the padded, `#`-headed table every analysis produces.
 - `tools` holds where the binaries and the downloads are.
 - `split` cuts a query set into balanced parts for a batch of jobs.
-- `nail` reads the one column of nail's table that `libsail`'s layout does not
-  carry.
+- `search` builds the commands a pipeline is assembled out of: the directories
+  a run writes into, the split and the cat that put a query's parts back
+  together, and a builder each for nail, hmmsearch and mmseqs. It also holds
+  the four settings every benchmark is held to so that its tools compare --
+  `SEED_MODE`, `SEED_S`, `HMMER_CPU` and `EVALUE` -- and nothing else about a
+  sweep.
+- `clean` measures a list of directories, shows what is in them, asks, and
+  deletes.
 
 ## The Pfam-against-MGnify benchmarks
 
@@ -435,7 +435,9 @@ All three are gone: residues are a column on the manifest like any other.
 
 There are two table grammars, and which one a pipeline gets is settled by
 whether it moves one tool's parameters in a way that changes what that tool
-scores a pair.
+scores a pair. Each of the three benchmarks carries its own copy of the code
+that writes and reads them, under its own `src/scores/`, holding only the half
+it uses: recall has `write.rs` and `read.rs`, the two sweeps have `runs.rs`.
 
 `recall parse scores --in <label>` reads recall into `scores.tbl`: one row per query/target
 pair, one score column per tool, and a `pass` string holding one character
@@ -444,24 +446,30 @@ scores them, so one column per tool is the honest shape and the cheap one --
 six runs over a thousand shards is four billion rows, and a column per run is
 what made an earlier grammar write 700 GB.
 
-`cloud-search parse runs --in <label>` reads cloud-search and loss-decomp into `runs.tbl`: one score
-column per run. Whether a run's seeding offered a pair is the `pass` string's
-third state -- `-` where that run's seed list never held it, against a
-lowercase letter for seeded and unreported and an uppercase one for reported.
-It is per run rather than a column of its own because a seeding sweep gives
-every arm its own seed list, so the answer differs between runs of one pair;
-a run's ledger row names the seeding it replayed in a `seeds` setting, and
-many runs to one seeding is the ordinary case.
+`cloud-search parse runs --in <label>` reads cloud-search and loss-decomp into
+`runs.tbl`: one score column per run, and no pass string. A cell is the score,
+or `-` where that run's seeding offered the pair and the run did not report
+it, or `.` where the seeding never offered it at all. Whether a run cleared its
+family's cutoff is its score against the cutoff `#= cutoffs` names, worked out
+when the table is read. A seeding sweep gives every arm its own seed list, so
+the offered-or-not answer differs between runs of one pair; a run's ledger row
+names the seeding it replayed in a `seeds` setting, and many runs to one
+seeding is the ordinary case.
 `-A` and `-B` constrain the dynamic programming, so two cells can score one
 pair differently, and that is what the sweep measures.
 These pipelines search one shard, so the wider row costs nothing.
 
+A run's name is stacked over its column on the dashes it is built from, so
+`A10.0-B12.0-a1` takes three header lines rather than fourteen columns of
+padding on every row.
+
 Both are collected the same way: each shard on its own, written as a block in
 shard order, so the file comes out the same bytes however many threads it ran.
-`--threads` and `--mem` size that. `summary` is one streaming pass and reads
-either grammar -- it reads only the `pass` string and the domain list, and
-those sit in the same place in both. `stages` reads `runs.tbl` alone, because where a
-pair was dropped is a question about a run rather than about a tool.
+`--threads` and `--mem` size that. `summary` asks only whether each run
+cleared its family's cutoff and what the domain list says, which recall's copy
+reads out of the pass string and the sweeps' out of the score columns.
+`stages` reads `runs.tbl` alone, because where a pair was dropped is a
+question about a run rather than about a tool.
 
     recall        parse scores → parse summary
     cloud-search  parse runs   → parse summary → plot
@@ -483,73 +491,10 @@ Eighty-one points overlapping on a plane, each carrying an `-A` and a `-B` that
 the position does not show, is not a figure anyone can read, so it was
 deleted.
 
-Three things sit outside the shape above, and none of them asks what was
-found.
+Two things sit outside the shape above, and neither asks what was found.
 
-**`calibrate` is on ice: leave it alone until Jack says otherwise.** It may
-well be deleted. Do not fix, tidy, extend or test it, and do not count it when
-working out how many benchmarks use a shared crate -- a symbol only calibrate
-and one other crate reference has one consumer, not two. The rest of this
-section describes it as it stands.
-
-`calibrate` asks what a run will cost. `calibrate run` times the searches
-the benchmarks are built out of -- nail's seeding, the alignment off those
-seeds, `mmseqs search` and `hmmsearch` -- over the target rungs of the ladder,
-building every command through the same `search` helpers the benchmarks use,
-so what is timed is what will run. `--parts` narrows it to a subset of those
-four. `calibrate fit` turns the timings into `cost.tbl`; `calibrate predict`
-composes a pipeline out of them, folding the way the ledger does so the total
-is wall clock rather than core-seconds.
-
-Only the searches are timed. Cutting the query up, building mmseqs' database
-and reformatting what it found are real wall clock, and none of them is what
-the benchmarks compare.
-
-The query is every Pfam family at every rung, because that is what the
-benchmarks search with. So the only thing that moves is the target, and a
-search costs
-
-```text
-intercept + slope * target_residues
-```
-
-An earlier version swept a grid on both axes and fitted a query term, a target
-term and their product. Holding the query fixed collapses three of those into
-the two here, and the terms it drops were the ones carrying the error: the
-product coefficient did most of the work at the sizes being predicted and was
-the least determined thing in the model, so dropping a single rung from the
-grid moved nail's predicted cost by a factor of two.
-
-What is left is an intercept that is mostly the query and a slope that is
-entirely the target. The intercept is large, since nail builds an mmseqs
-profile database out of 20,795 HMMs on every invocation, and at the bottom of
-the ladder it is nearly the whole cost: over the first three rungs a fourfold
-increase in target size did not move the total past the run-to-run noise. The
-slope becomes measurable only once the target term clears that noise, and that
-is why the rungs double all the way to 128,000 sequences. The rung of a single
-sequence at the bottom measures the intercept on its own.
-
-A whole nail search is the seeding plus the alignment off those seeds, so the
-end-to-end run is not timed. Over a ladder spanning 131x the two halves came
-to within 1.1% of it at every sensitivity, so the third timing was dropped.
-
-Every `mmseqs search` here passes `-k 6`, which is what nail passes the
-prefilter it seeds with. mmseqs' own default is 0, meaning it picks a k-mer
-length from the size of the database, so a run left on the default would
-search with a different k at every rung and a different one again from the k
-inside nail.
-
-`fit` holds the top rung back, fits on the rest, and scores its own prediction
-of the rung it did not see, so a model that extrapolates badly reports it in a
-`holdout` column instead of being believed. That column is the one to read
-first. On the eight-rung ladder every part over-predicted, from 2.4% for the
-alignments to 25% for mmseqs at its lower sensitivity, so a prediction off it
-reads as an upper bound. The alignments are the rows to trust: their cost is
-almost all target work, and they are the only ones the ladder pinned to better
-than 3%.
-
-`cutoffs` is the other calibration, and the words do not mean the same thing:
-cutoffs calibrates scores, calibrate calibrates cost.
+`cutoffs` calibrates scores. There used to be a `calibrate` that fitted what a
+run would cost, over the `ladder` shape; git has it.
 
 ### The words
 
@@ -648,9 +593,9 @@ back to the family that recruited the sequence. The per-pair rule above is what
 Which is faster is an open question, and **there is no usable cost model for it
 yet.** nail's and mmseqs' runtimes do not scale linearly in target size, so
 estimating either arm by multiplying a per-comparison rate is wrong and any
-crossover derived that way is not to be trusted. `calibrate` is the machinery
-for fitting this properly, and even it only fits the target axis with the query
-held fixed.
+crossover derived that way is not to be trusted. The deleted `calibrate` crate
+fitted the target axis with the query held fixed, which is the closest this
+repository came to a cost model.
 
 What is actually measured, and nothing more:
 
@@ -703,6 +648,17 @@ the same one, and the recipe points at it. Drawing it costs about a minute with
 the tables the plot scripts read, and `plot` draws them. All three take
 `--in <label>`.
 
+`parse` has three subcommands. `recall` writes `pid.tbl`, `roc.tbl` and
+`time.tbl`: one row per run per identity bin, one row per run per point of its
+ROC curve, and one row per run of what it cost against what it found. `score`
+correlates two named nail runs' scores, and `cells` scatters nail's cell
+fraction against query by target length; both of those answer questions other
+than recall against identity, and both came along with this benchmark's shape
+rather than being asked of it.
+
+`plot` names five figures -- roc, pid, time, cells, score -- and `--only`
+draws a subset, one name per flag.
+
 ## benchmarks/long-seqs
 
 How each tool's runtime scales as sequences get longer. Six paired
@@ -741,7 +697,7 @@ rsync -a --delete \
   --exclude '/data' --exclude '/tools' --exclude '/benchmarks/pid/profmark' \
   --exclude '/sets' --exclude '/sets-toy' \
   --exclude 'outputs/' --exclude 'tmp/' \
-  --exclude '/benchmarks/mgy/inputs/' --exclude '/benchmarks/pid/inputs/' \
+  --exclude '/benchmarks/pid/inputs/' \
   "$ROOT/" "$SB/"
 
 ln -sfn "$ROOT/data" "$SB/data"
@@ -791,14 +747,10 @@ real tree has nothing there to match it. long-seqs' set is checked in under
 `data/long-seqs/`, which is a link, so the copy reads the real one.
 
 `/sets` is the exclude that matters most, and dropping it is expensive rather
-than wrong: a checkout that has the mgy results holds about 3.5 TB there, and
+than wrong: a checkout that has recall's results holds about 3.5 TB there, and
 rsync will copy every byte of it into the sandbox. That has happened once
 already, from dropping a single exclude line, and it took the home filesystem
 to 84% full. Check this list against what is on disk before running the recipe.
-
-`/benchmarks/mgy/inputs/` is still excluded and now costs nothing, since that
-tree is empty. It is kept so that a checkout made before the move syncs the
-same way.
 
 Edit in the real tree and re-sync, never in the sandbox: an edit in the copy is
 gone at the next sync. To check an analysis against a run that finished
