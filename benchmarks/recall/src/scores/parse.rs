@@ -237,7 +237,7 @@ fn table(args: &TableArgs, names: &[&str]) -> anyhow::Result<PathBuf> {
                 .iter()
                 .map(|name| {
                     let (stem, _) = name.split_once('.').unwrap_or((name, ""));
-                    format!("`mgy parse {stem}`")
+                    format!("`recall parse {stem}`")
                 })
                 .collect();
 

@@ -46,7 +46,8 @@ figures/                  the pdfs, flat
 figures-toy/              the same, for the toys
 benchmarks/shim           the build-and-run shim every binary links to
 
-benchmarks/util/          set, search, ledger, tbl, tools, split, cut, clean
+benchmarks/util/          set, search, paths, manifest, ledger, tbl, tools,
+                          split, cut, clean
 
 benchmarks/build-set/     cuts sources into a set: fixed | reversed | cross |
                           pairs | profmark
@@ -219,9 +220,9 @@ That is the same bargain `ledger.tbl` strikes one seam later, and deliberately
 so. A ledger row is a spine plus an open map of settings, which is what lets an
 analysis read a run's shape out of the table rather than out of the filenames.
 A set row is a spine plus an open map of attributes, which is what lets a search
-read a set's shape the same way. `fixed` and `ladder` produce the same table
-with different attribute columns, and a pipeline reading it does not learn which
-one ran.
+read a set's shape the same way. `fixed` and `cross` produce the same table
+with different attribute columns, and a pipeline reading it does not learn
+which one ran.
 
 Both are written by the producer in the pass that produces the artifact, and
 nothing else ever writes them. That discipline is the whole defence against a
@@ -260,9 +261,9 @@ in it.
 
 `cross` is the only shape where both sides are lists of independent sources
 rather than cuts of one. `fixed` grids a query over a partition of a single
-target source and `ladder` grids nested subsets of one source per axis, so in
-both a unit is a piece of the same thing; in a `cross` a unit is one whole
-source against another, and what moves between units is which sources they are.
+target source, so a unit there is a piece of the same thing; in a `cross` a
+unit is one whole source against another, and what moves between units is
+which sources they are.
 `pairs` is the diagonal of a cross that was never built. N x M, N x 1 and 1 x M
 are one recipe and one manifest, a row per combination, `unit` naming both
 sides.
@@ -306,12 +307,15 @@ one table per label:
 
 ```toml
 [toy]
-set      = "../../sets-toy/recall/inputs"
-run      = "../../sets-toy/recall/outputs"
-analysis = "../../sets-toy/recall/analysis"
+set      = "../../sets-toy/cloud-search/inputs"
+run      = "../../sets-toy/cloud-search/outputs"
+analysis = "../../sets-toy/cloud-search/analysis"
 figures  = "../../figures-toy"
-tmp      = "../../sets-toy/recall/tmp"
+tmp      = "../../sets-toy/cloud-search/tmp"
 ```
+
+A benchmark that draws nothing has no `figures` key and no field for it:
+recall, cutoffs and long-seqs stop at `analysis`.
 
 A label is a whole set of paths under one name, so a toy run and a real run
 differ by a word: `recall run --in toy`. Running a tool without `--in` prints
@@ -407,11 +411,10 @@ The crate is deleted; restore it from git when a cluster run next lands.
 ## The Pfam-against-MGnify benchmarks
 
 Pfam profiles against MGnify metagenomic sequences, and the largest sets here
-by a long way. `build-set` cuts the sources into a set under `sets/`:
-`fixed` is one query set against target shards of equal size, `ladder` is
-nested rungs on both axes, each a prefix of the one above. Each writes a
-`set.tbl`, and every pipeline here takes `--in <label>` to say which one to
-search.
+by a long way. `build-set` cuts the sources into a set under `sets/`: `fixed` is one query
+set against target shards of equal size, `cross` is every query source against
+every target source. Each writes a `set.tbl`, and every pipeline here takes
+`--in <label>` to say which one to search.
 
 Three benchmarks. `recall` searches every shard while sweeping nail's and
 MMseqs2's prefilter sensitivity. `cloud-search` seeds once, then searches every
@@ -473,7 +476,8 @@ question about a run rather than about a tool.
 
     recall        parse scores → parse summary
     cloud-search  parse runs   → parse summary → plot
-    loss-decomp   parse runs   → parse stages
+                               → parse stages
+    loss-decomp   parse runs   → parse stages  → plot
 
 `plot` draws one figure off cloud-search's summary: the `(A, B)` heatmaps of
 sensitivity and wall clock, with the `full` run in the far corner. `--full-dp`
@@ -663,7 +667,7 @@ draws a subset, one name per flag.
 
 How each tool's runtime scales as sequences get longer. Six paired
 query/target files, where `run` searches each query against its pair and
-`parse` turns that into the plot scripts' tables. Its inputs are small and
+`parse` turns that into tables; nothing draws them today. Its inputs are small and
 checked in under `data/long-seqs/`, and `build-set --in long-seqs-toy` or
 `--in long-seqs-real` cuts them into a set the same way every other benchmark
 gets one. Its queries are sequences rather than profiles, which is what the
@@ -697,7 +701,6 @@ rsync -a --delete \
   --exclude '/data' --exclude '/tools' --exclude '/benchmarks/pid/profmark' \
   --exclude '/sets' --exclude '/sets-toy' \
   --exclude 'outputs/' --exclude 'tmp/' \
-  --exclude '/benchmarks/pid/inputs/' \
   "$ROOT/" "$SB/"
 
 ln -sfn "$ROOT/data" "$SB/data"
@@ -740,8 +743,8 @@ reads all three; nothing in it should write them, so do not run `make data` or
 built from wherever that link points, so an edit to it reaches the sandbox
 without a sync.
 
-`/sets` and pid's `inputs/` are excluded for the same reason: a build writes
-them and nothing commits them, so the copy builds its own. Without the exclude,
+`/sets` and `/sets-toy` are excluded because a build writes them and nothing
+commits them, so the copy builds its own. Without the exclude,
 `--delete` removes the set a `build-set` in the sandbox just wrote, since the
 real tree has nothing there to match it. long-seqs' set is checked in under
 `data/long-seqs/`, which is a link, so the copy reads the real one.
@@ -779,4 +782,9 @@ Two exceptions are committed on purpose:
 fresh clone, and `data/mgy-cutoffs.tbl`, because learning it is a calibration
 run rather than a download.
 
-Plotting is Python and matplotlib, under each benchmark's `scripts/`.
+Plotting is Python and matplotlib. Three benchmarks have a `plot` command and
+a `scripts/` beside their source -- cloud-search, loss-decomp and pid. recall,
+cutoffs and long-seqs stop at `parse`.
+
+Two of pid's scripts, `plot_params.py` and `plot_threads.py`, are wired to no
+figure: nothing writes what they read any more.
