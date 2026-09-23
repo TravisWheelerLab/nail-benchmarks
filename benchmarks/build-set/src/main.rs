@@ -142,7 +142,8 @@ enum Recipe {
     Profmark {
         /// The alignments the split is drawn from, Pfam's SEED.
         alignments: PathBuf,
-        /// The sequences the true targets are hidden among, Swissprot.
+        /// The sequences whose reversals the true targets are hidden among,
+        /// TrEMBL.
         decoys: PathBuf,
         /// Where the train/test split lives, built if it is not there.
         split: PathBuf,
@@ -1325,7 +1326,8 @@ fn make_profmark(
             .query_hmm("queries/query.hmm")
             .query_sto("queries/query.sto")
             .query_fa("queries/query.fa")
-            .attr("truth", "truth.tbl"),
+            .attr("truth", "truth.tbl")
+            .attr("originals", "originals.fa"),
     ];
 
     Set::new(&out, rows)

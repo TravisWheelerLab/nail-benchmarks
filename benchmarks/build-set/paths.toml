@@ -175,12 +175,13 @@ out     = "../../sets/long-seqs/inputs"
 
 # Recall against percent identity. The split is drawn once from Pfam's SEED and
 # shared by both labels: it depends only on the alignments and the split
-# parameters, and it is the expensive half. The true targets are hidden in a
-# Swissprot background, and truth.tbl records which pair is which.
+# parameters, and it is the expensive half. The true targets are hidden among
+# reversed TrEMBL sequences, originals.fa holds those sequences unreversed, and
+# truth.tbl records which pair is which.
 [pid-toy]
 shape      = "profmark"
 alignments = "../../data/pfam.sto"
-decoys     = "../../data/swissprot.fa"
+decoys     = "../../data/trembl.fa"
 split      = "../pid/profmark"
 out        = "../../sets-toy/pid/inputs"
 pairs      = 200
@@ -188,7 +189,7 @@ pairs      = 200
 [pid-real]
 shape      = "profmark"
 alignments = "../../data/pfam.sto"
-decoys     = "../../data/swissprot.fa"
+decoys     = "../../data/trembl.fa"
 split      = "../pid/profmark"
 out        = "../../sets/pid/inputs"
 

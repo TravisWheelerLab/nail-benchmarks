@@ -1,5 +1,5 @@
 //! Percent-identity benchmark: profmark-style ROC over Pfam families embedded
-//! in a Swissprot decoy background.
+//! in a background of reversed TrEMBL sequences.
 //!
 //! The set is built by `build-set --in pid-toy|pid-real` and read from the
 //! store like every other benchmark's. One label fills in every path, so a
@@ -7,6 +7,7 @@
 
 mod parse;
 mod plot;
+mod reject;
 mod run;
 
 use std::path::{Path, PathBuf};
@@ -28,6 +29,9 @@ struct Cli {
 enum Command {
     /// Search every tool against the benchmark.
     Run(run::Args),
+    /// Search each tool against the originals of the decoys it ranked above
+    /// its worst true pair.
+    Reject(reject::Args),
     /// Turn results into the tables the plot scripts consume.
     #[command(subcommand)]
     Parse(parse::Cmd),
@@ -52,6 +56,16 @@ pub struct Paths {
 }
 
 impl Paths {
+    /// Where `run` writes: every tool against the set.
+    pub fn search(&self) -> PathBuf {
+        self.run.join("search")
+    }
+
+    /// Where `reject` writes: every tool against the originals of its decoys.
+    pub fn reject(&self) -> PathBuf {
+        self.run.join("reject")
+    }
+
     /// The label named, with every path resolved against the file that named
     /// it.
     pub fn open(label: &str) -> anyhow::Result<Paths> {
@@ -73,12 +87,13 @@ impl Paths {
     }
 }
 
-const USAGE: &str = "pid <run|parse|plot> --in <label>";
+const USAGE: &str = "pid <run|reject|parse|plot> --in <label>";
 
 impl Command {
     fn label(&self) -> Option<&str> {
         match self {
             Command::Run(a) => a.label.as_deref(),
+            Command::Reject(a) => a.label.as_deref(),
             Command::Plot(a) => a.label.as_deref(),
             Command::Parse(parse::Cmd::Recall(a)) => a.label.as_deref(),
             Command::Parse(parse::Cmd::Cells(a)) => a.label.as_deref(),
@@ -101,6 +116,7 @@ fn main() -> anyhow::Result<()> {
 
     match cli.command {
         Command::Run(args) => run::main(args, &paths),
+        Command::Reject(args) => reject::main(args, &paths),
         Command::Parse(cmd) => parse::main(cmd, &paths),
         Command::Plot(args) => plot::main(args, &paths),
     }
@@ -117,6 +133,8 @@ pub struct Inputs {
     pub target_fa: PathBuf,
     /// Which pair is true, and at what identity.
     pub truth: PathBuf,
+    /// The decoys unreversed, under the names `target_fa` gives them.
+    pub originals: PathBuf,
 }
 
 impl Inputs {
@@ -140,6 +158,7 @@ impl Inputs {
                 .join("afa"),
             target_fa: unit.target()?,
             truth: set_dir.join(unit.need("truth")?),
+            originals: set_dir.join(unit.need("originals")?),
             query_hmm,
         })
     }

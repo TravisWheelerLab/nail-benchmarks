@@ -1,5 +1,5 @@
 //! Assembles one benchmark: Pfam families split by identity, hidden in a
-//! Swissprot decoy background.
+//! background of reversed TrEMBL sequences.
 //!
 //! Everything external goes through the pipeline -- create-profmark, hmmbuild,
 //! hmmemit -- so the build gets `--dry-run`, keeps the stderr of whatever
@@ -19,13 +19,13 @@ use anyhow::{Context, bail};
 
 use indexmap::IndexMap;
 use libsail::collection::{Indexable, Iterable};
-use libsail::seq::fasta::{DEFAULT_LINE_WIDTH, Fasta, FastaRecord};
+use libsail::seq::fasta::{DEFAULT_LINE_WIDTH, FastaRecord};
 use libsail::seq::stockholm::StockholmRecord;
 use michi::{Closure, Cmd, PipelineBuilder, Progress, Step};
 
+use rand::SeedableRng;
 use rand::rngs::StdRng;
-use rand::seq::{IndexedRandom, SliceRandom};
-use rand::{RngExt, SeedableRng};
+use rand::seq::IndexedRandom;
 
 /// Decoys per true pair in the target database.
 const DECOY_RATIO: usize = 100;
@@ -88,6 +88,10 @@ impl At {
     }
     fn target_fa(&self) -> PathBuf {
         self.out.join("target.fa")
+    }
+    /// The decoys unreversed, under the names target.fa gives them.
+    fn originals(&self) -> PathBuf {
+        self.out.join("originals.fa")
     }
     /// Which pair is which, and at what identity. The benchmark's own notion
     /// of truth: there is no calibration here and no tool is the reference.
@@ -236,7 +240,8 @@ fn assemble(
     let mut target_sto =
         families(&at.split_target()).context("failed to parse the profmark target split")?;
     let src_sto = families(src_sto_path).context("failed to parse source sto")?;
-    let src_fa = Fasta::open(src_fa_path).context("failed to parse source fasta")?;
+    let src_fa = crate::indexed(src_fa_path)
+        .with_context(|| format!("failed to index {}", src_fa_path.display()))?;
 
     let afa_dir = at.afa();
 
@@ -490,13 +495,30 @@ fn assemble(
         src_fa.len()
     );
 
-    // decoys are length-matched to real targets and shuffled, so they share the
-    // benchmark's length and composition profile without any real homology
-    let lengths: Vec<usize> = targets.iter().map(|t| t.seq.len()).collect();
-    for decoy in decoys(&src_fa, &lengths, n_decoys, &mut rng)? {
+    anyhow::ensure!(
+        n_decoys <= src_fa.len(),
+        "{n_decoys} decoys asked of {} source sequences",
+        src_fa.len()
+    );
+
+    let mut originals_writer =
+        BufWriter::new(File::create(at.originals()).context("failed to open originals.fa")?);
+
+    // one name for both forms, so a hit against an original reads back as
+    // the (query, decoy) pair it was searched to settle
+    for (idx, rec) in src_fa.sample_in_order(n_decoys, seed).enumerate() {
+        let mut decoy = FastaRecord {
+            name: format!("decoy{idx}").into_bytes(),
+            extra: Vec::new(),
+            seq: rec.seq,
+        };
+
+        decoy.write_to(&mut originals_writer, DEFAULT_LINE_WIDTH)?;
+        decoy.reverse();
         decoy.write_to(&mut target_writer, DEFAULT_LINE_WIDTH)?;
     }
 
+    originals_writer.flush()?;
     target_writer.flush()?;
     Ok(())
 }
@@ -557,52 +579,6 @@ fn ungap(row: &[u8]) -> Vec<u8> {
         .copied()
         .filter(|&b| b != b'-' && b != b'.')
         .collect()
-}
-
-/// Generate decoy records by drawing a subsequence from `source` matched to the
-/// length of a randomly chosen record in `lengths`, then shuffling it.
-///
-/// Shuffling preserves amino acid composition while destroying any real
-/// homology, which is what makes a decoy a fair negative rather than simply an
-/// unrelated sequence.
-fn decoys(
-    source: &Fasta,
-    lengths: &[usize],
-    count: usize,
-    rng: &mut StdRng,
-) -> anyhow::Result<Vec<FastaRecord>> {
-    if source.is_empty() || lengths.is_empty() {
-        bail!("cannot generate decoys from an empty source");
-    }
-
-    let mut out = Vec::with_capacity(count);
-    let mut src: &[u8] = &[];
-
-    for idx in 0..count {
-        let decoy_len = lengths[rng.random_range(0..lengths.len())];
-
-        // keep drawing until a source sequence is long enough to cut from
-        while src.len() < decoy_len {
-            src = &source
-                .get(rng.random_range(0..source.len()))
-                .context("bad source index")?
-                .seq;
-        }
-
-        let start = rng.random_range(0..=src.len() - decoy_len);
-        let mut seq = src[start..start + decoy_len].to_vec();
-        seq.shuffle(rng);
-
-        out.push(FastaRecord {
-            name: format!("decoy{idx}").into_bytes(),
-            extra: Vec::new(),
-            seq,
-        });
-
-        src = &[];
-    }
-
-    Ok(out)
 }
 
 fn compute_pid(s1: &[u8], s2: &[u8]) -> f32 {

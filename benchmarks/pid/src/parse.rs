@@ -5,12 +5,14 @@
 //! the results directory's filenames. That is what lets a run be renamed, or a
 //! tool added, without this file learning about it.
 //!
-//! Truth here is in the benchmark itself: `benchmark.tbl` says which pair is
+//! Truth here is in the benchmark itself: `truth.tbl` says which pair is
 //! which and at what identity, and a target named `decoy…` is one. There is no
-//! calibration and no reference tool.
+//! calibration and no reference tool. A decoy a query also hits in its
+//! original form is the reversal of a homolog, and `reject` is what finds
+//! those; recall skips them.
 
 use std::{
-    collections::HashMap,
+    collections::{BTreeMap, HashMap, HashSet},
     fs::File,
     io::{BufRead, BufReader, BufWriter, Write},
     path::{Path, PathBuf},
@@ -34,6 +36,10 @@ use crate::run::MODE;
 
 const PRECISION: usize = 4;
 const FIXED_FPR: f32 = 0.01;
+
+/// The E-value at or under which a query's hit against a decoy's original
+/// makes that decoy a reject for that query, as cutoffs has it.
+const REJECT_E: f64 = 1e-3;
 
 /// The E-value a run has to beat to sit at [`FIXED_FPR`], which is the score
 /// of the decoy that many places down its own list.
@@ -138,7 +144,7 @@ pub fn main(cmd: Cmd, paths: &crate::Paths) -> anyhow::Result<()> {
 }
 
 fn score(args: ScoreArgs, paths: &crate::Paths) -> anyhow::Result<()> {
-    let results = paths.run.join("results");
+    let results = paths.search().join("results");
 
     let read = |name: &str| -> anyhow::Result<HashMap<(String, String), f32>> {
         let path = manifest::table_path(&results, name, "");
@@ -174,7 +180,7 @@ fn score(args: ScoreArgs, paths: &crate::Paths) -> anyhow::Result<()> {
 }
 
 fn cells(args: CellsArgs, paths: &crate::Paths) -> anyhow::Result<()> {
-    let table = manifest::table_path(&paths.run.join("results"), &args.run, "");
+    let table = manifest::table_path(&paths.search().join("results"), &args.run, "");
 
     let hits = libsail::tbl::NailRows::open(&table)
         .with_context(|| format!("failed to read {}", table.display()))?;
@@ -240,7 +246,8 @@ fn recall(args: RecallArgs, paths: &crate::Paths) -> anyhow::Result<()> {
 
     let inp = crate::Inputs::open(&paths.set)?;
     let benchmark = Benchmark::new(inp.truth)?;
-    let data = RecallData::new(&paths.run, &benchmark)?;
+    let rejected = rejections(&paths.reject())?;
+    let data = RecallData::new(&paths.search(), &benchmark, &rejected)?;
 
     let figures = args.which.out_dir(&paths.analysis);
     std::fs::create_dir_all(&figures)?;
@@ -253,19 +260,19 @@ fn recall(args: RecallArgs, paths: &crate::Paths) -> anyhow::Result<()> {
     Ok(())
 }
 
-struct BenchmarkEntry {
+pub struct BenchmarkEntry {
     pid: usize,
     query: String,
     family: String,
 }
 
-struct Benchmark {
+pub struct Benchmark {
     entries: Vec<BenchmarkEntry>,
     idx_by_target: HashMap<String, usize>,
 }
 
 impl Benchmark {
-    fn new<P: AsRef<Path>>(tbl_path: P) -> anyhow::Result<Self> {
+    pub fn new<P: AsRef<Path>>(tbl_path: P) -> anyhow::Result<Self> {
         let tbl_reader = BufReader::new(File::open(tbl_path)?);
 
         let mut entries = vec![];
@@ -312,11 +319,13 @@ impl Benchmark {
 
 /// One finished run: what it was called, how to read its table, which query it
 /// searched, and what it cost.
-struct Run {
-    name: String,
-    tool: String,
+pub struct Run {
+    pub name: String,
+    pub tool: String,
     /// `prf`, `cons` or `seq`, as the run recorded it.
-    mode: String,
+    pub mode: String,
+    /// Every other setting the ledger recorded for it.
+    pub params: BTreeMap<String, String>,
     wall_s: f32,
     table: PathBuf,
 }
@@ -325,7 +334,7 @@ impl Run {
     /// The hits it reported. Which reader to use comes off the `tool` field --
     /// mmseqs, last, blast and diamond all write blast's tabular format,
     /// whatever wrote it.
-    fn hits(&self) -> anyhow::Result<Vec<Hit>> {
+    pub fn hits(&self) -> anyhow::Result<Vec<Hit>> {
         match self.tool.as_str() {
             "nail" => read_hits::<NailTable>(&self.table),
             "hmmer" | "phmmer" => read_hits::<HmmerTable>(&self.table),
@@ -350,7 +359,7 @@ fn read_hits<C: HitColumns>(path: &Path) -> libsail::Result<Vec<Hit>> {
 /// Several commands can share a name -- mmseqs' search and its conversion are
 /// one run, and psiblast's per-family calls are one run done a family at a
 /// time -- and they arrive here already folded into one row.
-fn runs(dir: &Path) -> anyhow::Result<Vec<Run>> {
+pub fn runs(dir: &Path) -> anyhow::Result<Vec<Run>> {
     let ran = Ledger::load(dir)?;
     ledger::warn(ran.failed(), "command(s)");
 
@@ -375,13 +384,140 @@ fn runs(dir: &Path) -> anyhow::Result<Vec<Run>> {
                 name: column.name,
                 tool: column.tool,
                 wall_s: column.wall_s as f32,
+                params: column.params,
             })
         })
         .collect::<anyhow::Result<_>>()?;
 
-    anyhow::ensure!(!out.is_empty(), "no finished runs in {}", dir.display());
+    Ok(out)
+}
+
+/// Which reject search settles a run's decoys: the one by the same tool, in
+/// the same mode.
+pub fn judge(run: &Run) -> (String, String) {
+    (run.tool.clone(), run.mode.clone())
+}
+
+/// Every (query, decoy) pair a reject search found in its original form, by
+/// the search that found it.
+///
+/// A pair is settled by the one tool that reported it and for the one query
+/// that hit it. Nothing here pools a decoy across queries.
+pub fn rejections(dir: &Path) -> anyhow::Result<Rejections> {
+    let tested = tbl::read(&dir.join(TESTED))
+        .with_context(|| format!("no rejections in {}; run `pid reject` first", dir.display()))?;
+
+    let ran = match tested.cells.iter().any(|row| row["decoys"] != "0") {
+        true => runs(dir)?,
+        false => vec![],
+    };
+
+    let mut out = HashMap::new();
+    for row in &tested.cells {
+        let key = (row["tool"].clone(), row["mode"].clone());
+        if row["decoys"] == "0" {
+            out.insert(key, HashSet::new());
+            continue;
+        }
+
+        // a tool with decoys to settle and no finished search would read as
+        // one with nothing to reject, which is the answer that inflates its
+        // false positives
+        let run = ran
+            .iter()
+            .find(|run| judge(run) == key)
+            .with_context(|| format!("no finished reject search for {} {}", key.0, key.1))?;
+
+        let found = run
+            .hits()?
+            .into_iter()
+            .filter(|h| h.e_value <= REJECT_E)
+            .map(|h| (h.query, h.target))
+            .collect();
+
+        out.insert(key, found);
+    }
 
     Ok(out)
+}
+
+/// The rejected (query, decoy) pairs, by the (tool, mode) that settled them.
+pub type Rejections = HashMap<(String, String), HashSet<(String, String)>>;
+
+/// What `reject` writes before it searches: how many decoys each tool had to
+/// settle, including the ones with none.
+pub const TESTED: &str = "tested.tbl";
+
+/// A run's hits reduced to the best E-value per (target, query).
+fn best(hits: &[Hit]) -> HashMap<(&str, &str), f64> {
+    // a run can report one pair more than once; the best of them is the
+    // one a threshold would see
+    let mut best: HashMap<(&str, &str), f64> = HashMap::new();
+    for hit in hits {
+        best.entry((&hit.target, &hit.query))
+            .and_modify(|e| *e = e.min(hit.e_value))
+            .or_insert(hit.e_value);
+    }
+    best
+}
+
+/// A query's family, and the id a decoy list is keyed by.
+fn query_parts(query: &str) -> (&str, &str) {
+    // a query is <family> for a profile and <family>|<id> for a
+    // sequence, and the second is what a decoy list is keyed by
+    match query.split_once('|') {
+        Some((family, id)) => (family, id),
+        None => (query, query),
+    }
+}
+
+/// The identity a true pair was drawn at, if `target` is a true target of
+/// `query`.
+fn truth_of(bm: &Benchmark, target: &str, query: &str, search_type: &str) -> Option<usize> {
+    let (family, id) = query_parts(query);
+
+    // a target's name carries the pair it is: <family>|<id>|<pid>%
+    let target = target
+        .split('|')
+        .nth(1)
+        .unwrap_or_else(|| panic!("target {target:?} names no sequence"));
+
+    let entry = bm.entry_by_target(target);
+
+    let matched = match search_type {
+        "seq" => id == entry.query,
+        _ => family == entry.family,
+    };
+
+    matched.then_some(entry.pid)
+}
+
+/// The decoys a run ranked at or above its worst true pair.
+///
+/// These are the only decoys that can move a point of its ROC: below the
+/// last true pair the curve has reached its full recall, and removing a decoy
+/// there only shortens the flat tail.
+pub fn tested<'a>(hits: &'a [Hit], bm: &Benchmark, search_type: &str) -> HashSet<&'a str> {
+    let best = best(hits);
+
+    let floor = best
+        .iter()
+        .filter(|((target, query), _)| {
+            !target.starts_with("decoy") && truth_of(bm, target, query, search_type).is_some()
+        })
+        .map(|(_, e_value)| *e_value)
+        .max_by(|a, b| e_value_cmp(*a, *b));
+
+    let Some(floor) = floor else {
+        return HashSet::new();
+    };
+
+    // at the floor rather than under it: the ROC counts a true pair only once
+    // its E-value is strictly under a decoy's, so a tie outranks it
+    best.into_iter()
+        .filter(|((target, _), e_value)| target.starts_with("decoy") && *e_value <= floor)
+        .map(|((target, _), _)| target)
+        .collect()
 }
 
 struct HitTable2 {
@@ -398,47 +534,31 @@ struct HitTable2 {
 }
 
 impl HitTable2 {
-    fn new(hits: &[Hit], name: &str, bm: &Benchmark, search_type: &str) -> Self {
-        // a run can report one pair more than once; the best of them is the
-        // one a threshold would see
-        let mut best: HashMap<(&str, &str), f64> = HashMap::new();
-        for hit in hits {
-            best.entry((&hit.target, &hit.query))
-                .and_modify(|e| *e = e.min(hit.e_value))
-                .or_insert(hit.e_value);
-        }
-
+    fn new(
+        hits: &[Hit],
+        name: &str,
+        bm: &Benchmark,
+        search_type: &str,
+        rejected: &HashSet<(String, String)>,
+    ) -> Self {
         let mut positives: Vec<(usize, f64)> = vec![];
         let mut decoys_by_query: HashMap<&str, Vec<f64>> = HashMap::new();
 
-        for ((target, query), e_value) in best {
-            // a query is <family> for a profile and <family>|<id> for a
-            // sequence, and the second is what a decoy list is keyed by
-            let (family, id) = match query.split_once('|') {
-                Some((family, id)) => (family, id),
-                None => (query, query),
-            };
-
+        for ((target, query), e_value) in best(hits) {
             if target.starts_with("decoy") {
-                decoys_by_query.entry(id).or_default().push(e_value);
+                if rejected.contains(&(query.to_string(), target.to_string())) {
+                    continue;
+                }
+
+                decoys_by_query
+                    .entry(query_parts(query).1)
+                    .or_default()
+                    .push(e_value);
                 continue;
             }
 
-            // a target's name carries the pair it is: <family>|<id>|<pid>%
-            let target = target
-                .split('|')
-                .nth(1)
-                .unwrap_or_else(|| panic!("target {target:?} names no sequence"));
-
-            let entry = bm.entry_by_target(target);
-
-            let matched = match search_type {
-                "seq" => id == entry.query,
-                _ => family == entry.family,
-            };
-
-            if matched {
-                positives.push((entry.pid, e_value));
+            if let Some(pid) = truth_of(bm, target, query, search_type) {
+                positives.push((pid, e_value));
             }
         }
 
@@ -480,7 +600,7 @@ struct RecallData {
 }
 
 impl RecallData {
-    fn new(dir: &Path, bm: &Benchmark) -> anyhow::Result<Self> {
+    fn new(dir: &Path, bm: &Benchmark, rejected: &Rejections) -> anyhow::Result<Self> {
         let mut pid_bin_tot_cnts = vec![];
         bm.entries.iter().map(|e| e.pid).for_each(|pid| {
             if pid >= pid_bin_tot_cnts.len() {
@@ -492,8 +612,21 @@ impl RecallData {
         let mut tables = vec![];
         let mut times = vec![];
 
-        for run in runs(dir)? {
-            tables.push(HitTable2::new(&run.hits()?, &run.name, bm, &run.mode));
+        let ran = runs(dir)?;
+        anyhow::ensure!(!ran.is_empty(), "no finished runs in {}", dir.display());
+
+        for run in ran {
+            let judged = rejected.get(&judge(&run)).with_context(|| {
+                format!("no rejections for {}; run `pid reject` again", run.name)
+            })?;
+
+            tables.push(HitTable2::new(
+                &run.hits()?,
+                &run.name,
+                bm,
+                &run.mode,
+                judged,
+            ));
             times.push(run.wall_s);
         }
 

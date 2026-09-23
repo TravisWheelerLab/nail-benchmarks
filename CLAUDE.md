@@ -243,7 +243,7 @@ builder stamps `#= shape` and the benchmark names the one it reads, and
 | `reversed` | the same as `fixed` | the same as `fixed` | cutoffs |
 | `cross` | the same as `fixed` | `query_src`, `target_src`, `seqs`, `residues`, `bytes` | cloud-search, loss-decomp |
 | `pairs` | `query_fa`, `target` | `pair`, `query_residues`, `residues` | long-seqs |
-| `profmark` | `query_hmm`, `query_sto`, `query_fa`, `target` | `truth` | pid |
+| `profmark` | `query_hmm`, `query_sto`, `query_fa`, `target` | `truth`, `originals` | pid |
 
 `reversed` is `fixed` written backwards: the same sources, the same seed and
 the same sharding, with each sequence reversed as it is dealt. Reversing keeps
@@ -256,8 +256,8 @@ it with `reversed = true`.
 single row. What tells a true pair from a decoy, and at what percent identity,
 is per pair rather than per unit, so it cannot be a column -- `truth` names the
 file that carries it, relative to the set root, the way the representation
-columns name theirs. The shape check sees that the file is named, not what is
-in it.
+columns name theirs. `originals` names the decoys unreversed, the same way.
+The shape check sees that each file is named, not what is in it.
 
 `cross` is the only shape where both sides are lists of independent sources
 rather than cuts of one. `fixed` grids a query over a partition of a single
@@ -636,8 +636,10 @@ one in the older shape and said where they differed.
 
 Recall as a function of the percent identity between a query and its target.
 `build-set --in pid-toy|pid-real` assembles it from a profmark split: Pfam
-families divided by identity, their true targets hidden in a Swissprot decoy
-background, and `truth.tbl` recording which pair is which and at what identity.
+families divided by identity, with their true targets hidden among whole TrEMBL
+sequences written backwards, 100 per true pair. `truth.tbl` records which pair
+is which and at what identity, and `originals.fa` holds each decoy unreversed
+under the name `target.fa` gives it.
 
 The whole benchmark is one search unit -- every query against one target file --
 so the set has one row, and the truth is per pair rather than per unit. That is
@@ -646,11 +648,24 @@ why `truth` names a file instead of being a column: see the `profmark` shape.
 The split itself sits at `benchmarks/pid/profmark/` rather than in the set. It
 depends only on the alignments and the split parameters, both labels draw from
 the same one, and the recipe points at it. Drawing it costs about a minute with
-`create-profmark --onlysplit`; the assembly after it is seconds.
+`create-profmark --onlysplit`. The toy's assembly after it took 68 s, 66 s of
+that drawing 20,000 decoys from TrEMBL's 149.4 million sequences.
 
-`pid run` searches every tool against the set, `parse` turns the results into
-the tables the plot scripts read, and `plot` draws them. All three take
-`--in <label>`.
+`pid run` searches every tool against the set, into `outputs/search/`. `pid
+reject` then searches each tool against the originals of the decoys it has to
+settle, into `outputs/reject/`. `parse` turns the results into the tables the
+plot scripts read, and `plot` draws them. All four take `--in <label>`.
+
+Rejection is the cutoffs rule applied per pair: a (query, decoy) hit is dropped
+when the same tool, in the same mode, hits that decoy's original at E ≤ 1e-3.
+A tool is searched only against the decoys one of its runs ranked at or above
+that run's worst true pair. A decoy ranked below every true pair cannot move a
+point of the ROC, so the curve means what it did before rejection existed.
+Each tool runs at the most sensitive setting it swept. The union a tool has to
+settle can be most of the decoys. On the toy with Swissprot decoys, a few of
+mmseqs' true pairs scored at E ≈ 1e4, which pulled in nearly all 20,000. The
+reject test compares E-values from databases of different sizes, and nothing
+corrects for that yet.
 
 `parse` has three subcommands. `recall` writes `pid.tbl`, `roc.tbl` and
 `time.tbl`: one row per run per identity bin, one row per run per point of its
