@@ -17,9 +17,9 @@ use tabl::{Column, Schema, Stream, Widths};
 use util::ledger::{self, Ledger};
 use util::set::Set;
 
-use crate::collect::{self, Job};
-use crate::shard::{Count, Pair, Scratch, Shard};
-use crate::{Cutoffs, Meta, Queries, Tool, label, runs, tools};
+use crate::scores::collect::{self, Job};
+use crate::scores::shard::{Count, Pair, Scratch, Shard};
+use crate::scores::{Cutoffs, Meta, Queries, Tool, label, runs, tools};
 
 /// How wide a target name is written. MGnify's are sixteen characters, and a
 /// wider one overruns rather than widening the column, since the header has
@@ -51,10 +51,10 @@ pub fn collect(args: Args<'_>) -> anyhow::Result<Count> {
     let columns = runs(&ran)?;
     ensure!(!columns.is_empty(), "no finished runs in {}", args.dir.display());
     ensure!(
-        columns.len() <= crate::MAX_RUNS,
+        columns.len() <= crate::scores::MAX_RUNS,
         "{} runs, and a pass string holds {}",
         columns.len(),
-        crate::MAX_RUNS
+        crate::scores::MAX_RUNS
     );
 
     let shards = ran.shards();
@@ -65,7 +65,7 @@ pub fn collect(args: Args<'_>) -> anyhow::Result<Count> {
 
     let meta = Meta {
         query: queries.size,
-        targets: crate::target_sizes(args.set, &shards)?,
+        targets: crate::scores::target_sizes(args.set, &shards)?,
         // recall never seeds, so there is no stage to time and no line
         seeds: Vec::new(),
         cutoffs: collect::absolute(args.cutoffs),

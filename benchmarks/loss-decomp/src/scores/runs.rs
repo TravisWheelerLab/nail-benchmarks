@@ -52,10 +52,10 @@ use tabl::{Column, Schema, Stream, Widths};
 use util::ledger::{self, Ledger};
 use util::set::Set;
 
-use crate::collect::{self, Job};
-use crate::frame::{Frame, Layout, Verdict};
-use crate::shard::{Count, Pair, Scratch, Shard};
-use crate::{Cutoffs, Meta, Named, Queries, label, runs};
+use crate::scores::collect::{self, Job};
+use crate::scores::frame::{Frame, Layout, Verdict};
+use crate::scores::shard::{Count, Pair, Scratch, Shard};
+use crate::scores::{Cutoffs, Meta, Named, Queries, label, runs};
 
 /// The `#= format` line a runs table opens with.
 pub const FORMAT: &str = "#= format runs 1";
@@ -131,7 +131,7 @@ pub fn collect(args: Args<'_>) -> anyhow::Result<Count> {
 
     let meta = Meta {
         query: queries.size,
-        targets: crate::target_sizes(args.set, &shards)?,
+        targets: crate::scores::target_sizes(args.set, &shards)?,
         seeds,
         cutoffs: collect::absolute(args.cutoffs),
         c: args.c,
@@ -303,8 +303,6 @@ pub fn layout(meta: &Meta) -> Layout {
 
     Layout {
         fields: SCORES_AT + runs + 2,
-        pass: None,
-        dom: SCORES_AT + runs + 1,
     }
 }
 
@@ -336,7 +334,7 @@ impl<R: Read> Reader<R> {
         let cutoffs = Named::read(&frame.meta.cutoffs, frame.meta.c)?;
 
         frame.layout(layout(&frame.meta));
-        frame.verdict(Verdict::Score {
+        frame.verdict(Verdict {
             at: SCORES_AT,
             cutoffs,
         });

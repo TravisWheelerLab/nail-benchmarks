@@ -6,6 +6,7 @@
 
 mod plot;
 mod run;
+mod scores;
 
 use std::path::PathBuf;
 
@@ -44,11 +45,11 @@ enum Command {
 enum Parse {
     /// Read the results into runs.tbl, one row per pair, one score column per
     /// run, and whether seeding found the pair.
-    Runs(scores::parse::ScoresArgs),
+    Runs(crate::scores::parse::ScoresArgs),
     /// What every run found and what it cost, one row per run.
-    Summary(scores::parse::TableArgs),
+    Summary(crate::scores::parse::TableArgs),
     /// Where the hits hmmer found were lost, one row per run per checkpoint.
-    Stages(scores::parse::TableArgs),
+    Stages(crate::scores::parse::TableArgs),
 }
 
 /// This crate's directory, fixed at compile time. The plot script hangs off
@@ -118,15 +119,15 @@ impl Command {
                 a.run = paths.run.clone();
                 a.set = paths.set.clone();
                 a.analysis = paths.analysis.clone();
-                scores::parse::main(scores::parse::Cmd::Runs(a))
+                crate::scores::parse::main(crate::scores::parse::Cmd::Runs(a))
             }
             Command::Parse(Parse::Summary(mut a)) => {
                 a.analysis = paths.analysis.clone();
-                scores::parse::main(scores::parse::Cmd::Summary(a))
+                crate::scores::parse::main(crate::scores::parse::Cmd::Summary(a))
             }
             Command::Parse(Parse::Stages(mut a)) => {
                 a.analysis = paths.analysis.clone();
-                scores::parse::main(scores::parse::Cmd::Stages(a))
+                crate::scores::parse::main(crate::scores::parse::Cmd::Stages(a))
             }
         }
     }

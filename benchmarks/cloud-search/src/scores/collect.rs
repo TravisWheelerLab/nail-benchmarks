@@ -21,7 +21,7 @@ use std::sync::{Condvar, Mutex, mpsc};
 
 use util::manifest;
 
-use crate::shard::{Count, Scratch, Shard};
+use crate::scores::shard::{Count, Scratch, Shard};
 
 /// What a shard costs to hold while it is collected, beside the share of its
 /// input that [`estimate`] allows for.

@@ -11,13 +11,13 @@
 use std::collections::BTreeSet;
 use std::path::Path;
 
-use anyhow::{bail, ensure};
+use anyhow::ensure;
 
 use util::tbl;
 
-use crate::frame::{Frame, Verdict};
-use crate::runs::Reader as Runs;
-use crate::{Named, Tool, read, runs};
+use crate::scores::frame::{Frame, Verdict};
+use crate::scores::runs::Reader as Runs;
+use crate::scores::{Named, Tool, runs};
 
 /// What every run found, and what it cost.
 ///
@@ -33,22 +33,18 @@ use crate::{Named, Tool, read, runs};
 pub fn summary(path: &Path, out: &Path) -> anyhow::Result<()> {
     let mut scores = Frame::open(path)?;
 
-    let (layout, verdict) = match scores.format() {
-        f if f == crate::FORMAT => (
-            read::layout(&scores.meta),
-            Verdict::Pass(read::PASS),
-        ),
-        f if f == runs::FORMAT => (
-            runs::layout(&scores.meta),
-            Verdict::Score {
-                at: runs::SCORES_AT,
-                cutoffs: Named::read(&scores.meta.cutoffs, scores.meta.c)?,
-            },
-        ),
-        other => bail!("{} opens `{other}`, which is no table here", path.display()),
-    };
-    scores.layout(layout);
-    scores.verdict(verdict);
+    ensure!(
+        scores.format() == runs::FORMAT,
+        "{} opens `{}`, which is not a runs table",
+        path.display(),
+        scores.format()
+    );
+
+    scores.layout(runs::layout(&scores.meta));
+    scores.verdict(Verdict {
+        at: runs::SCORES_AT,
+        cutoffs: Named::read(&scores.meta.cutoffs, scores.meta.c)?,
+    });
 
     let hmmer = scores.meta.hmmer()?;
     let runs = scores.meta.runs.len();
@@ -149,7 +145,7 @@ pub fn summary(path: &Path, out: &Path) -> anyhow::Result<()> {
 
 /// What was searched, what the fractions are fractions of, and the two times
 /// the figures use as reference lines.
-fn preamble(meta: &crate::Meta, truth: usize, rows: u64) -> String {
+fn preamble(meta: &crate::scores::Meta, truth: usize, rows: u64) -> String {
     let (mut count, mut residues, mut bytes) = (0usize, 0u64, 0u64);
     for (_, size) in &meta.targets {
         count += size.count;

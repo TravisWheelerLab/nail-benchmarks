@@ -6,6 +6,7 @@
 
 mod plot;
 mod run;
+mod scores;
 
 /// This crate's directory, fixed at compile time. The plot script hangs off
 /// it; everything a run produces lives in the store.
@@ -47,9 +48,9 @@ enum Command {
 enum Parse {
     /// Read the results into runs.tbl, one row per pair, one score column per
     /// run, and whether seeding found the pair.
-    Runs(scores::parse::ScoresArgs),
+    Runs(crate::scores::parse::ScoresArgs),
     /// Where the hits hmmer found were lost, one row per run per checkpoint.
-    Stages(scores::parse::TableArgs),
+    Stages(crate::scores::parse::TableArgs),
 }
 
 /// Where this benchmark reads and writes, as one label of `paths.toml` names
@@ -112,11 +113,11 @@ impl Command {
                 a.run = paths.run.clone();
                 a.set = paths.set.clone();
                 a.analysis = paths.analysis.clone();
-                scores::parse::main(scores::parse::Cmd::Runs(a))
+                crate::scores::parse::main(crate::scores::parse::Cmd::Runs(a))
             }
             Command::Parse(Parse::Stages(mut a)) => {
                 a.analysis = paths.analysis.clone();
-                scores::parse::main(scores::parse::Cmd::Stages(a))
+                crate::scores::parse::main(crate::scores::parse::Cmd::Stages(a))
             }
         }
     }

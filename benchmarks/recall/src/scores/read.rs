@@ -11,8 +11,8 @@
 //! one -- a summary asks only what the `pass` string says. One that wanted a
 //! tool's score would add the accessor then, against this layout.
 
-use crate::Meta;
-use crate::frame::Layout;
+use crate::scores::Meta;
+use crate::scores::frame::Layout;
 
 /// Where recall's score columns start: after query, target and pass.
 const SCORES: usize = 3;
@@ -27,7 +27,7 @@ pub fn layout(meta: &Meta) -> Layout {
 
     Layout {
         fields: SCORES + tools + 2,
-        pass: Some(PASS),
+        pass: PASS,
         dom: SCORES + tools + 1,
     }
 }
@@ -36,8 +36,8 @@ pub fn layout(meta: &Meta) -> Layout {
 mod tests {
     use super::*;
 
-    use crate::FORMAT;
-    use crate::frame::{Frame, Verdict};
+    use crate::scores::FORMAT;
+    use crate::scores::frame::Frame;
 
     /// Two runs, two rows, and a pair hmmer never reported.
     const FILE: &str = "\
@@ -62,7 +62,6 @@ beta MGYP000000000002 Nh 11.0   -      -   -
 
         anyhow::ensure!(frame.format() == FORMAT, "not a scores table");
         frame.layout(layout(&frame.meta));
-        frame.verdict(Verdict::Pass(PASS));
 
         Ok(frame)
     }

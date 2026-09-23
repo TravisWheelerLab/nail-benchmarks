@@ -10,13 +10,11 @@ members = [
     "benchmarks/long-seqs",
     "benchmarks/pid",
     "benchmarks/recall",
-    "benchmarks/scores",
     "benchmarks/store",
     "benchmarks/util",
 ]
 
 [workspace.dependencies]
-scores = { path = "benchmarks/scores" }
 util = { path = "benchmarks/util" }
 tabl = { path = "../tabl" }
 

@@ -30,9 +30,9 @@ use libsail::tbl::nail::NailTable;
 
 use util::manifest;
 
-use crate::scan;
+use crate::scores::scan;
 use libsail::lines::Rows as TableRows;
-use crate::{Column, Cutoffs, Queries, Tool};
+use crate::scores::{Column, Cutoffs, Queries, Tool};
 
 /// How many bits of a key the target holds.
 const TID: u32 = 41;

@@ -12,13 +12,10 @@ use clap::{Parser, Subcommand};
 
 use util::set::Set;
 
-use crate::analyze;
+use crate::scores::analyze;
 
 #[derive(Subcommand)]
 pub enum Cmd {
-    /// Read recall's results into scores.tbl, one row per pair, one score
-    /// column per tool.
-    Scores(ScoresArgs),
     /// Read a sweep's results into runs.tbl, one row per pair, one score
     /// column per run, and whether seeding found the pair.
     Runs(ScoresArgs),
@@ -31,7 +28,6 @@ pub enum Cmd {
 
 pub fn main(cmd: Cmd) -> anyhow::Result<()> {
     match cmd {
-        Cmd::Scores(args) => scores(args),
         Cmd::Runs(args) => runs(args),
         Cmd::Summary(args) => summary(args),
         Cmd::Stages(args) => stages(args),
@@ -82,28 +78,11 @@ pub struct ScoresArgs {
     mem: Option<f64>,
 }
 
-fn scores(args: ScoresArgs) -> anyhow::Result<()> {
-    let set = Inputs::resolve(args, "scores.tbl")?;
-
-    let count = crate::write::collect(crate::write::Args {
-        dir: &set.dir,
-        query_hmm: &set.query_hmm,
-        set: &set.set,
-        cutoffs: &set.cutoffs,
-        c: set.c,
-        out: &set.out,
-        threads: set.threads,
-        mem: set.mem,
-    })?;
-
-    set.report(count);
-    Ok(())
-}
 
 fn runs(args: ScoresArgs) -> anyhow::Result<()> {
     let set = Inputs::resolve(args, "runs.tbl")?;
 
-    let count = crate::runs::collect(crate::runs::Args {
+    let count = crate::scores::runs::collect(crate::scores::runs::Args {
         dir: &set.dir,
         query_hmm: &set.query_hmm,
         set: &set.set,
@@ -148,7 +127,7 @@ impl Inputs {
 
         let mem = match args.mem {
             Some(gb) => (gb * (1u64 << 30) as f64) as u64,
-            None => crate::collect::ram() / 2,
+            None => crate::scores::collect::ram() / 2,
         };
 
         // held to the one column this opens rather than to a shape: the
@@ -203,7 +182,7 @@ impl Inputs {
         })
     }
 
-    fn report(&self, count: crate::shard::Count) {
+    fn report(&self, count: crate::scores::shard::Count) {
         println!(
             "wrote {} ({} rows out of {} hits)",
             self.out.display(),

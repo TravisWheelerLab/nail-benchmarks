@@ -64,11 +64,9 @@ pub mod analyze;
 pub mod collect;
 pub mod parse;
 pub mod frame;
-pub mod read;
 pub mod runs;
 mod scan;
 pub mod shard;
-pub mod write;
 
 use std::collections::{BTreeMap, HashMap};
 use std::fmt;
@@ -90,12 +88,6 @@ pub const FORMAT: &str = "#= format scores 2";
 /// carrying enough of a hit to count as its own.
 pub const SIGNIFICANT: f32 = 0.1;
 
-/// How many runs a `scores.tbl` can hold, which is the length of its pass
-/// string.
-//
-// recall sweeps six. the sweeps' own table has no pass string and so no
-// ceiling from one: cloud-search's grid is 164 columns wide
-pub const MAX_RUNS: usize = 128;
 
 // ---
 
@@ -109,8 +101,6 @@ pub enum Tool {
 }
 
 impl Tool {
-    /// Every tool, in the order their score columns are written.
-    pub const ALL: [Tool; 3] = [Tool::Nail, Tool::Mmseqs, Tool::Hmmer];
 
     pub fn parse(name: &str) -> anyhow::Result<Tool> {
         match name {
@@ -130,24 +120,7 @@ impl Tool {
         }
     }
 
-    /// The tool a `pass` character names, whichever case it is in.
-    pub fn of_letter(letter: u8) -> Option<Tool> {
-        match letter.to_ascii_lowercase() {
-            b'n' => Some(Tool::Nail),
-            b'm' => Some(Tool::Mmseqs),
-            b'h' => Some(Tool::Hmmer),
-            _ => None,
-        }
-    }
 
-    /// Where this tool's score column sits among the ones a table carries.
-    pub fn at(self) -> usize {
-        match self {
-            Tool::Nail => 0,
-            Tool::Mmseqs => 1,
-            Tool::Hmmer => 2,
-        }
-    }
 }
 
 impl fmt::Display for Tool {
@@ -262,13 +235,6 @@ pub fn runs(ran: &Ledger) -> anyhow::Result<Vec<Column>> {
         .collect()
 }
 
-/// The tools a set of runs used, in the order their columns are written.
-pub fn tools(runs: &[Run]) -> Vec<Tool> {
-    Tool::ALL
-        .into_iter()
-        .filter(|tool| runs.iter().any(|run| run.tool == *tool))
-        .collect()
-}
 
 // -------------------------------------------------------------------- query
 
@@ -357,10 +323,6 @@ impl Queries {
 
     pub fn name(&self, id: u32) -> &str {
         &self.names[id as usize]
-    }
-
-    pub fn is_empty(&self) -> bool {
-        self.len() == 0
     }
 
     pub fn len(&self) -> usize {
@@ -617,10 +579,6 @@ impl Meta {
         Ok(i)
     }
 
-    /// The tools whose score columns the table carries.
-    pub fn tools(&self) -> Vec<Tool> {
-        tools(&self.runs)
-    }
 }
 
 /// A [`Meta`] as its lines arrive, since a reader meets them one at a time.

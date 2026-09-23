@@ -1,0 +1,716 @@
+//! One row per query/target pair, and what the runs made of it.
+//!
+//! Two tables are written in this shape and share everything but their
+//! columns. [`write`] holds recall's, a score per tool; [`runs`] holds the
+//! sweeps', a score per run. What is in this module is what neither owns: the
+//! tools, the runs a ledger declares, the query numbering, the cutoffs, and
+//! the preamble both write. [`shard`] reads a shard's results into pairs and
+//! [`collect`] turns shards into a file; [`frame`] reads one back.
+//!
+//! ```text
+//! #= format scores 2
+//! #= query <count> <residues> <bytes>
+//! #= target <shard> <count> <residues> <bytes>
+//! #= seed <shard> <wall_s>
+//! #= cutoffs <path> c=<n>
+//! #= run <name> <tool> <wall_s> [k=v ...]
+//! #= pass <run name> ...
+//! # query target           pass   nail   mmseqs hmmer  inc dom
+//! # ----- ---------------- ------ ------ ------ ------ --- ---
+//! #= shard 1
+//! 2-Hacid_dh_C MGYP000522683479 NNNMMH 98.8   94.0   98.7   1   98.1
+//! 2-Hacid_dh_C MGYP000715666710 nnnmmh -      -      13.7   0   9.3,2.8
+//! 2-oxoacid_dh MGYP000987338150 NNNMMH 145.6  140.0  145.5  1   145.2
+//! #= shard 2
+//! ...
+//! #= end <rows>
+//! ```
+//!
+//! One `#= target` line per shard and one `#= run` line per run, both in
+//! ledger order; `#= seed` says what seeding cost, and is absent for a
+//! pipeline that never seeds; `#= cutoffs` records the file and the column the
+//! pass letters were judged by; `#= pass` names the run behind each character
+//! of the `pass` column. A reader refuses a file that does not open the format
+//! line its table expects.
+//!
+//! Rows sit in a block per shard, sorted by (query, target) within the block.
+//! A sequence lives in exactly one shard, so the blocks partition the pairs
+//! and nothing has to sort the whole file at once.
+//!
+//! `pass` holds one character per run: `n`, `m` or `h` for the tool, uppercase
+//! where that run reported the pair at or above its family's cutoff and
+//! lowercase otherwise, so a pair no run passed reads `nnnmmh`. hmmer is held
+//! to nail's cutoff, as it is in the calibration.
+//!
+//! Which axis the score columns run along is the one thing the two tables
+//! disagree about, and [`write`] and [`runs`] each say why. `-` means no score:
+//! absent is not one, and a zero or a NaN would compare against a threshold
+//! and look like one.
+//!
+//! `inc` is hmmer's tblout inclusion count and `dom` its per-domain scores in
+//! domtbl order, so the k-th score is the k-th row of
+//! `results/<run>.<shard>.domtbl` and the coordinates stay there.
+//!
+//! A pair earns a row by clearing some run's cutoff, or by hmmer having
+//! reported it at all. hmmer's whole reported set is kept because it is what
+//! everything else is measured against: a pair it found weakly is still a
+//! pair they can be asked about.
+//!
+//! Every column is padded to its width except `query`, which is unpadded
+//! because a query's rows are adjacent and so line up without it, and `dom`,
+//! which is as wide as the pair has domains.
+
+pub mod analyze;
+pub mod collect;
+pub mod parse;
+pub mod frame;
+pub mod runs;
+mod scan;
+pub mod shard;
+
+use std::collections::{BTreeMap, HashMap};
+use std::fmt;
+use std::path::{Path, PathBuf};
+
+use anyhow::{Context, bail, ensure};
+
+use libsail::format::Format;
+use libsail::index::Reader;
+use libsail::seq::p7hmm::leng_of;
+
+use util::ledger::{self, Ledger};
+use util::set::Set;
+
+/// What recall's table opens with. The sweeps' is [`runs::FORMAT`].
+pub const FORMAT: &str = "#= format scores 2";
+
+
+
+// ---
+
+/// Which program produced a results table, which settles both how to read it
+/// and which cutoff its scores are held against.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
+pub enum Tool {
+    Nail,
+    Mmseqs,
+    Hmmer,
+}
+
+impl Tool {
+
+    pub fn parse(name: &str) -> anyhow::Result<Tool> {
+        match name {
+            "nail" => Ok(Tool::Nail),
+            "mmseqs" => Ok(Tool::Mmseqs),
+            "hmmer" => Ok(Tool::Hmmer),
+            other => bail!("unknown tool {other:?} in ledger.tbl"),
+        }
+    }
+
+    /// This tool's character in a `pass` string, lowercase.
+    pub fn letter(self) -> u8 {
+        match self {
+            Tool::Nail => b'n',
+            Tool::Mmseqs => b'm',
+            Tool::Hmmer => b'h',
+        }
+    }
+
+
+}
+
+impl fmt::Display for Tool {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let name = match self {
+            Tool::Nail => "nail",
+            Tool::Mmseqs => "mmseqs",
+            Tool::Hmmer => "hmmer",
+        };
+        write!(f, "{name}")
+    }
+}
+
+/// How big one side of a search is.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Size {
+    /// Families for the query, sequences for a target shard.
+    pub count: usize,
+    pub residues: u64,
+    pub bytes: u64,
+}
+
+/// What the set says each of these units came to.
+///
+/// Counting a shard means reading it, and at a thousand shards of three
+/// gigabytes that is the whole benchmark read a second time to fill in a
+/// metadata line. The build counted as it dealt and wrote the counts into the
+/// manifest, so this is a lookup.
+pub fn target_sizes(set: &Set, shards: &[String]) -> anyhow::Result<Vec<(String, Size)>> {
+    shards
+        .iter()
+        .map(|shard| {
+            let unit = set
+                .units()
+                .find(|u| u.name() == shard)
+                .with_context(|| format!("the set has no unit {shard:?}"))?;
+
+            Ok((
+                shard.clone(),
+                Size {
+                    count: unit.number("seqs")? as usize,
+                    residues: unit.number("residues")?,
+                    bytes: unit.number("bytes")?,
+                },
+            ))
+        })
+        .collect()
+}
+
+/// One column: a named run of one tool at one parameterization.
+#[derive(Clone, Debug)]
+pub struct Run {
+    pub name: String,
+    pub tool: Tool,
+    /// What the column cost, summed over every shard it covered.
+    pub wall_s: f64,
+    /// Whatever else the commands recorded -- the settings that tell this run
+    /// apart from the others of the same tool.
+    pub params: BTreeMap<String, String>,
+    /// Which seed list this run replayed, `None` where it did not replay one.
+    ///
+    /// Held apart from `params` because it says where to read something rather
+    /// than what was swept: as a setting it would become a column of every
+    /// summary and a term in every figure's parameter space, and it is neither.
+    pub seeds: Option<String>,
+}
+
+/// A run and the shards it covered, which is what collecting needs and what
+/// the written table has no use for: the shards are a property of the
+/// pipeline, listed once in its `#= target` lines rather than once per column.
+pub struct Column {
+    pub run: Run,
+    /// In manifest order. Empty string for a pipeline that never named one.
+    pub shards: Vec<String>,
+}
+
+/// The runs a pipeline declared, in the order it declared them.
+///
+/// The grouping and the wall clock are [`util::ledger`]'s work; what is left
+/// here is which tool a column's name belongs to, since that is what says how
+/// to read its table.
+pub fn runs(ran: &Ledger) -> anyhow::Result<Vec<Column>> {
+    let columns = ran.columns()?;
+
+    columns
+        .into_iter()
+        .map(|column| {
+            // a run whose rows are all `*` says what it cost without saying
+            // which targets it searched, and a table read by shard has nothing
+            // to open. every row of its column would be a dash
+            ensure!(
+                !column.shards.is_empty(),
+                "run {:?} covers no shard of its own in ledger.tbl: every row of it is `{}`",
+                column.name,
+                ledger::EVERY_SHARD,
+            );
+
+            let mut params = column.params;
+            let seeds = params.remove(util::manifest::SEEDS);
+
+            Ok(Column {
+                run: Run {
+                    name: column.name,
+                    tool: Tool::parse(&column.tool)?,
+                    wall_s: column.wall_s,
+                    params,
+                    seeds,
+                },
+                shards: column.shards,
+            })
+        })
+        .collect()
+}
+
+
+// -------------------------------------------------------------------- query
+
+/// The query families, numbered in the order their names sort.
+///
+/// A family becomes a number once, here, and everything downstream carries the
+/// number: it is half of a pair's sort key, and the index a cutoff is looked
+/// up at. Sorting by the number is sorting by the name, which is what lets a
+/// block be sorted without a string comparison in it.
+pub struct Queries {
+    /// Sorted, so a name's index is its rank.
+    names: Vec<String>,
+    at: HashMap<String, u32>,
+    pub size: Size,
+}
+
+impl Queries {
+    /// The families in a `query.hmm`, with what the set comes to.
+    ///
+    /// Counted off the file rather than remembered from the build, so it
+    /// describes the models that are there.
+    pub fn from_hmm(path: &Path) -> anyhow::Result<Queries> {
+        let bytes = std::fs::metadata(path)
+            .with_context(|| format!("failed to stat {}", path.display()))?
+            .len();
+
+        // one streaming pass over the framed bytes: a name and a LENG are
+        // both read off a model's text, and parsing 20,795 of them to reach
+        // two fields allocates every match, insert and transition row on the
+        // way past
+        let file = std::fs::File::open(path)
+            .with_context(|| format!("failed to open {}", path.display()))?;
+        let mut models = Reader::new(std::io::BufReader::new(file), Format::Hmm);
+
+        let mut names: Vec<String> = Vec::new();
+        let mut residues = 0u64;
+
+        while models
+            .advance()
+            .with_context(|| format!("failed to read {}", path.display()))?
+        {
+            let model = models.record();
+
+            let name = libsail::seq::name_of(Format::Hmm, model)
+                .with_context(|| format!("a model in {} has no NAME", path.display()))?;
+            names.push(String::from_utf8_lossy(name).into_owned());
+
+            // LENG is the query axis of a search's matrix, and so the honest
+            // measure of how much work the set is
+            residues += leng_of(model)
+                .with_context(|| format!("a model in {} has no LENG", path.display()))?
+                as u64;
+        }
+
+        let size = Size {
+            count: names.len(),
+            residues,
+            bytes,
+        };
+
+        names.sort_unstable();
+        names.dedup();
+
+        ensure!(
+            names.len() <= Queries::MOST,
+            "{} families, and a pair's key holds {}",
+            names.len(),
+            Queries::MOST
+        );
+
+        let at = names
+            .iter()
+            .enumerate()
+            .map(|(i, name)| (name.clone(), i as u32))
+            .collect();
+
+        Ok(Queries { names, at, size })
+    }
+
+    /// How many families fit in the query half of a pair's key.
+    pub const MOST: usize = 1 << 23;
+
+    pub fn id(&self, name: &str) -> Option<u32> {
+        self.at.get(name).copied()
+    }
+
+    pub fn name(&self, id: u32) -> &str {
+        &self.names[id as usize]
+    }
+
+    pub fn len(&self) -> usize {
+        self.names.len()
+    }
+}
+
+// ------------------------------------------------------------------ cutoffs
+
+/// The score each family's hits are held to, by query id.
+///
+/// hmmer takes nail's: nail approximates hmmer's model, and the calibration
+/// learns no threshold of hmmer's own that anything reads.
+pub struct Cutoffs {
+    nail: Vec<Option<f32>>,
+    mmseqs: Vec<Option<f32>>,
+}
+
+impl Cutoffs {
+    /// The threshold a run of `tool` is held to on one family.
+    pub fn get(&self, tool: Tool, query: u32) -> Option<f32> {
+        let column = match tool {
+            Tool::Nail | Tool::Hmmer => &self.nail,
+            Tool::Mmseqs => &self.mmseqs,
+        };
+
+        column.get(query as usize).copied().flatten()
+    }
+
+    /// One score per family per tool, out of the decoys the calibration scored
+    /// it against.
+    ///
+    /// A zero means the family had fewer decoys than the file has slots, so
+    /// that tool learned nothing about it and gets no cutoff. The two tools are
+    /// kept apart rather than dropped together: a family nail has a threshold
+    /// for is still measurable against nail, whatever mmseqs made of it.
+    ///
+    /// `cutoffs.tbl` names its columns `<tool>_1..<tool>_5` and `<tool>_n`, so
+    /// the column to read is found by name rather than by counting -- which is
+    /// what lets the calibration add a tool without moving anything here.
+    pub fn read(path: &Path, c: usize, queries: &Queries) -> anyhow::Result<Cutoffs> {
+        let mut out = Cutoffs {
+            nail: vec![None; queries.len()],
+            mmseqs: vec![None; queries.len()],
+        };
+
+        parse(path, c, |family, nail, mmseqs| {
+            // a family the calibration knows and this query set does not is
+            // not an error: the calibration covers every family Pfam has
+            if let Some(id) = queries.id(family) {
+                out.nail[id as usize] = nail;
+                out.mmseqs[id as usize] = mmseqs;
+            }
+        })?;
+
+        if out.nail.iter().all(Option::is_none) && out.mmseqs.iter().all(Option::is_none) {
+            bail!(
+                "no usable cutoffs at index {c} in {} for any of the {} families searched",
+                path.display(),
+                queries.len()
+            );
+        }
+
+        Ok(out)
+    }
+}
+
+/// The same table keyed by the family name a row carries.
+///
+/// A reader has the names the table was written with and not the query set
+/// the search numbered them by, so it cannot index [`Cutoffs`].
+pub struct Named(HashMap<String, (Option<f32>, Option<f32>)>);
+
+impl Named {
+    /// Both tools' thresholds on one family, for a reader that asks once per
+    /// family and then answers per run.
+    pub fn pair(&self, family: &str) -> (Option<f32>, Option<f32>) {
+        self.0.get(family).copied().unwrap_or((None, None))
+    }
+
+    pub fn read(path: &Path, c: usize) -> anyhow::Result<Named> {
+        let mut out = HashMap::new();
+
+        parse(path, c, |family, nail, mmseqs| {
+            out.insert(family.to_string(), (nail, mmseqs));
+        })?;
+
+        ensure!(
+            out.values().any(|(nail, mmseqs)| nail.is_some() || mmseqs.is_some()),
+            "no usable cutoffs at index {c} in {}",
+            path.display()
+        );
+
+        Ok(Named(out))
+    }
+}
+
+/// Read `cutoffs.tbl`, handing each family its two thresholds at index `c`.
+///
+/// `cutoffs.tbl` names its columns `<tool>_1..<tool>_5` and `<tool>_n`, so the
+/// column to read is found by name rather than by counting -- which is what
+/// lets the calibration add a tool without moving anything here.
+fn parse(
+    path: &Path,
+    c: usize,
+    mut row: impl FnMut(&str, Option<f32>, Option<f32>),
+) -> anyhow::Result<()> {
+    let text = std::fs::read_to_string(path)
+        .with_context(|| format!("failed to read {}", path.display()))?;
+
+    let headers: Vec<&str> = text
+        .lines()
+        .find_map(|line| {
+            let rest = line.strip_prefix('#')?.trim_start();
+            (!rest.starts_with('-')).then(|| rest.split_whitespace().collect())
+        })
+        .with_context(|| format!("no header in {}", path.display()))?;
+
+    let column = |tool: &str| -> anyhow::Result<usize> {
+        let name = format!("{tool}_{}", c + 1);
+        headers
+            .iter()
+            .position(|h| *h == name)
+            .with_context(|| format!("{} has no {name} column", path.display()))
+    };
+
+    let (nail_at, mmseqs_at) = (column("nail")?, column("mmseqs")?);
+
+    for line in text.lines() {
+        if line.starts_with('#') || line.trim().is_empty() {
+            continue;
+        }
+
+        let cells: Vec<&str> = line.split_whitespace().collect();
+        let Some(family) = cells.first() else {
+            continue;
+        };
+
+        // a zero is a family that tool learned nothing about
+        let score = |at: usize| {
+            cells
+                .get(at)
+                .and_then(|x| x.parse::<f32>().ok())
+                .filter(|s| *s > 0.0)
+        };
+
+        row(family, score(nail_at), score(mmseqs_at));
+    }
+
+    Ok(())
+}
+
+// --------------------------------------------------------------------- meta
+
+/// What a `scores.tbl` says about itself, above the header.
+pub struct Meta {
+    pub query: Size,
+    /// One per shard the runs covered, in ledger order.
+    pub targets: Vec<(String, Size)>,
+    /// Per shard, what seeding cost. Empty where a pipeline never seeded, so
+    /// that seeding taking no time and there being no seeding stay different
+    /// answers.
+    pub seeds: Vec<(String, f64)>,
+    pub cutoffs: PathBuf,
+    pub c: usize,
+    pub runs: Vec<Run>,
+    /// The binaries that produced the results this was read from, carried
+    /// through from the run's ledger. Empty for a table written before they
+    /// were recorded.
+    pub tools: Vec<util::tools::Identity>,
+}
+
+impl Meta {
+    /// `format` is the table's own `#= format` line. Everything under it is
+    /// the same whatever the columns turn out to be, which is why the two
+    /// tables share a preamble and not a schema.
+    pub fn write(&self, format: &str, out: &mut impl std::io::Write) -> std::io::Result<()> {
+        writeln!(out, "{format}")?;
+        writeln!(
+            out,
+            "#= query {} {} {}",
+            self.query.count, self.query.residues, self.query.bytes
+        )?;
+
+        for (shard, size) in &self.targets {
+            writeln!(
+                out,
+                "#= target {} {} {} {}",
+                label(shard),
+                size.count,
+                size.residues,
+                size.bytes
+            )?;
+        }
+
+        for id in &self.tools {
+            writeln!(out, "#= tool {} {} {}", id.name, id.version, id.hash)?;
+        }
+
+        for (name, wall) in &self.seeds {
+            writeln!(out, "#= seed {} {wall:.4}", label(name))?;
+        }
+
+        writeln!(
+            out,
+            "#= cutoffs {} c={}",
+            self.cutoffs.display(),
+            self.c
+        )?;
+
+        for run in &self.runs {
+            // written with the settings and read back out of them, so the
+            // line stays one shape and a reader needs no new field
+            let params: String = run
+                .seeds
+                .iter()
+                .map(|name| format!(" {}={name}", util::manifest::SEEDS))
+                .chain(run.params.iter().map(|(k, v)| format!(" {k}={v}")))
+                .collect();
+
+            writeln!(
+                out,
+                "#= run {} {} {:.4}{params}",
+                run.name, run.tool, run.wall_s
+            )?;
+        }
+
+        // the legend belongs to the pass string, so a table without one gets
+        // no line: `#= run` already gives the order, and a legend beside no
+        // column would read as saying the column is there
+        if format == FORMAT {
+            let names: Vec<&str> = self.runs.iter().map(|run| run.name.as_str()).collect();
+            writeln!(out, "#= pass {}", names.join(" "))?;
+        }
+
+        Ok(())
+    }
+
+    /// Which column is hmmer's, which is what everything else is measured
+    /// against.
+    ///
+    /// A pipeline runs one, so more than one is a table the analyses have no
+    /// answer for rather than a choice to make quietly.
+    pub fn hmmer(&self) -> anyhow::Result<usize> {
+        let mut it = self
+            .runs
+            .iter()
+            .enumerate()
+            .filter(|(_, run)| run.tool == Tool::Hmmer);
+
+        let (i, _) = it.next().context("no hmmer run to measure against")?;
+        ensure!(it.next().is_none(), "more than one hmmer run");
+
+        Ok(i)
+    }
+
+}
+
+/// A [`Meta`] as its lines arrive, since a reader meets them one at a time.
+#[derive(Default)]
+pub struct Preamble {
+    query: Option<Size>,
+    targets: Vec<(String, Size)>,
+    seeds: Vec<(String, f64)>,
+    cutoffs: Option<PathBuf>,
+    c: Option<usize>,
+    runs: Vec<Run>,
+    tools: Vec<util::tools::Identity>,
+    pass: Vec<String>,
+}
+
+impl Preamble {
+    /// Take in one `#=` line's key and fields.
+    pub fn absorb(&mut self, key: &str, fields: &[&str]) -> anyhow::Result<()> {
+        match key {
+            "query" => self.query = Some(size(fields)?),
+            "target" => self.targets.push((shard_of(fields)?, size(&fields[1..])?)),
+            "seed" => {
+                let wall = fields.get(1).context("a `#= seed` line wants a wall time")?;
+                self.seeds.push((shard_of(fields)?, wall.parse()?));
+            }
+            "cutoffs" => {
+                let [path, rest @ ..] = fields else {
+                    bail!("a `#= cutoffs` line wants a path");
+                };
+
+                self.cutoffs = Some(PathBuf::from(path));
+                self.c = rest
+                    .iter()
+                    .find_map(|field| field.strip_prefix("c="))
+                    .map(str::parse)
+                    .transpose()?;
+            }
+            "tool" => {
+                let [name, version, hash] = fields else {
+                    bail!("a `#= tool` line wants a name, a version and a hash");
+                };
+
+                self.tools.push(util::tools::Identity {
+                    name: name.to_string(),
+                    version: version.to_string(),
+                    hash: hash.to_string(),
+                });
+            }
+            "run" => self.runs.push(run(fields)?),
+            "pass" => self.pass = fields.iter().map(|name| name.to_string()).collect(),
+            other => bail!("unknown `#= {other}` line"),
+        }
+
+        Ok(())
+    }
+
+    /// The preamble, once the header has been reached.
+    pub fn finish(self) -> anyhow::Result<Meta> {
+        let meta = Meta {
+            query: self.query.context("no `#= query` line")?,
+            targets: self.targets,
+            seeds: self.seeds,
+            cutoffs: self.cutoffs.context("no `#= cutoffs` line")?,
+            c: self.c.context("no `c=` on the `#= cutoffs` line")?,
+            runs: self.runs,
+            tools: self.tools,
+        };
+
+        ensure!(!meta.runs.is_empty(), "no `#= run` lines");
+        ensure!(!meta.targets.is_empty(), "no `#= target` lines");
+
+        // the pass string is read by position, so a legend that disagrees with
+        // the runs is a file that cannot be read rather than one to guess at.
+        // a table with no pass string has no legend, and the `#= run` lines
+        // are the order there
+        let names: Vec<&str> = meta.runs.iter().map(|run| run.name.as_str()).collect();
+        ensure!(
+            self.pass.is_empty() || self.pass == names,
+            "`#= pass` names {:?}, the runs are {:?}",
+            self.pass,
+            names
+        );
+
+        Ok(meta)
+    }
+}
+
+/// A shard with no name, from a pipeline that only ever searched one target.
+pub fn label(shard: &str) -> &str {
+    match shard.is_empty() {
+        true => "-",
+        false => shard,
+    }
+}
+
+/// The shard a `#= target` line is about, back from its label.
+fn shard_of(fields: &[&str]) -> anyhow::Result<String> {
+    match *fields.first().context("a metadata line names no shard")? {
+        "-" => Ok(String::new()),
+        shard => Ok(shard.to_string()),
+    }
+}
+
+fn size(fields: &[&str]) -> anyhow::Result<Size> {
+    let [count, residues, bytes] = fields else {
+        bail!("a size wants a count, a residue count and a byte count");
+    };
+
+    Ok(Size {
+        count: count.parse()?,
+        residues: residues.parse()?,
+        bytes: bytes.parse()?,
+    })
+}
+
+/// One `#= run` line: a name, a tool, a wall time, then whatever settings told
+/// this run apart from the others.
+fn run(fields: &[&str]) -> anyhow::Result<Run> {
+    let [name, tool, wall, params @ ..] = fields else {
+        bail!("a `#= run` line wants a name, a tool and a wall time");
+    };
+
+    let mut params: BTreeMap<String, String> = params
+        .iter()
+        .filter_map(|p| p.split_once('='))
+        .map(|(k, v)| (k.to_string(), v.to_string()))
+        .collect();
+
+    let seeds = params.remove(util::manifest::SEEDS);
+
+    Ok(Run {
+        name: name.to_string(),
+        tool: Tool::parse(tool)?,
+        wall_s: wall.parse()?,
+        params,
+        seeds,
+    })
+}
