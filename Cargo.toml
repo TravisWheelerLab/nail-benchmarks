@@ -3,7 +3,6 @@ resolver = "2"
 
 members = [
     "benchmarks/build-set",
-    "benchmarks/calibrate",
     "benchmarks/cloud-search",
     "benchmarks/cutoffs",
     "benchmarks/loss-decomp",
