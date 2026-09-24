@@ -51,7 +51,7 @@ OTHER = [
     "blast.seq",
     "hmmer.prf",
     "hmmer.seq",
-    "diamond-ultra-sens.seq",
+    "diamond-ultra-sensitive.seq",
 ]
 
 PLOTTED = [
@@ -130,7 +130,7 @@ def main(args):
                     offset = (0, -30)
 
             annotate(
-                ax, tool, pt, offset, color, rotation,
+                ax, tool, pt, offset, color, rotation=rotation,
                 linestyle='--',
                 arrowstyle='-|>'
             )

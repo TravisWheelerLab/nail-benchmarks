@@ -46,7 +46,7 @@ OTHER = [
     "blast.seq",
     "hmmer.prf",
     "hmmer.seq",
-    "diamond-ultra-sens.seq"
+    "diamond-ultra-sensitive.seq"
 ]
 
 PLOTTED = [
@@ -190,7 +190,7 @@ def plot(args):
         elif pt.prefix == "hmmer.seq":
             offset = (-60, 10)
             va = "center"
-        elif pt.prefix == "diamond-ultra-sens.seq":
+        elif pt.prefix == "diamond-ultra-sensitive.seq":
             offset = (0, 45)
             # va = "center"
             linestyle = '--'
