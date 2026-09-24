@@ -2,8 +2,15 @@
 //! overlap, which run in order, and how much each arrangement adds up to.
 //!
 //! A port of `classify_direct`, the classifier behind the May 2026 MGnify
-//! multi-domain analysis. [`measure`] takes no cutoff; [`classify`] applies
-//! one and returns that analysis's categories.
+//! multi-domain analysis, split into three steps:
+//!
+//! - [`measure`] scores every arrangement of a pair's domains and takes no
+//!   cutoff.
+//! - [`classify`] holds a measure against a per-family cutoff and returns the
+//!   May analysis's seven categories, exactly as its code did.
+//! - [`pattern`] reports which arrangement scores the most, for results that
+//!   have no per-family cutoff. It adds [`Pattern::Diffuse`], which has no
+//!   counterpart in [`Category`].
 
 use std::collections::{BTreeMap, HashSet};
 
@@ -62,12 +69,42 @@ pub struct Measure {
     pub partial: bool,
 }
 
+/// How much of the model a cluster's majority range covers.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
+pub enum Coverage {
+    /// Under half.
+    Fragment,
+    /// Half to 70%.
+    Mid,
+    /// 70% or more.
+    Full,
+}
+
+impl Cluster {
+    pub fn band(&self) -> Coverage {
+        match self.coverage {
+            f if f < COVERAGE_MID => Coverage::Fragment,
+            f if f < COVERAGE_FULL => Coverage::Mid,
+            _ => Coverage::Full,
+        }
+    }
+}
+
+impl Coverage {
+    fn name(self) -> &'static str {
+        match self {
+            Coverage::Fragment => "fragment",
+            Coverage::Mid => "mid",
+            Coverage::Full => "full",
+        }
+    }
+}
+
+/// What a pair's score comes to against a per-family cutoff.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub enum Category {
     Strong,
-    ClusteredFragment,
-    ClusteredMid,
-    ClusteredFull,
+    Clustered(Coverage),
     Ordered,
     Shuffled,
     Weak,
@@ -76,9 +113,9 @@ pub enum Category {
 impl Category {
     pub const ALL: [Category; 7] = [
         Category::Strong,
-        Category::ClusteredFragment,
-        Category::ClusteredMid,
-        Category::ClusteredFull,
+        Category::Clustered(Coverage::Fragment),
+        Category::Clustered(Coverage::Mid),
+        Category::Clustered(Coverage::Full),
         Category::Ordered,
         Category::Shuffled,
         Category::Weak,
@@ -88,12 +125,51 @@ impl Category {
     pub fn name(self) -> &'static str {
         match self {
             Category::Strong => "strong_match",
-            Category::ClusteredFragment => "clustered:fragment",
-            Category::ClusteredMid => "clustered:mid",
-            Category::ClusteredFull => "clustered:full",
+            Category::Clustered(Coverage::Fragment) => "clustered:fragment",
+            Category::Clustered(Coverage::Mid) => "clustered:mid",
+            Category::Clustered(Coverage::Full) => "clustered:full",
             Category::Ordered => "ordered_match",
             Category::Shuffled => "shuffled_match",
             Category::Weak => "weak_match",
+        }
+    }
+}
+
+/// Which arrangement of a pair's domains accounts for the most score, with no
+/// cutoff to measure it against.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
+pub enum Pattern {
+    /// No domain reaches [`MIN_SCORE`], so the score is spread over hits too
+    /// weak to cluster or chain. [`classify`] calls these `weak_match`.
+    Diffuse,
+    /// No arrangement scores above the best single domain.
+    Single,
+    /// Overlapping copies of one region of the model.
+    Clustered(Coverage),
+    /// Domains in the same order in the model and the sequence.
+    Ordered,
+    /// Domains that only add up with their order ignored.
+    Shuffled,
+}
+
+impl Pattern {
+    pub const ALL: [Pattern; 7] = [
+        Pattern::Diffuse,
+        Pattern::Single,
+        Pattern::Clustered(Coverage::Fragment),
+        Pattern::Clustered(Coverage::Mid),
+        Pattern::Clustered(Coverage::Full),
+        Pattern::Ordered,
+        Pattern::Shuffled,
+    ];
+
+    pub fn name(self) -> String {
+        match self {
+            Pattern::Diffuse => "diffuse".to_string(),
+            Pattern::Single => "single".to_string(),
+            Pattern::Clustered(c) => format!("clustered:{}", c.name()),
+            Pattern::Ordered => "ordered".to_string(),
+            Pattern::Shuffled => "shuffled".to_string(),
         }
     }
 }
@@ -176,12 +252,7 @@ pub fn classify(m: &Measure, h_cut: f32) -> (Category, bool) {
     if let Some(c) = m.cluster
         && c.score >= m.chain
     {
-        let category = match c.coverage {
-            f if f < COVERAGE_MID => Category::ClusteredFragment,
-            f if f < COVERAGE_FULL => Category::ClusteredMid,
-            _ => Category::ClusteredFull,
-        };
-        return (category, false);
+        return (Category::Clustered(c.band()), false);
     }
 
     let category = match () {
@@ -190,6 +261,34 @@ pub fn classify(m: &Measure, h_cut: f32) -> (Category, bool) {
         _ => Category::Weak,
     };
     (category, m.partial)
+}
+
+/// The arrangement of a measured pair's domains that scores the most, or
+/// [`Pattern::Diffuse`] if no domain is strong enough to be arranged.
+pub fn pattern(m: &Measure) -> Pattern {
+    // the same test classify makes before it looks at any arrangement. with no
+    // domain at MIN_SCORE there is no cluster and no chain, and the best
+    // single domain would win by default however little of the score it holds
+    if m.important == 0 {
+        return Pattern::Diffuse;
+    }
+
+    // strictly greater, so a tie goes to the simpler arrangement: a chain of
+    // one domain is the best single domain, and an unordered sum usually
+    // holds the best chain
+    let mut best = (Pattern::Single, m.best);
+    if let Some(c) = m.cluster
+        && c.score > best.1
+    {
+        best = (Pattern::Clustered(c.band()), c.score);
+    }
+    if m.chain > best.1 {
+        best = (Pattern::Ordered, m.chain);
+    }
+    if m.unordered > best.1 {
+        best = (Pattern::Shuffled, m.unordered);
+    }
+    best.0
 }
 
 // ---
@@ -437,11 +536,17 @@ mod tests {
         let mid = [d(15.0, (10, 70), (1, 60)), d(14.0, (12, 68), (200, 260))];
         let fragment = [d(12.0, (10, 30), (1, 20)), d(11.0, (12, 28), (200, 220))];
 
-        assert_eq!(category(&full, H_CUT), (Category::ClusteredFull, false));
-        assert_eq!(category(&mid, H_CUT), (Category::ClusteredMid, false));
+        assert_eq!(
+            category(&full, H_CUT),
+            (Category::Clustered(Coverage::Full), false)
+        );
+        assert_eq!(
+            category(&mid, H_CUT),
+            (Category::Clustered(Coverage::Mid), false)
+        );
         assert_eq!(
             category(&fragment, H_CUT),
-            (Category::ClusteredFragment, false)
+            (Category::Clustered(Coverage::Fragment), false)
         );
     }
 
@@ -478,6 +583,35 @@ mod tests {
             d(10.0, (80, 95), (100, 115)),
         ];
         assert_eq!(category(&doms, 18.0), (Category::Ordered, true));
+    }
+
+    #[test]
+    fn pattern_takes_the_arrangement_that_scores_most() {
+        let copies = [d(12.0, (1, 40), (1, 40)), d(12.0, (1, 40), (1, 40))];
+        let lone = [d(12.0, (1, 40), (1, 40))];
+        let ordered = [d(12.0, (1, 40), (1, 40)), d(12.0, (50, 95), (100, 145))];
+        let shuffled = [d(12.0, (1, 40), (200, 240)), d(12.0, (50, 95), (10, 55))];
+        let full = [d(15.0, (10, 90), (1, 80)), d(14.0, (12, 88), (200, 280))];
+
+        let p = |doms: &[Domain]| pattern(&measure(doms, HMM_LEN).unwrap());
+        assert_eq!(p(&lone), Pattern::Single);
+        assert_eq!(p(&ordered), Pattern::Ordered);
+        assert_eq!(p(&shuffled), Pattern::Shuffled);
+        assert_eq!(p(&full), Pattern::Clustered(Coverage::Full));
+
+        // two identical copies cluster to twice one of them
+        assert_eq!(p(&copies), Pattern::Clustered(Coverage::Fragment));
+    }
+
+    #[test]
+    fn many_weak_domains_are_diffuse_whatever_they_add_up_to() {
+        let doms: Vec<Domain> = (0..20)
+            .map(|i| d(3.5, (10, 40), (1 + 50 * i, 31 + 50 * i)))
+            .collect();
+        let m = measure(&doms, HMM_LEN).unwrap();
+
+        assert_eq!(pattern(&m), Pattern::Diffuse);
+        assert_eq!(classify(&m, H_CUT), (Category::Weak, false));
     }
 
     #[test]
