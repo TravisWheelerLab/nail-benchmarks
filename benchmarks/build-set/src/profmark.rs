@@ -10,7 +10,7 @@
 //! The profmark split is drawn once and shared: it depends only on Pfam and the
 //! split parameters, and it is the expensive half.
 
-use std::collections::{HashMap, HashSet};
+use std::collections::{BTreeMap, HashMap, HashSet};
 use std::fs::{self, File};
 use std::io::{BufWriter, Write};
 use std::path::{Path, PathBuf};
@@ -19,16 +19,18 @@ use anyhow::{Context, bail};
 
 use indexmap::IndexMap;
 use libsail::collection::{Indexable, Iterable};
-use libsail::seq::fasta::{DEFAULT_LINE_WIDTH, FastaRecord};
+use libsail::seq::fasta::{DEFAULT_LINE_WIDTH, FastaRecord, IndexedFasta};
 use libsail::seq::stockholm::StockholmRecord;
 use michi::{Closure, Cmd, PipelineBuilder, Progress, Step};
 
 use rand::SeedableRng;
 use rand::rngs::StdRng;
-use rand::seq::IndexedRandom;
+use rand::seq::{IndexedRandom, SliceRandom};
 
 /// Decoys per true pair in the target database.
 const DECOY_RATIO: usize = 100;
+/// Residues per bin of the length histogram the decoys are drawn to match.
+const LEN_BIN: usize = 50;
 /// Pairs above this percent identity are discarded; the benchmark targets the
 /// twilight zone.
 const PID_MAX: usize = 25;
@@ -490,23 +492,42 @@ fn assemble(
     // ---- decoys ----
 
     let n_decoys = pairs.len() * DECOY_RATIO;
-    println!(
-        "sampling {n_decoys} decoys from {} source sequences...",
-        src_fa.len()
-    );
+    let quota = length_quota(&targets, n_decoys);
 
-    anyhow::ensure!(
-        n_decoys <= src_fa.len(),
-        "{n_decoys} decoys asked of {} source sequences",
-        src_fa.len()
-    );
+    // a uniform draw, thinned per length bin to the quota. the draw is widened
+    // until every bin holds enough, and a draw is the same one for the same
+    // size and seed, so the second pass reads back the records the first
+    // chose
+    let mut drawn = (n_decoys * 4).min(src_fa.len());
+    let keep = loop {
+        println!(
+            "drawing {drawn} of {} source sequences for {n_decoys} length-matched decoys...",
+            src_fa.len()
+        );
+
+        if let Some(keep) = thin(&src_fa, drawn, seed, &quota) {
+            break keep;
+        }
+
+        anyhow::ensure!(
+            drawn < src_fa.len(),
+            "{} source sequences cannot fill the decoy length quota",
+            src_fa.len()
+        );
+        drawn = (drawn * 2).min(src_fa.len());
+    };
 
     let mut originals_writer =
         BufWriter::new(File::create(at.originals()).context("failed to open originals.fa")?);
 
+    let kept = src_fa
+        .sample_in_order(drawn, seed)
+        .zip(keep)
+        .filter_map(|(rec, keep)| keep.then_some(rec));
+
     // one name for both forms, so a hit against an original reads back as
     // the (query, decoy) pair it was searched to settle
-    for (idx, rec) in src_fa.sample_in_order(n_decoys, seed).enumerate() {
+    for (idx, rec) in kept.enumerate() {
         let mut decoy = FastaRecord {
             name: format!("decoy{idx}").into_bytes(),
             extra: Vec::new(),
@@ -521,6 +542,74 @@ fn assemble(
     originals_writer.flush()?;
     target_writer.flush()?;
     Ok(())
+}
+
+/// How many of `n` decoys each length bin gets, in proportion to the true
+/// targets in it.
+fn length_quota(targets: &[FastaRecord], n: usize) -> BTreeMap<usize, usize> {
+    let mut counts: BTreeMap<usize, usize> = BTreeMap::new();
+    for t in targets {
+        *counts.entry(t.seq.len() / LEN_BIN).or_default() += 1;
+    }
+
+    // largest remainder, so the quotas sum to n rather than to n give or take
+    // a rounding per bin
+    let total = targets.len();
+    let mut quota: BTreeMap<usize, usize> = counts
+        .iter()
+        .map(|(&bin, &c)| (bin, c * n / total))
+        .collect();
+
+    let mut by_remainder: Vec<(usize, usize)> = counts
+        .iter()
+        .map(|(&bin, &c)| (c * n % total, bin))
+        .collect();
+    by_remainder.sort_by(|a, b| b.cmp(a));
+
+    let short = n - quota.values().sum::<usize>();
+    for (_, bin) in by_remainder.into_iter().take(short) {
+        *quota
+            .get_mut(&bin)
+            .expect("a bin with a remainder has a quota") += 1;
+    }
+
+    quota
+}
+
+/// Which records of a uniform draw of `m` to keep so that their lengths meet
+/// `quota`, or `None` if the draw is short in some bin.
+fn thin(
+    source: &IndexedFasta,
+    m: usize,
+    seed: u64,
+    quota: &BTreeMap<usize, usize>,
+) -> Option<Vec<bool>> {
+    let mut by_bin: BTreeMap<usize, Vec<usize>> = BTreeMap::new();
+    for (i, rec) in source.sample_in_order(m, seed).enumerate() {
+        let bin = rec.seq.len() / LEN_BIN;
+        if quota.contains_key(&bin) {
+            by_bin.entry(bin).or_default().push(i);
+        }
+    }
+
+    // a seeded shuffle within the bin rather than the first that arrive: the
+    // draw comes in file order, and the front of a bin is the front of the file
+    let mut rng = StdRng::seed_from_u64(seed);
+    let mut keep = vec![false; m];
+
+    for (bin, &want) in quota {
+        let mut at = by_bin.remove(bin).unwrap_or_default();
+        if at.len() < want {
+            return None;
+        }
+
+        at.shuffle(&mut rng);
+        for i in at.into_iter().take(want) {
+            keep[i] = true;
+        }
+    }
+
+    Some(keep)
 }
 
 /// A Stockholm file keyed by family, which is what `#=GF ID` holds in

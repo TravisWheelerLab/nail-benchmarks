@@ -637,9 +637,12 @@ one in the older shape and said where they differed.
 Recall as a function of the percent identity between a query and its target.
 `build-set --in pid-toy|pid-real` assembles it from a profmark split: Pfam
 families divided by identity, with their true targets hidden among whole TrEMBL
-sequences written backwards, 100 per true pair. `truth.tbl` records which pair
-is which and at what identity, and `originals.fa` holds each decoy unreversed
-under the name `target.fa` gives it.
+sequences written backwards, 100 per true pair. The decoys are drawn so that
+their lengths follow the true targets' histogram in 50-residue bins: drawn
+uniformly, TrEMBL runs far longer than a Pfam domain, and every tool but
+nail's sequence mode ranked the longest decoys highest. `truth.tbl` records
+which pair is which and at what identity, and `originals.fa` holds each decoy
+unreversed under the name `target.fa` gives it.
 
 The whole benchmark is one search unit -- every query against one target file --
 so the set has one row, and the truth is per pair rather than per unit. That is
@@ -648,8 +651,9 @@ why `truth` names a file instead of being a column: see the `profmark` shape.
 The split itself sits at `benchmarks/pid/profmark/` rather than in the set. It
 depends only on the alignments and the split parameters, both labels draw from
 the same one, and the recipe points at it. Drawing it costs about a minute with
-`create-profmark --onlysplit`. The toy's assembly after it took 68 s, 66 s of
-that drawing 20,000 decoys from TrEMBL's 149.4 million sequences.
+`create-profmark --onlysplit`. The toy's assembly after it takes about 22 s,
+most of it drawing 80,000 of TrEMBL's 149.4 million sequences to thin down to
+20,000 length-matched decoys.
 
 `pid run` searches every tool against the set, into `outputs/search/`. `pid
 reject` then searches each tool against the originals of the decoys it has to
@@ -661,11 +665,18 @@ when the same tool, in the same mode, hits that decoy's original at E ≤ 1e-3.
 A tool is searched only against the decoys one of its runs ranked at or above
 that run's worst true pair. A decoy ranked below every true pair cannot move a
 point of the ROC, so the curve means what it did before rejection existed.
-Each tool runs at the most sensitive setting it swept. The union a tool has to
-settle can be most of the decoys. On the toy with Swissprot decoys, a few of
-mmseqs' true pairs scored at E ≈ 1e4, which pulled in nearly all 20,000. The
-reject test compares E-values from databases of different sizes, and nothing
-corrects for that yet.
+
+Each tool settles its decoys at the most sensitive setting it swept, with its
+cap on targets reported per query lifted. At the search stage's cap, an
+original ranked below a query's 2,000th hit is never reported, so its decoy is
+never rejected; the first real run's mmseqs reject table was exactly 2,000
+rows per query. The union a tool has to settle can be most of the decoys:
+mmseqs had to settle 995,133 of 1,118,700 in profile mode on that run.
+
+The reject test compares E-values from databases of different sizes, and
+nothing corrects for that. On the first real run, scaling every reject
+E-value by the size ratio moved no run's recall by more than 0.006, since the
+hits that reject sit far below 1e-3.
 
 `parse` has three subcommands. `recall` writes `pid.tbl`, `roc.tbl` and
 `time.tbl`: one row per run per identity bin, one row per run per point of its

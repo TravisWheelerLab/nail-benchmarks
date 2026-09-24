@@ -31,7 +31,7 @@ pub const EVALUE: &str = "1e9";
 
 /// How many targets the prefilters promote. mmseqs' own default is 300, which
 /// loses hits nail's seeding keeps.
-pub const MAX_SEQS: usize = 2000;
+const MAX_SEQS: usize = 2000;
 
 #[derive(Parser, Debug)]
 pub struct Args {
@@ -286,6 +286,7 @@ pub fn main(args: Args, paths: &crate::Paths) -> anyhow::Result<()> {
         &dirs.table("blast.seq", ""),
         args.threads,
         "blast.seq",
+        None,
     ));
 
     // profile mode: psiblast takes one alignment at a time, so a run is one
@@ -299,7 +300,14 @@ pub fn main(args: Args, paths: &crate::Paths) -> anyhow::Result<()> {
             // one family's search is a fraction of the run rather than a run
             // of its own, so every command carries blast.prf's name and their
             // wall times sum into it
-            let cmd = psiblast(&psiblast_bin, msa, &blast_db, args.threads, "blast.prf");
+            let cmd = psiblast(
+                &psiblast_bin,
+                msa,
+                &blast_db,
+                args.threads,
+                "blast.prf",
+                None,
+            );
 
             // the first invocation truncates whatever an earlier run left
             // behind; the rest append to it
@@ -335,6 +343,7 @@ pub fn main(args: Args, paths: &crate::Paths) -> anyhow::Result<()> {
             args.threads,
             &name,
             preset,
+            None,
         ));
     }
 
@@ -371,24 +380,44 @@ pub fn alignments(dir: &Path) -> anyhow::Result<Vec<PathBuf>> {
     Ok(afa)
 }
 
-/// blastp over sequences: one call, its own table.
-pub fn blastp(bin: &Path, query: &Path, db: &Path, out: &Path, threads: usize, name: &str) -> Step {
+/// blastp over sequences: one call, its own table. `max_targets` overrides
+/// blast's default cap on targets reported per query.
+pub fn blastp(
+    bin: &Path,
+    query: &Path,
+    db: &Path,
+    out: &Path,
+    threads: usize,
+    name: &str,
+    max_targets: Option<usize>,
+) -> Step {
     // deliberately no -evalue: matching the other tools' 1e9 makes blast
     // dramatically slower for no extra recall
-    let cmd = Cmd::new(bin)
+    let mut cmd = Cmd::new(bin)
         .arg("-query", query)
         .arg("-db", db)
         .arg("-out", out)
         .arg("-outfmt", 6)
         .arg("-num_threads", threads);
 
+    if let Some(n) = max_targets {
+        cmd = cmd.arg("-max_target_seqs", n);
+    }
+
     Step::serial([tag(cmd, name, "blast", &[(MODE, SEQ.to_string())])]).name(name)
 }
 
 /// psiblast over one family's alignment. It takes an alignment at a time, so
 /// a run is one of these per family and the caller collects them.
-pub fn psiblast(bin: &Path, msa: &Path, db: &Path, threads: usize, name: &str) -> Cmd {
-    let cmd = Cmd::new(bin)
+pub fn psiblast(
+    bin: &Path,
+    msa: &Path,
+    db: &Path,
+    threads: usize,
+    name: &str,
+    max_targets: Option<usize>,
+) -> Cmd {
+    let mut cmd = Cmd::new(bin)
         .name(
             msa.file_stem()
                 .and_then(|s| s.to_str())
@@ -401,6 +430,10 @@ pub fn psiblast(bin: &Path, msa: &Path, db: &Path, threads: usize, name: &str) -
         .arg("-num_threads", threads)
         .arg("-comp_based_stats", 1)
         .arg("-num_iterations", 1);
+
+    if let Some(n) = max_targets {
+        cmd = cmd.arg("-max_target_seqs", n);
+    }
 
     // one family's search is a fraction of the run rather than a run of its
     // own, so every command carries the run's name and their wall times sum
@@ -420,7 +453,9 @@ pub fn lastal(bin: &Path, db: &Path, query: &Path, out: &Path, threads: usize, n
     Step::serial([tag(cmd, name, "last", &[(MODE, SEQ.to_string())])]).name(name)
 }
 
-/// diamond blastp at one of its presets.
+/// diamond blastp at one of its presets. `max_targets` overrides diamond's
+/// default cap on targets reported per query, and 0 lifts it.
+#[allow(clippy::too_many_arguments)]
 pub fn diamond(
     bin: &Path,
     query: &Path,
@@ -429,6 +464,7 @@ pub fn diamond(
     threads: usize,
     name: &str,
     preset: &str,
+    max_targets: Option<usize>,
 ) -> Step {
     let mut cmd = Cmd::new(bin)
         .sub("blastp")
@@ -441,6 +477,10 @@ pub fn diamond(
 
     if preset == "ultra-sensitive" {
         cmd = cmd.flag("--ultra-sensitive");
+    }
+
+    if let Some(n) = max_targets {
+        cmd = cmd.arg("--max-target-seqs", n);
     }
 
     let fields = [(MODE, SEQ.to_string()), ("preset", preset.to_string())];

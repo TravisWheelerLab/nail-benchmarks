@@ -24,11 +24,18 @@ use util::split::Kind;
 use util::search::{Dirs, Mmseqs, Split, hmmer, jobs, nail, tag};
 
 use crate::parse::{self, Benchmark};
-use crate::run::{self, EVALUE, MAX_SEQS, MODE, PRF, SEQ};
+use crate::run::{self, EVALUE, MODE, PRF, SEQ};
 
 /// The preset diamond settles its decoys at, the more sensitive of the two
 /// `run` sweeps.
 const DIAMOND_PRESET: &str = "ultra-sensitive";
+
+/// The prefilter cap nail and mmseqs settle their decoys at.
+//
+// wide open, as cutoffs' reject stage runs: at the search stage's cap an
+// original ranked below a query's 2000th hit is never reported, and its decoy
+// stays a false positive it was never tested for
+const MAX_SEQS_OPEN: usize = 1_000_000_000;
 
 /// (tool, mode) -> the highest -s its runs swept, and the decoys it has to
 /// settle.
@@ -153,7 +160,7 @@ pub fn main(args: Args, paths: &crate::Paths) -> anyhow::Result<()> {
 
     pl = pl.step(Step::from_closures([Closure::new("subset", subset)]).name("subset"));
 
-    for ((tool, mode), (s, _)) in settling {
+    for ((tool, mode), (s, decoys)) in settling {
         let name = format!("{tool}.{mode}");
         let scratch = scratch(tool, mode);
         let target = scratch.join("originals.fa");
@@ -183,7 +190,7 @@ pub fn main(args: Args, paths: &crate::Paths) -> anyhow::Result<()> {
                     EVALUE,
                     &[
                         ("--mmseqs-s", s.clone()),
-                        ("--mmseqs-max-seqs", MAX_SEQS.to_string()),
+                        ("--mmseqs-max-seqs", MAX_SEQS_OPEN.to_string()),
                     ],
                     &[],
                     &name,
@@ -262,7 +269,7 @@ pub fn main(args: Args, paths: &crate::Paths) -> anyhow::Result<()> {
                     out,
                     threads: args.threads,
                     s: Some(s.clone()),
-                    max_seqs: Some(MAX_SEQS),
+                    max_seqs: Some(MAX_SEQS_OPEN),
                     evalue: EVALUE,
                 }
                 .cmds();
@@ -301,13 +308,20 @@ pub fn main(args: Args, paths: &crate::Paths) -> anyhow::Result<()> {
                         &out,
                         args.threads,
                         &name,
+                        Some(decoys.len()),
                     )),
                     _ => {
                         let afa = run::alignments(&inp.afa)?;
                         pl.step(
                             Step::serial(afa.iter().enumerate().map(|(i, msa)| {
-                                let cmd =
-                                    run::psiblast(&psiblast_bin, msa, &db, args.threads, &name);
+                                let cmd = run::psiblast(
+                                    &psiblast_bin,
+                                    msa,
+                                    &db,
+                                    args.threads,
+                                    &name,
+                                    Some(decoys.len()),
+                                );
                                 match i {
                                     0 => cmd.stdout_to(&out),
                                     _ => cmd.stdout(Output::Append(out.clone())),
@@ -371,6 +385,7 @@ pub fn main(args: Args, paths: &crate::Paths) -> anyhow::Result<()> {
                         args.threads,
                         &name,
                         DIAMOND_PRESET,
+                        Some(0),
                     ));
             }
 
