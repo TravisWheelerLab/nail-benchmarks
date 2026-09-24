@@ -44,10 +44,11 @@ sets/                     what a build, a run or an analysis produced
 sets-toy/                 the same, for the toy of each
 figures/                  the pdfs, flat
 figures-toy/              the same, for the toys
+reports/                  hand-assembled results packages, untracked
 benchmarks/shim           the build-and-run shim every binary links to
 
 benchmarks/util/          set, search, paths, manifest, ledger, tbl, tools,
-                          split, cut, clean
+                          split, cut, clean, domains
 
 benchmarks/build-set/     cuts sources into a set: fixed | reversed | cross |
                           pairs | profmark
@@ -407,6 +408,21 @@ The crate is deleted; restore it from git when a cluster run next lands.
   sweep.
 - `clean` measures a list of directories, shows what is in them, asks, and
   deletes.
+- `domains` classifies how a profile's HMMER domain hits on one sequence make
+  up its score: one domain, overlapping copies of one model region, domains in
+  order, or domains out of order. It is a port of `classify_direct`, the
+  classifier behind the May 2026 MGnify multi-domain analysis
+  (`~/00-nail-benchmarks/05-19-multi-domain-hmmer/`). `measure` takes no cutoff
+  and keeps every candidate score; `classify` holds a measure against a
+  per-family cutoff and returns that analysis's seven categories exactly;
+  `pattern` names the arrangement that scores most, for results with no cutoff,
+  and adds `diffuse` for a pair with no domain of 4 bits or more. MGnify recall
+  and pid are its two intended consumers, and neither is wired to it yet. For
+  MGnify, `h_cut` is nail's cutoff (`nail_3` in `data/mgy-cutoffs.tbl`) held
+  against hmmer's scores, for now: that table has no hmmer column, and the
+  `cutoffs.txt` the May analysis read is gone. A differential test ran
+  `classify` against the original's own code on 5 million generated cases, and
+  it lives in `tmp-claude/domcheck/` while it lasts.
 
 ## The Pfam-against-MGnify benchmarks
 
@@ -679,6 +695,12 @@ last.seq, 0.0380 against 0.0346. Their best-ranked decoys fall in repeat and
 coiled-coil families -- TPH, Eap1, Vitellogenin_N -- that hmmer's bias filter
 does not call.
 
+`parse` counts a false positive once for every true pair of the query that
+found it, so a profile query's decoy hit fills as many slots as its family has
+true pairs, up to 10. The 1% threshold is the 114th of those slots, so in
+profile mode about a dozen strong decoys set it. This is the pre-refactor
+design (`util/rust/bm/src/bin/pid-parse.rs` at `f7f6056^`) and stays.
+
 `parse` has three subcommands. `recall` writes `pid.tbl`, `roc.tbl` and
 `time.tbl`: one row per run per identity bin, one row per run per point of its
 ROC curve, and one row per run of what it cost against what it found. `score`
@@ -819,4 +841,8 @@ a `scripts/` beside their source -- cloud-search, loss-decomp and pid. recall,
 cutoffs and long-seqs stop at `parse`.
 
 Two of pid's scripts, `plot_params.py` and `plot_threads.py`, are wired to no
-figure: nothing writes what they read any more.
+figure: nothing writes what they read any more. `plot_common.py` is imported
+by nothing.
+
+`reports/` is untracked too. Each report there was put together by hand from
+`sets/` and scratch analyses, and no command here regenerates one.
