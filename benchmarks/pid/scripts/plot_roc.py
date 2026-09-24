@@ -11,7 +11,7 @@ import matplotlib.pyplot as plt
 X_MIN = 1e-3
 X_MAX = 1.0
 
-Y_MIN = 0.35
+Y_MIN = 0.2
 Y_MAX = 0.8
 
 X_LABEL = 3.0e-2
@@ -20,14 +20,14 @@ AUC_X_MAX = 1.0
 
 MMSEQS_SEQ = [
     # "mmseqs-s5.7-ms2000.seq",
-    "mmseqs-s7.5-ms2000.seq",
+    # "mmseqs-s7.5-ms2000.seq",
     # "mmseqs-s10.0-ms2000.seq",
     "mmseqs-s12.0-ms2000.seq",
 ]
 
 MMSEQS_PRF = [
     # "mmseqs-s5.7-ms2000.prf",
-    "mmseqs-s7.5-ms2000.prf",
+    # "mmseqs-s7.5-ms2000.prf",
     # "mmseqs-s10.0-ms2000.prf",
     "mmseqs-s12.0-ms2000.prf",
 ]

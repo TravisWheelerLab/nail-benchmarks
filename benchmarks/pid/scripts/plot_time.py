@@ -155,7 +155,7 @@ def plot(args):
 
     ax.set_ylabel(f"Recall at {fpr} FP per search")
 
-    ax.set_xlim(1.0, 1e3)
+    ax.set_xlim(1.0, 2e3)
     ax.set_ylim(0.2, 0.75)
 
     ax.grid(True)

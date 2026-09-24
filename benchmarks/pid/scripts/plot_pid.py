@@ -11,7 +11,7 @@ import numpy as np
 
 
 X_MIN = 25
-X_MAX = 10
+X_MAX = 3
 
 Y_MIN = 0.0
 Y_MAX = 1.0
