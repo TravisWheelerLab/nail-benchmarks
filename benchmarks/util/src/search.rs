@@ -222,6 +222,11 @@ impl Split {
         }
     }
 
+    /// The files the query is cut into, by index.
+    pub fn parts(&self) -> &[PathBuf] {
+        &self.parts
+    }
+
     /// Rust in place of a command, so it is a closure step. Whatever a previous
     /// run left in there would be searched as if it belonged.
     ///

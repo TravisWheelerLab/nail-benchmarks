@@ -656,27 +656,28 @@ most of it drawing 80,000 of TrEMBL's 149.4 million sequences to thin down to
 20,000 length-matched decoys.
 
 `pid run` searches every tool against the set, into `outputs/search/`. `pid
-reject` then searches each tool against the originals of the decoys it has to
-settle, into `outputs/reject/`. `parse` turns the results into the tables the
+reject` then searches the family profiles against the originals of the decoys
+the runs have to settle, into `outputs/reject/`. `parse` turns the results into the tables the
 plot scripts read, and `plot` draws them. All four take `--in <label>`.
 
-Rejection is the cutoffs rule applied per pair: a (query, decoy) hit is dropped
-when the same tool, in the same mode, hits that decoy's original at E ≤ 1e-3.
-A tool is searched only against the decoys one of its runs ranked at or above
-that run's worst true pair. A decoy ranked below every true pair cannot move a
-point of the ROC, so the curve means what it did before rejection existed.
+Rejection is the cutoffs rule applied per pair, with one judge for every
+tool: a (query, decoy) hit is dropped when the query's family profile hits
+that decoy's original at E ≤ 1e-3 in hmmsearch. A sequence query `family|id`
+is judged by its family's profile. The originals searched are the union, over
+every run, of the decoys ranked at or above that run's worst true pair. A
+decoy ranked below every true pair cannot move a point of the ROC, so the
+curve means what it did before rejection existed. The judge runs at `-Z`
+equal to `target.fa`'s sequence count, so its E-values are on the scale of the
+search they settle rather than of the smaller file it reads.
 
-Each tool settles its decoys at the most sensitive setting it swept, with its
-cap on targets reported per query lifted. At the search stage's cap, an
-original ranked below a query's 2,000th hit is never reported, so its decoy is
-never rejected; the first real run's mmseqs reject table was exactly 2,000
-rows per query. The union a tool has to settle can be most of the decoys:
-mmseqs had to settle 995,133 of 1,118,700 in profile mode on that run.
-
-The reject test compares E-values from databases of different sizes, and
-nothing corrects for that. On the first real run, scaling every reject
-E-value by the size ratio moved no run's recall by more than 0.006, since the
-hits that reject sit far below 1e-3.
+One judge rather than one per tool, because on the first real run hmmsearch
+judging at the family level moved no nail, mmseqs, diamond or hmmer run's
+recall by more than 0.006 against that run's own tool judging it. It is also
+one search: 152 s over all 1.1 million originals at 96 cores. The exceptions
+were blast.prf, 0.4988 under its own judge and 0.3971 under hmmer, and
+last.seq, 0.0380 against 0.0346. Their best-ranked decoys fall in repeat and
+coiled-coil families -- TPH, Eap1, Vitellogenin_N -- that hmmer's bias filter
+does not call.
 
 `parse` has three subcommands. `recall` writes `pid.tbl`, `roc.tbl` and
 `time.tbl`: one row per run per identity bin, one row per run per point of its

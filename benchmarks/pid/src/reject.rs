@@ -1,45 +1,35 @@
-//! Searches each tool against the originals of the decoys it has to settle.
+//! Searches the family profiles against the originals of the decoys any run
+//! has to settle, with hmmsearch as the one judge for every tool.
 //!
 //! A decoy is a reversed TrEMBL sequence, and the reversal of a true homolog
 //! scores well against the homolog's family. So a (query, decoy) pair whose
-//! query also hits the decoy's original is a reject rather than a false
+//! family also hits the decoy's original is a reject rather than a false
 //! positive. Only the decoys a run ranked at or above its worst true pair can
-//! move its ROC, so those are what a tool is searched against here: the union
-//! over its runs, at the most sensitive setting any of them used.
+//! move its ROC, so the originals searched are the union of those over every
+//! run.
 
 use std::collections::{BTreeMap, HashSet};
 use std::fs::File;
 use std::io::{BufWriter, Write};
 use std::path::{Path, PathBuf};
 
-use anyhow::{Context, bail, ensure};
+use anyhow::{Context, ensure};
 use clap::Parser;
 
-use libsail::collection::Iterable;
+use libsail::collection::{Indexable, Iterable};
 use libsail::seq::fasta::{DEFAULT_LINE_WIDTH, IndexedFasta};
-use michi::{Closure, Cmd, OnError, Output, PipelineBuilder, Progress, Step, Table};
+use michi::{Closure, Cmd, PipelineBuilder, Progress, Step, Table};
 use util::ledger;
 use util::split::Kind;
 
-use util::search::{Dirs, Mmseqs, Split, hmmer, jobs, nail, tag};
+use util::search::{Dirs, HMMER_CPU, Split, jobs, tag};
 
 use crate::parse::{self, Benchmark};
-use crate::run::{self, EVALUE, MODE, PRF, SEQ};
+use crate::run::{EVALUE, MODE, PRF};
 
-/// The preset diamond settles its decoys at, the more sensitive of the two
-/// `run` sweeps.
-const DIAMOND_PRESET: &str = "ultra-sensitive";
-
-/// The prefilter cap nail and mmseqs settle their decoys at.
-//
-// wide open, as cutoffs' reject stage runs: at the search stage's cap an
-// original ranked below a query's 2000th hit is never reported, and its decoy
-// stays a false positive it was never tested for
-const MAX_SEQS_OPEN: usize = 1_000_000_000;
-
-/// (tool, mode) -> the highest -s its runs swept, and the decoys it has to
-/// settle.
-type Judges = BTreeMap<(String, String), (Option<f32>, HashSet<String>)>;
+/// The judge's run name, and the tool it records.
+pub const JUDGE: &str = "judge";
+const JUDGE_TOOL: &str = "hmmer";
 
 #[derive(Parser, Debug)]
 pub struct Args {
@@ -59,86 +49,77 @@ pub struct Args {
 
 pub fn main(args: Args, paths: &crate::Paths) -> anyhow::Result<()> {
     ensure!(
-        args.threads.is_multiple_of(util::search::HMMER_CPU),
-        "--threads needs to be a multiple of {} (for hmmer)",
-        util::search::HMMER_CPU
+        args.threads.is_multiple_of(HMMER_CPU),
+        "--threads needs to be a multiple of {HMMER_CPU} (for hmmer)"
     );
 
-    let nail_bin = util::tools::nail()?;
-    let mmseqs = util::tools::mmseqs()?;
     let hmmsearch = util::tools::hmmsearch()?;
-    let phmmer = util::tools::phmmer()?;
-    let blastp_bin = util::tools::blastp()?;
-    let psiblast_bin = util::tools::psiblast()?;
-    let makeblastdb = util::tools::makeblastdb()?;
-    let lastal_bin = util::tools::lastal()?;
-    let lastdb = util::tools::lastdb()?;
-    let diamond_bin = util::tools::diamond()?;
 
     let inp = crate::Inputs::open(&paths.set)?;
     let bm = Benchmark::new(&inp.truth)?;
 
-    let mut judges: Judges = BTreeMap::new();
+    // (tool, mode) -> the decoys its runs have to settle, kept apart only so
+    // tested.tbl can say what each tool contributed to the union
+    let mut by_tool: BTreeMap<(String, String), HashSet<String>> = BTreeMap::new();
 
     for run in parse::runs(&paths.search())? {
         let hits = run.hits()?;
-        let (s, decoys) = judges.entry(parse::judge(&run)).or_default();
-
-        decoys.extend(
-            parse::tested(&hits, &bm, &run.mode)
-                .into_iter()
-                .map(str::to_string),
-        );
-
-        if let Some(run_s) = run.params.get("s") {
-            let run_s: f32 = run_s
-                .parse()
-                .with_context(|| format!("{} recorded -s {run_s:?}", run.name))?;
-            *s = Some(s.map_or(run_s, |s| s.max(run_s)));
-        }
+        by_tool
+            .entry((run.tool.clone(), run.mode.clone()))
+            .or_default()
+            .extend(
+                parse::tested(&hits, &bm, &run.mode)
+                    .into_iter()
+                    .map(str::to_string),
+            );
     }
 
     ensure!(
-        !judges.is_empty(),
+        !by_tool.is_empty(),
         "no finished runs in {}",
         paths.search().display()
     );
 
-    for ((tool, mode), (_, decoys)) in &judges {
-        println!("{tool}.{mode}: {} decoys to settle", decoys.len());
+    let decoys: HashSet<String> = by_tool.values().flatten().cloned().collect();
+    for ((tool, mode), settle) in &by_tool {
+        println!("{tool}.{mode}: {} decoys to settle", settle.len());
     }
+    println!("{} decoys to settle in all", decoys.len());
+
+    // the judge's E-values are on the scale of the search they settle rather
+    // than of the smaller file it reads, so a reject means the same thing
+    // however many decoys the union holds
+    let z = IndexedFasta::open(&inp.target_fa)
+        .with_context(|| format!("failed to open {}", inp.target_fa.display()))?
+        .len();
 
     let mut dirs = Dirs::new(paths.reject(), paths.tmp.join("reject"));
     if let Some(tmp) = args.tmp {
         dirs.tmp = tmp;
     }
 
-    let scratch = |tool: &str, mode: &str| dirs.tmp.join(format!("{tool}.{mode}"));
-    let settling: Vec<_> = judges
-        .iter()
-        .filter(|(_, (_, decoys))| !decoys.is_empty())
-        .collect();
+    let target = dirs.tmp.join("originals.fa");
+    let parts = dirs.tmp.join("parts");
 
     let subset = {
-        let originals = inp.originals.clone();
+        let (originals, target) = (inp.originals.clone(), target.clone());
         let tested = dirs.root.join(parse::TESTED);
+        let decoys = decoys.clone();
 
-        let wanted: Vec<(PathBuf, HashSet<String>)> = settling
+        let mut rows: Vec<Vec<String>> = by_tool
             .iter()
-            .map(|((tool, mode), (_, decoys))| {
-                (scratch(tool, mode).join("originals.fa"), decoys.clone())
+            .map(|((tool, mode), settle)| {
+                vec![tool.clone(), mode.clone(), settle.len().to_string()]
             })
             .collect();
-
-        let rows: Vec<Vec<String>> = judges
-            .iter()
-            .map(|((tool, mode), (_, decoys))| {
-                vec![tool.clone(), mode.clone(), decoys.len().to_string()]
-            })
-            .collect();
+        rows.push(vec![
+            "all".to_string(),
+            "-".to_string(),
+            decoys.len().to_string(),
+        ]);
 
         move || -> anyhow::Result<()> {
-            write_originals(&originals, &wanted)?;
+            write_originals(&originals, &decoys, &target)?;
             util::tbl::write(
                 &tested,
                 util::tbl::Table {
@@ -153,244 +134,42 @@ pub fn main(args: Args, paths: &crate::Paths) -> anyhow::Result<()> {
 
     let mut pl = PipelineBuilder::new()
         .step(dirs.clean())
-        .step(settling.iter().fold(
-            Cmd::new("mkdir").name("dirs").flag("-p"),
-            |cmd, ((t, m), _)| cmd.path(scratch(t, m)),
-        ));
+        .step(Cmd::new("mkdir").name("dirs").flag("-p").path(&dirs.tmp))
+        .step(Step::from_closures([Closure::new("subset", subset)]).name("subset"));
 
-    pl = pl.step(Step::from_closures([Closure::new("subset", subset)]).name("subset"));
+    if !decoys.is_empty() {
+        let split = Split::new(&inp.query_hmm, Kind::Hmm, &parts, jobs(args.threads));
+        let fields = [(MODE, PRF.to_string())];
 
-    for ((tool, mode), (s, decoys)) in settling {
-        let name = format!("{tool}.{mode}");
-        let scratch = scratch(tool, mode);
-        let target = scratch.join("originals.fa");
-        let out = dirs.table(&name, "");
-        let fields = [(MODE, mode.clone())];
+        let search = split.parts().iter().enumerate().map(|(i, part)| {
+            let cmd = Cmd::new(&hmmsearch)
+                .name(i.to_string())
+                .arg("--cpu", HMMER_CPU)
+                .arg("-Z", z)
+                .arg("--tblout", parts.join(format!("{i}.tbl")))
+                .arg("-E", EVALUE)
+                .path(part)
+                .path(&target);
 
-        let query = match mode.as_str() {
-            PRF => &inp.query_hmm,
-            SEQ => &inp.query_fa,
-            _ => bail!("{name}: no query for mode {mode:?}"),
-        };
+            tag(cmd, JUDGE, JUDGE_TOOL, &fields)
+        });
 
-        let s = || s.with_context(|| format!("{name}: its runs recorded no -s"));
+        let cat = (0..split.parts().len())
+            .fold(Cmd::new("cat").name("tbl"), |cmd, i| {
+                cmd.path(parts.join(format!("{i}.tbl")))
+            })
+            .stdout_to(dirs.table(JUDGE, ""));
 
-        match tool.as_str() {
-            "nail" => {
-                let s = format!("{:.1}", s()?);
-
-                pl = pl.step(nail(
-                    &nail_bin,
-                    &mmseqs,
-                    query,
-                    &target,
-                    &out,
-                    &scratch.join("nail"),
-                    args.threads,
-                    EVALUE,
-                    &[
-                        ("--mmseqs-s", s.clone()),
-                        ("--mmseqs-max-seqs", MAX_SEQS_OPEN.to_string()),
-                    ],
-                    &[],
-                    &name,
-                    &[(MODE, mode.clone()), ("s", s)],
-                ));
-            }
-
-            "hmmer" | "phmmer" => {
-                let (program, kind) = match tool.as_str() {
-                    "hmmer" => (&hmmsearch, Kind::Hmm),
-                    _ => (&phmmer, Kind::Fasta),
-                };
-
-                let split = Split::new(query, kind, scratch.join("parts"), jobs(args.threads));
-                let searched = hmmer(
-                    program, &split, &dirs, &name, tool, "", &target, EVALUE, false, &fields,
-                );
-
-                pl = pl
-                    .step(split.step(&name, &[]))
-                    .step(searched.search)
-                    .step(searched.cat);
-            }
-
-            "mmseqs" => {
-                let s = format!("{:.1}", s()?);
-                let target_db = scratch.join("targetDB/targetDB");
-                let query_db = scratch.join("queryDB/queryDB");
-                let msa_db = scratch.join("msaDB/msaDB");
-
-                let mut db = vec![
-                    Cmd::new("mkdir")
-                        .name("dirs")
-                        .flag("-p")
-                        .path(scratch.join("targetDB"))
-                        .path(scratch.join("queryDB"))
-                        .path(scratch.join("msaDB")),
-                    Cmd::new(&mmseqs)
-                        .name("createdb-target")
-                        .sub("createdb")
-                        .path(&target)
-                        .path(&target_db),
-                ];
-
-                // the same query databases run builds, over the same files
-                db.extend(match mode.as_str() {
-                    PRF => vec![
-                        Cmd::new(&mmseqs)
-                            .name("convertmsa")
-                            .sub("convertmsa")
-                            .path(&inp.query_sto)
-                            .path(&msa_db)
-                            .arg("--identifier-field", 0),
-                        Cmd::new(&mmseqs)
-                            .name("msa2profile")
-                            .sub("msa2profile")
-                            .path(&msa_db)
-                            .path(&query_db)
-                            .arg("--match-mode", 1),
-                    ],
-                    _ => vec![
-                        Cmd::new(&mmseqs)
-                            .name("createdb-query")
-                            .sub("createdb")
-                            .path(query)
-                            .path(&query_db),
-                    ],
-                });
-
-                let cmds = Mmseqs {
-                    bin: &mmseqs,
-                    query_db: &query_db,
-                    target_db: &target_db,
-                    aln_db: scratch.join("alnDB"),
-                    work: scratch.join("work"),
-                    out,
-                    threads: args.threads,
-                    s: Some(s.clone()),
-                    max_seqs: Some(MAX_SEQS_OPEN),
-                    evalue: EVALUE,
-                }
-                .cmds();
-
-                let fields = [(MODE, mode.clone()), ("s", s)];
-                let searched =
-                    [cmds.search, cmds.convert].map(|cmd| tag(cmd, &name, tool, &fields));
-
-                pl = pl
-                    .step(Step::serial(db).name(format!("{name}-db")))
-                    .step(Step::serial(searched).name(name));
-            }
-
-            "blast" => {
-                let db = scratch.join("blast/db");
-                pl = pl.step(
-                    Step::serial([
-                        Cmd::new("mkdir")
-                            .name("dirs")
-                            .flag("-p")
-                            .path(scratch.join("blast")),
-                        Cmd::new(&makeblastdb)
-                            .name("makeblastdb")
-                            .arg("-in", &target)
-                            .arg("-dbtype", "prot")
-                            .arg("-out", &db),
-                    ])
-                    .name(format!("{name}-db")),
-                );
-
-                pl = match mode.as_str() {
-                    SEQ => pl.step(run::blastp(
-                        &blastp_bin,
-                        query,
-                        &db,
-                        &out,
-                        args.threads,
-                        &name,
-                        Some(decoys.len()),
-                    )),
-                    _ => {
-                        let afa = run::alignments(&inp.afa)?;
-                        pl.step(
-                            Step::serial(afa.iter().enumerate().map(|(i, msa)| {
-                                let cmd = run::psiblast(
-                                    &psiblast_bin,
-                                    msa,
-                                    &db,
-                                    args.threads,
-                                    &name,
-                                    Some(decoys.len()),
-                                );
-                                match i {
-                                    0 => cmd.stdout_to(&out),
-                                    _ => cmd.stdout(Output::Append(out.clone())),
-                                }
-                            }))
-                            .name(name)
-                            .on_error(OnError::Continue),
-                        )
-                    }
-                };
-            }
-
-            "last" => {
-                let db = scratch.join("last/db");
-                pl = pl
-                    .step(
-                        Step::serial([
-                            Cmd::new("mkdir")
-                                .name("dirs")
-                                .flag("-p")
-                                .path(scratch.join("last")),
-                            Cmd::new(&lastdb)
-                                .name("lastdb")
-                                .arg("-p", &db)
-                                .path(&target),
-                        ])
-                        .name(format!("{name}-db")),
-                    )
-                    .step(run::lastal(
-                        &lastal_bin,
-                        &db,
-                        query,
-                        &out,
-                        args.threads,
-                        &name,
-                    ));
-            }
-
-            "diamond" => {
-                let db = scratch.join("diamond/db");
-                pl = pl
-                    .step(
-                        Step::serial([
-                            Cmd::new("mkdir")
-                                .name("dirs")
-                                .flag("-p")
-                                .path(scratch.join("diamond")),
-                            Cmd::new(&diamond_bin)
-                                .name("diamond-makedb")
-                                .sub("makedb")
-                                .arg("--in", &target)
-                                .arg("--db", &db),
-                        ])
-                        .name(format!("{name}-db")),
-                    )
-                    .step(run::diamond(
-                        &diamond_bin,
-                        query,
-                        &db,
-                        &out,
-                        args.threads,
-                        &name,
-                        DIAMOND_PRESET,
-                        Some(0),
-                    ));
-            }
-
-            _ => bail!("{name}: no reject search for tool {tool:?}"),
-        }
+        pl = pl
+            .step(split.step(JUDGE, &[]))
+            .step(
+                Step::batched(split.parts().len(), search)
+                    .name(JUDGE)
+                    .cores(HMMER_CPU),
+            )
+            .step(
+                Step::serial([tag(cat, JUDGE, JUDGE_TOOL, &fields)]).name(format!("cat.{JUDGE}")),
+            );
     }
 
     let pipeline = pl
@@ -410,32 +189,20 @@ pub fn main(args: Args, paths: &crate::Paths) -> anyhow::Result<()> {
     ledger::record(&dirs.root)
 }
 
-/// Every original named in `wanted`, written into the file paired with it.
-fn write_originals(originals: &Path, wanted: &[(PathBuf, HashSet<String>)]) -> anyhow::Result<()> {
+/// Every original named in `decoys`, written into `to`.
+fn write_originals(originals: &Path, decoys: &HashSet<String>, to: &Path) -> anyhow::Result<()> {
     let fa = IndexedFasta::open(originals)
         .with_context(|| format!("failed to open {}", originals.display()))?;
 
-    let mut writers = wanted
-        .iter()
-        .map(|(path, _)| {
-            let file = File::create(path)
-                .with_context(|| format!("failed to create {}", path.display()))?;
-            Ok(BufWriter::new(file))
-        })
-        .collect::<anyhow::Result<Vec<_>>>()?;
+    let file = File::create(to).with_context(|| format!("failed to create {}", to.display()))?;
+    let mut writer = BufWriter::new(file);
 
     for rec in fa.iter() {
-        let name = rec.name_str()?;
-        for ((_, names), writer) in wanted.iter().zip(&mut writers) {
-            if names.contains(name) {
-                rec.write_to(writer, DEFAULT_LINE_WIDTH)?;
-            }
+        if decoys.contains(rec.name_str()?) {
+            rec.write_to(&mut writer, DEFAULT_LINE_WIDTH)?;
         }
     }
 
-    for mut writer in writers {
-        writer.flush()?;
-    }
-
+    writer.flush()?;
     Ok(())
 }

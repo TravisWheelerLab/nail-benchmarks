@@ -7,12 +7,12 @@
 //!
 //! Truth here is in the benchmark itself: `truth.tbl` says which pair is
 //! which and at what identity, and a target named `decoy…` is one. There is no
-//! calibration and no reference tool. A decoy a query also hits in its
-//! original form is the reversal of a homolog, and `reject` is what finds
-//! those; recall skips them.
+//! calibration and no reference tool. A decoy whose original the query's
+//! family hits is the reversal of a homolog, and recall skips it; `reject` is
+//! what finds those, with hmmsearch judging for every tool.
 
 use std::{
-    collections::{BTreeMap, HashMap, HashSet},
+    collections::{HashMap, HashSet},
     fs::File,
     io::{BufRead, BufReader, BufWriter, Write},
     path::{Path, PathBuf},
@@ -37,8 +37,8 @@ use crate::run::MODE;
 const PRECISION: usize = 4;
 const FIXED_FPR: f32 = 0.01;
 
-/// The E-value at or under which a query's hit against a decoy's original
-/// makes that decoy a reject for that query, as cutoffs has it.
+/// The E-value at or under which a family's hit against a decoy's original
+/// makes that decoy a reject for that family, as cutoffs has it.
 const REJECT_E: f64 = 1e-3;
 
 /// The E-value a run has to beat to sit at [`FIXED_FPR`], which is the score
@@ -324,8 +324,6 @@ pub struct Run {
     pub tool: String,
     /// `prf`, `cons` or `seq`, as the run recorded it.
     pub mode: String,
-    /// Every other setting the ledger recorded for it.
-    pub params: BTreeMap<String, String>,
     wall_s: f32,
     table: PathBuf,
 }
@@ -384,7 +382,6 @@ pub fn runs(dir: &Path) -> anyhow::Result<Vec<Run>> {
                 name: column.name,
                 tool: column.tool,
                 wall_s: column.wall_s as f32,
-                params: column.params,
             })
         })
         .collect::<anyhow::Result<_>>()?;
@@ -392,60 +389,46 @@ pub fn runs(dir: &Path) -> anyhow::Result<Vec<Run>> {
     Ok(out)
 }
 
-/// Which reject search settles a run's decoys: the one by the same tool, in
-/// the same mode.
-pub fn judge(run: &Run) -> (String, String) {
-    (run.tool.clone(), run.mode.clone())
-}
-
-/// Every (query, decoy) pair a reject search found in its original form, by
-/// the search that found it.
+/// Every (family, decoy) pair whose original the judge found, which is every
+/// pair a run's decoy hit is dropped for.
 ///
-/// A pair is settled by the one tool that reported it and for the one query
-/// that hit it. Nothing here pools a decoy across queries.
+/// A pair is settled for the one family whose profile hit the original. A
+/// sequence query is judged by its family's profile. Nothing here pools a
+/// decoy across families.
 pub fn rejections(dir: &Path) -> anyhow::Result<Rejections> {
     let tested = tbl::read(&dir.join(TESTED))
         .with_context(|| format!("no rejections in {}; run `pid reject` first", dir.display()))?;
 
-    let ran = match tested.cells.iter().any(|row| row["decoys"] != "0") {
-        true => runs(dir)?,
-        false => vec![],
-    };
+    let settled = tested
+        .cells
+        .iter()
+        .find(|row| row["tool"] == "all")
+        .with_context(|| format!("{} has no total row", dir.join(TESTED).display()))?;
 
-    let mut out = HashMap::new();
-    for row in &tested.cells {
-        let key = (row["tool"].clone(), row["mode"].clone());
-        if row["decoys"] == "0" {
-            out.insert(key, HashSet::new());
-            continue;
-        }
-
-        // a tool with decoys to settle and no finished search would read as
-        // one with nothing to reject, which is the answer that inflates its
-        // false positives
-        let run = ran
-            .iter()
-            .find(|run| judge(run) == key)
-            .with_context(|| format!("no finished reject search for {} {}", key.0, key.1))?;
-
-        let found = run
-            .hits()?
-            .into_iter()
-            .filter(|h| h.e_value <= REJECT_E)
-            .map(|h| (h.query, h.target))
-            .collect();
-
-        out.insert(key, found);
+    if settled["decoys"] == "0" {
+        return Ok(HashSet::new());
     }
 
-    Ok(out)
+    // decoys to settle and no finished judge would read as nothing to reject,
+    // which is the answer that inflates every run's false positives
+    let judge = runs(dir)?
+        .into_iter()
+        .find(|run| run.name == crate::reject::JUDGE)
+        .with_context(|| format!("no finished judge in {}", dir.display()))?;
+
+    Ok(judge
+        .hits()?
+        .into_iter()
+        .filter(|h| h.e_value <= REJECT_E)
+        .map(|h| (h.query, h.target))
+        .collect())
 }
 
-/// The rejected (query, decoy) pairs, by the (tool, mode) that settled them.
-pub type Rejections = HashMap<(String, String), HashSet<(String, String)>>;
+/// The rejected (family, decoy) pairs.
+pub type Rejections = HashSet<(String, String)>;
 
 /// What `reject` writes before it searches: how many decoys each tool had to
-/// settle, including the ones with none.
+/// settle, including the ones with none, and a total row for the union.
 pub const TESTED: &str = "tested.tbl";
 
 /// A run's hits reduced to the best E-value per (target, query).
@@ -539,14 +522,15 @@ impl HitTable2 {
         name: &str,
         bm: &Benchmark,
         search_type: &str,
-        rejected: &HashSet<(String, String)>,
+        rejected: &Rejections,
     ) -> Self {
         let mut positives: Vec<(usize, f64)> = vec![];
         let mut decoys_by_query: HashMap<&str, Vec<f64>> = HashMap::new();
 
         for ((target, query), e_value) in best(hits) {
             if target.starts_with("decoy") {
-                if rejected.contains(&(query.to_string(), target.to_string())) {
+                let family = query_parts(query).0;
+                if rejected.contains(&(family.to_string(), target.to_string())) {
                     continue;
                 }
 
@@ -616,16 +600,12 @@ impl RecallData {
         anyhow::ensure!(!ran.is_empty(), "no finished runs in {}", dir.display());
 
         for run in ran {
-            let judged = rejected.get(&judge(&run)).with_context(|| {
-                format!("no rejections for {}; run `pid reject` again", run.name)
-            })?;
-
             tables.push(HitTable2::new(
                 &run.hits()?,
                 &run.name,
                 bm,
                 &run.mode,
-                judged,
+                rejected,
             ));
             times.push(run.wall_s);
         }
