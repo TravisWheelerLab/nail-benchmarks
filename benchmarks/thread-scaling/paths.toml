@@ -1,0 +1,19 @@
+# Where thread-scaling reads and writes. Paths only, relative to this file.
+#
+# Its sets are a cross of its own, built by `build-set --in
+# thread-scaling-toy|thread-scaling-real`: Pfam against MGnify and against
+# Swissprot, so each tool's curve is drawn over two kinds of target.
+
+[toy]
+set      = "../../sets-toy/thread-scaling/inputs"
+run      = "../../sets-toy/thread-scaling/outputs"
+analysis = "../../sets-toy/thread-scaling/analysis"
+figures  = "../../figures-toy"
+tmp      = "../../sets-toy/thread-scaling/tmp"
+
+[real]
+set      = "../../sets/thread-scaling/inputs"
+run      = "../../sets/thread-scaling/outputs"
+analysis = "../../sets/thread-scaling/analysis"
+figures  = "../../figures"
+tmp      = "../../sets/thread-scaling/tmp"

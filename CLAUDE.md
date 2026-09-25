@@ -59,6 +59,7 @@ benchmarks/loss-decomp/   where nail loses hmmer's hits, by stage [cross]
 benchmarks/cutoffs/       per-family score cutoffs from decoys    [reversed]
 benchmarks/long-seqs/     how the tools scale with length         [pairs]
 benchmarks/pid/           recall against percent identity          [profmark]
+benchmarks/thread-scaling/ wall clock against thread count      [cross]
 ```
 
 One binary per benchmark, and the shape in brackets is the set it reads.
@@ -734,6 +735,29 @@ manifest's `query_fa` column is for, and its shape is `pairs`: one query
 against one target, with the two sources separate directories so a sequence is
 never on both sides.
 
+## benchmarks/thread-scaling
+
+Strong scaling for nail, mmseqs and hmmer over its own `cross` set, Pfam
+against MGnify and against Swissprot, built by `build-set --in
+thread-scaling-toy|thread-scaling-real`. `run` searches every unit at every
+rung of `--rungs` (1 2 4 8 16 32 48 by default), `--reps` times over, with
+the reps as the outer loop so load from other users spreads across rungs.
+Four arms: nail `-t N`, mmseqs `--threads N`, one `hmmsearch --cpu N`, and
+`hmmer-split`, the query cut N/2 ways at `--cpu 2`, which has no one-thread
+point. Each search is pinned to N cores. `/proc/loadavg` is read either side
+of every search into `outputs/load.tbl`, and it counts the search's own
+threads as well as anyone else's.
+
+`parse` writes `scaling.tbl`, one row per unit per arm per rung with median
+wall and core-seconds, peak RSS, speedup and efficiency against the arm's
+lowest rung, and the highest load seen; and `agree.tbl`, one row per run
+counting the pairs missing, extra or rescored against rep 1 of the arm's
+lowest rung. `plot` draws both of speedup and efficiency into
+`thread-scaling.pdf`.
+
+The split arm moves onto michi's shared-pool batch mode when that lands; it
+is `util::search::hmmer` today, a private lease per part.
+
 ## Formatting
 
 rustfmt is the standard here. Run `cargo fmt --all` and commit what it does.
@@ -846,8 +870,9 @@ Two exceptions are committed on purpose:
 fresh clone, and `data/mgy-cutoffs.tbl`, because learning it is a calibration
 run rather than a download.
 
-Plotting is Python and matplotlib. Three benchmarks have a `plot` command and
-a `scripts/` beside their source -- cloud-search, loss-decomp and pid. recall,
+Plotting is Python and matplotlib. Four benchmarks have a `plot` command and
+a `scripts/` beside their source -- cloud-search, loss-decomp, pid and
+thread-scaling. recall,
 cutoffs and long-seqs stop at `parse`.
 
 Two of pid's scripts, `plot_params.py` and `plot_threads.py`, are wired to no

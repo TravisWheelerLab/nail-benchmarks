@@ -585,6 +585,19 @@ name = "tabl"
 version = "0.1.0"
 
 [[package]]
+name = "thread-scaling"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "clap",
+ "libsail",
+ "michi",
+ "serde",
+ "tabl",
+ "util",
+]
+
+[[package]]
 name = "toml"
 version = "1.1.6+spec-1.1.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
