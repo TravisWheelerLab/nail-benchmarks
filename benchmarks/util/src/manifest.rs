@@ -205,14 +205,32 @@ impl Manifest {
             )
         })?;
 
-        // argv is the last column and full of spaces, so it comes back as its
-        // first word. nothing reads it
-        let rows = crate::tbl::parse(&text)
+        // argv is the last column and full of spaces, and comes back whole.
+        // nothing reads it
+        let table = tabl::Table::parse(&text)
             .with_context(|| format!("failed to read {}", path.display()))?;
+        let labels = table.labels();
 
-        Ok(Manifest {
-            rows: rows.cells.into_iter().map(|cells| Row { cells }).collect(),
-        })
+        // a dash is kept as the text "-" and an empty cell as no key at all,
+        // which is how `get`, `step` and `params` tell them apart
+        let rows = table
+            .rows()
+            .iter()
+            .map(|row| Row {
+                cells: labels
+                    .iter()
+                    .enumerate()
+                    .take(row.len())
+                    .filter_map(|(i, label)| match row.get(i) {
+                        Some("") => None,
+                        Some(value) => Some((label.clone(), value.to_string())),
+                        None => Some((label.clone(), "-".to_string())),
+                    })
+                    .collect(),
+            })
+            .collect();
+
+        Ok(Manifest { rows })
     }
 
     /// Every command line of the table, in the order it was declared.

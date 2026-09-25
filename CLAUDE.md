@@ -47,7 +47,7 @@ figures-toy/              the same, for the toys
 reports/                  hand-assembled results packages, untracked
 benchmarks/shim           the build-and-run shim every binary links to
 
-benchmarks/util/          set, search, paths, manifest, ledger, tbl, tools,
+benchmarks/util/          set, search, paths, manifest, ledger, tools,
                           split, cut, clean, domains
 
 benchmarks/build-set/     cuts sources into a set: fixed | reversed | cross |
@@ -142,8 +142,9 @@ missing.
   billion records. The draw arriving in file order is why the deal shuffles
   which shard each record lands in; a fixed round robin over an ascending draw
   is a stride rather than a partition.
-- `tabl` writes the padded, `#`-headed tables. It is not published: the
-  workspace takes it as a path dependency on a sibling checkout, `../tabl`.
+- `tabl` writes the padded, `#`-headed tables, and every one of them here
+  is written and read through it. It is not published: the workspace takes
+  it as a path dependency on a sibling checkout, `../tabl`.
 - `feisty` sits in `[workspace.dependencies]` and no member uses it.
 
 ## The shape a benchmark has
@@ -397,7 +398,6 @@ The crate is deleted; restore it from git when a cluster run next lands.
   as its slowest and holds every one of their resident sets at once, while
   serial commands take their total and only ever hold one. Core-seconds are work rather than
   elapsed time, so they add however the commands were scheduled.
-- `tbl` writes the padded, `#`-headed table every analysis produces.
 - `tools` holds where the binaries and the downloads are.
 - `split` cuts a query set into balanced parts for a batch of jobs.
 - `search` builds the commands a pipeline is assembled out of: the directories

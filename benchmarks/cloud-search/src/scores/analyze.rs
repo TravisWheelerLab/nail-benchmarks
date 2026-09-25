@@ -11,9 +11,7 @@
 use std::collections::BTreeSet;
 use std::path::Path;
 
-use anyhow::ensure;
-
-use util::tbl;
+use anyhow::{Context, ensure};
 
 use crate::scores::frame::{Frame, Verdict};
 use crate::scores::runs::Reader as Runs;
@@ -132,20 +130,23 @@ pub fn summary(path: &Path, out: &Path) -> anyhow::Result<()> {
         })
         .collect();
 
-    tbl::write(
-        out,
-        tbl::Table {
-            meta: &preamble(&scores.meta, truth, rows),
-            headers: &headers,
-            rows: &cells,
-            ragged_last: false,
-        },
-    )
+    let style = tabl::Style::default()
+        .marker(tabl::Marker::Indent)
+        .trailing(tabl::Trailing::Keep);
+    let mut table = tabl::Table::new(tabl::Schema::new(headers).style(style));
+    preamble(&mut table, &scores.meta, truth, rows);
+    for row in cells {
+        table.row(row);
+    }
+
+    table
+        .write(out)
+        .with_context(|| format!("failed to write {}", out.display()))
 }
 
 /// What was searched, what the fractions are fractions of, and the two times
 /// the figures use as reference lines.
-fn preamble(meta: &crate::scores::Meta, truth: usize, rows: u64) -> String {
+fn preamble(table: &mut tabl::Table, meta: &crate::scores::Meta, truth: usize, rows: u64) {
     let (mut count, mut residues, mut bytes) = (0usize, 0u64, 0u64);
     for (_, size) in &meta.targets {
         count += size.count;
@@ -167,26 +168,21 @@ fn preamble(meta: &crate::scores::Meta, truth: usize, rows: u64) -> String {
         false => format!("{:.4}", meta.seeds.iter().map(|(_, w)| w).sum::<f64>()),
     };
 
-    format!(
-        "# query  {:>9} families  {:>12} residues  {:>12} bytes\n\
-         # target {:>9} seqs      {:>12} residues  {:>12} bytes\n\
-         # pairs  {:>9} rows      {:>12} runs\n\
-         # hmmer  {:>9} hits      {:>12.4} wall_s\n\
-         # seed   {:>9}           {:>12} wall_s\n\
-         #\n",
-        meta.query.count,
-        meta.query.residues,
-        meta.query.bytes,
-        count,
-        residues,
-        bytes,
-        rows,
-        meta.runs.len(),
-        truth,
-        hmmer,
-        "",
-        seed,
-    )
+    table
+        .comment(format!(
+            "query  {:>9} families  {:>12} residues  {:>12} bytes",
+            meta.query.count, meta.query.residues, meta.query.bytes,
+        ))
+        .comment(format!(
+            "target {count:>9} seqs      {residues:>12} residues  {bytes:>12} bytes"
+        ))
+        .comment(format!(
+            "pairs  {rows:>9} rows      {:>12} runs",
+            meta.runs.len()
+        ))
+        .comment(format!("hmmer  {truth:>9} hits      {hmmer:>12.4} wall_s"))
+        .comment(format!("seed   {:>9}           {seed:>12} wall_s", ""))
+        .comment("");
 }
 
 /// What one unit's pairs came to, per run.
@@ -313,15 +309,18 @@ pub fn stages(path: &Path, out: &Path) -> anyhow::Result<()> {
 
     let truth: usize = at.values().map(|tally| tally.truth).sum();
 
-    tbl::write(
-        out,
-        tbl::Table {
-            meta: &preamble(scores.meta(), truth, rows),
-            headers: &headers,
-            rows: &cells,
-            ragged_last: false,
-        },
-    )
+    let style = tabl::Style::default()
+        .marker(tabl::Marker::Indent)
+        .trailing(tabl::Trailing::Keep);
+    let mut table = tabl::Table::new(tabl::Schema::new(headers).style(style));
+    preamble(&mut table, scores.meta(), truth, rows);
+    for row in cells {
+        table.row(row);
+    }
+
+    table
+        .write(out)
+        .with_context(|| format!("failed to write {}", out.display()))
 }
 
 fn frac(n: usize, of: usize) -> f64 {

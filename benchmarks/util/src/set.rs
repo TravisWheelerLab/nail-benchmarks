@@ -31,8 +31,6 @@ use std::path::{Path, PathBuf};
 
 use anyhow::{Context, bail, ensure};
 
-use crate::tbl;
-
 /// What the manifest is called, in a set's directory.
 pub const FILE: &str = "set.tbl";
 
@@ -367,19 +365,23 @@ impl Set {
 
     pub fn read(root: impl Into<PathBuf>, path: &Path) -> anyhow::Result<Set> {
         let root = root.into();
-        let table = tbl::read(path)?;
+        let table = tabl::Table::read(path)
+            .with_context(|| format!("failed to read {}", path.display()))?;
+        let labels = table.labels();
 
-        let attrs: Vec<&String> = table
-            .headers
+        let attrs: Vec<&String> = labels
             .iter()
             .filter(|h| !SPINE.contains(&h.as_str()))
             .collect();
 
         let mut rows = Vec::new();
-        for cells in &table.cells {
-            let cell = |key: &str| match cells.get(key).map(String::as_str) {
-                Some("-") | None => "",
-                Some(value) => value,
+        for cells in table.rows() {
+            let cell = |key: &str| {
+                labels
+                    .iter()
+                    .position(|label| label == key)
+                    .and_then(|i| cells.get(i))
+                    .unwrap_or_default()
             };
 
             let target = cell(TARGET);
@@ -409,7 +411,7 @@ impl Set {
         Ok(Set {
             root,
             rows,
-            meta: read_meta(&table.meta),
+            meta: read_meta(table.preamble()),
         })
     }
 
@@ -431,44 +433,39 @@ impl Set {
             keys
         };
 
-        let mut headers: Vec<String> = SPINE.iter().map(|h| h.to_string()).collect();
-        headers.extend(keys.iter().cloned());
-
-        let rows: Vec<Vec<String>> = self
-            .rows
+        let columns = SPINE
             .iter()
-            .map(|row| {
-                let mut cells = vec![
-                    dash(&row.unit),
-                    dash(&row.query_hmm),
-                    dash(&row.query_sto),
-                    dash(&row.query_fa),
-                    dash(&row.query_db),
-                    dash(&row.target),
-                ];
-                cells.extend(keys.iter().map(|key| match row.attrs.get(key) {
-                    Some(value) => value.clone(),
-                    None => "-".to_string(),
-                }));
-                cells
-            })
-            .collect();
+            .map(|h| h.to_string())
+            .chain(keys.iter().cloned())
+            .map(tabl::Column::new);
+        let style = tabl::Style::default()
+            .marker(tabl::Marker::Indent)
+            .trailing(tabl::Trailing::Keep);
+        let mut table = tabl::Table::new(tabl::Schema::new(columns).style(style));
 
-        let meta: String = self
-            .meta
-            .iter()
-            .map(|(key, value)| format!("#= {key} {value}\n"))
-            .collect();
+        for (key, value) in &self.meta {
+            table.meta(format!("{key} {value}"));
+        }
 
-        tbl::write(
-            path,
-            tbl::Table {
-                meta: &meta,
-                headers: &headers,
-                rows: &rows,
-                ragged_last: false,
-            },
-        )
+        for row in &self.rows {
+            let mut cells = vec![
+                dash(&row.unit),
+                dash(&row.query_hmm),
+                dash(&row.query_sto),
+                dash(&row.query_fa),
+                dash(&row.query_db),
+                dash(&row.target),
+            ];
+            cells.extend(keys.iter().map(|key| match row.attrs.get(key) {
+                Some(value) => value.clone(),
+                None => "-".to_string(),
+            }));
+            table.row(cells);
+        }
+
+        table
+            .write(path)
+            .with_context(|| format!("failed to write {}", path.display()))
     }
 
     pub fn root(&self) -> &Path {

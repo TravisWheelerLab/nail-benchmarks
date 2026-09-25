@@ -7,7 +7,7 @@
 //! A build describes what it produced in [`set`], one row per search unit. A
 //! run is recorded by a `michi::Table` sink as `manifest.tbl`, which [`ledger`]
 //! distills into the part an analysis needs. What the analysis works out gets
-//! written through [`tbl`], which is the format all three ride on.
+//! written through `tabl`, which is the format all three ride on.
 //!
 //! Nothing here decides where any of that goes. [`paths`] reads the file each
 //! tool keeps beside its own source, naming what it reads and what it writes,
@@ -38,7 +38,6 @@ pub mod paths;
 pub mod search;
 pub mod set;
 pub mod split;
-pub mod tbl;
 pub mod tools;
 
 /// A profile of `leng` nodes over a two-symbol alphabet, which is the smallest

@@ -233,6 +233,7 @@ dependencies = [
  "michi",
  "rayon",
  "serde",
+ "tabl",
  "util",
 ]
 
@@ -402,6 +403,7 @@ dependencies = [
  "rand",
  "regex",
  "serde",
+ "tabl",
  "util",
 ]
 
@@ -648,6 +650,7 @@ dependencies = [
  "michi",
  "serde",
  "sha2",
+ "tabl",
  "toml",
 ]
 

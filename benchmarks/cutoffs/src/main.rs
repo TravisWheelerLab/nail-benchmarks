@@ -68,7 +68,7 @@ use libsail::tbl::nail::NailTable;
 use libsail::tbl::{Hit, HitColumns, HitParser, Table};
 use michi::{Cmd as PCmd, PipelineBuilder, Progress, Step, Table as PTable};
 use util::tools::{hmmsearch, mmseqs, nail};
-use util::{ledger, manifest, tbl};
+use util::{ledger, manifest};
 
 use util::set::Set;
 
@@ -1538,16 +1538,18 @@ fn learn(args: LearnArgs, paths: &Paths) -> anyhow::Result<()> {
         headers.push(format!("{tool}_n"));
     }
 
+    let style = tabl::Style::default()
+        .marker(tabl::Marker::Indent)
+        .trailing(tabl::Trailing::Keep);
+    let mut table = tabl::Table::new(tabl::Schema::new(headers).style(style));
+    for row in rows {
+        table.row(row);
+    }
+
     let out_path = layout.cutoffs_tbl()?;
-    tbl::write(
-        &out_path,
-        tbl::Table {
-            meta: "",
-            headers: &headers,
-            rows: &rows,
-            ragged_last: false,
-        },
-    )?;
+    table
+        .write(&out_path)
+        .with_context(|| format!("failed to write {}", out_path.display()))?;
 
     let skipped = skipped.load(Ordering::Relaxed);
     if skipped > 0 {

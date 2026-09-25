@@ -120,15 +120,17 @@ pub fn main(args: Args, paths: &crate::Paths) -> anyhow::Result<()> {
 
         move || -> anyhow::Result<()> {
             write_originals(&originals, &decoys, &target)?;
-            util::tbl::write(
-                &tested,
-                util::tbl::Table {
-                    meta: "",
-                    headers: &["tool", "mode", "decoys"].map(String::from),
-                    rows: &rows,
-                    ragged_last: false,
-                },
-            )
+            let style = tabl::Style::default()
+                .marker(tabl::Marker::Indent)
+                .trailing(tabl::Trailing::Keep);
+            let mut table =
+                tabl::Table::new(tabl::Schema::new(["tool", "mode", "decoys"]).style(style));
+            for row in rows {
+                table.row(row);
+            }
+            table
+                .write(&tested)
+                .with_context(|| format!("failed to write {}", tested.display()))
         }
     };
 

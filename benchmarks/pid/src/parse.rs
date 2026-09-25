@@ -30,7 +30,6 @@ use anyhow::Context;
 use clap::{Parser, Subcommand};
 use util::ledger::{self, Ledger};
 use util::manifest;
-use util::tbl;
 
 use crate::run::MODE;
 
@@ -396,16 +395,23 @@ pub fn runs(dir: &Path) -> anyhow::Result<Vec<Run>> {
 /// sequence query is judged by its family's profile. Nothing here pools a
 /// decoy across families.
 pub fn rejections(dir: &Path) -> anyhow::Result<Rejections> {
-    let tested = tbl::read(&dir.join(TESTED))
+    let tested = tabl::Table::read(dir.join(TESTED))
+        .with_context(|| format!("failed to read {}", dir.join(TESTED).display()))
         .with_context(|| format!("no rejections in {}; run `pid reject` first", dir.display()))?;
+    let column = |label: &str| {
+        tested
+            .index(label)
+            .with_context(|| format!("{} has no {label} column", dir.join(TESTED).display()))
+    };
+    let (tool, decoys) = (column("tool")?, column("decoys")?);
 
     let settled = tested
-        .cells
+        .rows()
         .iter()
-        .find(|row| row["tool"] == "all")
+        .find(|row| row.get(tool) == Some("all"))
         .with_context(|| format!("{} has no total row", dir.join(TESTED).display()))?;
 
-    if settled["decoys"] == "0" {
+    if settled.get(decoys) == Some("0") {
         return Ok(HashSet::new());
     }
 
@@ -652,15 +658,19 @@ impl RecallData {
             }
         }
 
-        tbl::write(
-            path,
-            tbl::Table {
-                meta: &format!("#= fpr {FIXED_FPR}\n"),
-                headers: &names(["run", "pid", "n", "recall"]),
-                rows: &rows,
-                ragged_last: false,
-            },
-        )
+        let style = tabl::Style::default()
+            .marker(tabl::Marker::Indent)
+            .trailing(tabl::Trailing::Keep);
+        let mut table =
+            tabl::Table::new(tabl::Schema::new(["run", "pid", "n", "recall"]).style(style));
+        table.meta(format!("fpr {FIXED_FPR}"));
+        for row in rows {
+            table.row(row);
+        }
+
+        table
+            .write(path)
+            .with_context(|| format!("failed to write {}", path.display()))
     }
 
     /// One row per run per change point of its ROC curve.
@@ -715,15 +725,17 @@ impl RecallData {
             }
         }
 
-        tbl::write(
-            path,
-            tbl::Table {
-                meta: "",
-                headers: &names(["run", "fpr", "recall"]),
-                rows: &rows,
-                ragged_last: false,
-            },
-        )
+        let style = tabl::Style::default()
+            .marker(tabl::Marker::Indent)
+            .trailing(tabl::Trailing::Keep);
+        let mut table = tabl::Table::new(tabl::Schema::new(["run", "fpr", "recall"]).style(style));
+        for row in rows {
+            table.row(row);
+        }
+
+        table
+            .write(path)
+            .with_context(|| format!("failed to write {}", path.display()))
     }
 
     /// One row per run: what it cost, and what it found for the cost.
@@ -749,19 +761,18 @@ impl RecallData {
             })
             .collect();
 
-        tbl::write(
-            path,
-            tbl::Table {
-                meta: &format!("#= fpr {FIXED_FPR}\n"),
-                headers: &names(["run", "wall_s", "recall"]),
-                rows: &rows,
-                ragged_last: false,
-            },
-        )
-    }
-}
+        let style = tabl::Style::default()
+            .marker(tabl::Marker::Indent)
+            .trailing(tabl::Trailing::Keep);
+        let mut table =
+            tabl::Table::new(tabl::Schema::new(["run", "wall_s", "recall"]).style(style));
+        table.meta(format!("fpr {FIXED_FPR}"));
+        for row in rows {
+            table.row(row);
+        }
 
-/// Column names, which `tbl` wants owned.
-fn names<const N: usize>(headers: [&str; N]) -> Vec<String> {
-    headers.iter().map(|h| h.to_string()).collect()
+        table
+            .write(path)
+            .with_context(|| format!("failed to write {}", path.display()))
+    }
 }

@@ -22,7 +22,6 @@ use std::path::{Path, PathBuf};
 use anyhow::{Context, ensure};
 
 use crate::manifest::{self, Manifest};
-use crate::tbl;
 use crate::tools;
 
 /// The shard cell of a row whose wall clock covers every shard of its run at
@@ -123,18 +122,19 @@ impl Ledger {
     }
 
     pub fn read(path: &Path) -> anyhow::Result<Ledger> {
-        let table = tbl::read(path)?;
-        let params: Vec<&String> = table
-            .headers
-            .iter()
-            .filter(|h| !is_column(h))
-            .collect::<Vec<_>>();
+        let table = tabl::Table::read(path)
+            .with_context(|| format!("failed to read {}", path.display()))?;
+        let labels = table.labels();
+        let params: Vec<&String> = labels.iter().filter(|h| !is_column(h)).collect::<Vec<_>>();
 
         let mut rows = Vec::new();
-        for cells in &table.cells {
-            let cell = |key: &str| match cells.get(key).map(String::as_str) {
-                Some("-") | None => "",
-                Some(value) => value,
+        for cells in table.rows() {
+            let cell = |key: &str| {
+                labels
+                    .iter()
+                    .position(|label| label == key)
+                    .and_then(|i| cells.get(i))
+                    .unwrap_or_default()
             };
 
             let number = |key: &str, what: &str| -> anyhow::Result<Option<f64>> {
@@ -166,8 +166,8 @@ impl Ledger {
 
         Ok(Ledger {
             rows,
-            failed: failed_meta(&table.meta),
-            tools: tool_meta(&table.meta),
+            failed: failed_meta(table.preamble()),
+            tools: tool_meta(table.preamble()),
         })
     }
 
@@ -183,67 +183,58 @@ impl Ledger {
             keys
         };
 
-        let mut headers = vec![
-            manifest::NAME.to_string(),
-            manifest::TOOL.to_string(),
-            manifest::SHARD.to_string(),
-            manifest::STAGE.to_string(),
-        ];
-        headers.extend(keys.iter().cloned());
-        headers.push(WALL.to_string());
-        headers.push(CPU.to_string());
-        headers.push(RSS.to_string());
+        let columns = [
+            manifest::NAME,
+            manifest::TOOL,
+            manifest::SHARD,
+            manifest::STAGE,
+        ]
+        .into_iter()
+        .map(str::to_string)
+        .chain(keys.iter().cloned())
+        .chain([WALL, CPU, RSS].map(str::to_string))
+        .map(tabl::Column::new);
+        let style = tabl::Style::default()
+            .marker(tabl::Marker::Indent)
+            .trailing(tabl::Trailing::Keep);
+        let mut table = tabl::Table::new(tabl::Schema::new(columns).style(style));
 
-        let rows: Vec<Vec<String>> = self
-            .rows
-            .iter()
-            .map(|row| {
-                let mut cells = vec![
-                    dash(&row.name),
-                    dash(&row.tool),
-                    dash(&row.shard),
-                    dash(&row.stage),
-                ];
-                cells.extend(keys.iter().map(|key| match row.params.get(key) {
-                    Some(value) => value.clone(),
-                    None => "-".to_string(),
-                }));
-                cells.push(match row.wall_s {
-                    Some(wall) => format!("{wall:.2}"),
-                    None => "-".to_string(),
-                });
-                cells.push(match row.cpu_s {
-                    Some(cpu) => format!("{cpu:.2}"),
-                    None => "-".to_string(),
-                });
-                cells.push(match row.max_rss_kb {
-                    Some(rss) => rss.to_string(),
-                    None => "-".to_string(),
-                });
-                cells
-            })
-            .collect();
+        for id in &self.tools {
+            table.meta(format!("tool {} {} {}", id.name, id.version, id.hash));
+        }
+        for (what, shard) in &self.failed {
+            table.meta(format!("failed {} {}", dash(what), dash(shard)));
+        }
 
-        let meta: String = self
-            .tools
-            .iter()
-            .map(|id| format!("#= tool {} {} {}\n", id.name, id.version, id.hash))
-            .chain(
-                self.failed
-                    .iter()
-                    .map(|(what, shard)| format!("#= failed {} {}\n", dash(what), dash(shard))),
-            )
-            .collect();
+        for row in &self.rows {
+            let mut cells = vec![
+                dash(&row.name),
+                dash(&row.tool),
+                dash(&row.shard),
+                dash(&row.stage),
+            ];
+            cells.extend(keys.iter().map(|key| match row.params.get(key) {
+                Some(value) => value.clone(),
+                None => "-".to_string(),
+            }));
+            cells.push(match row.wall_s {
+                Some(wall) => format!("{wall:.2}"),
+                None => "-".to_string(),
+            });
+            cells.push(match row.cpu_s {
+                Some(cpu) => format!("{cpu:.2}"),
+                None => "-".to_string(),
+            });
+            cells.push(match row.max_rss_kb {
+                Some(rss) => rss.to_string(),
+                None => "-".to_string(),
+            });
+            table.row(cells);
+        }
 
-        tbl::write(
-            path,
-            tbl::Table {
-                meta: &meta,
-                headers: &headers,
-                rows: &rows,
-                ragged_last: false,
-            },
-        )
+        table
+            .write(path)
+            .with_context(|| format!("failed to write {}", path.display()))
     }
 
     /// Every row, runs and stages alike. What a pipeline cost is all of them,
