@@ -132,8 +132,16 @@ missing.
   cores: straddling costs about 2% against 32 cores of a single node, and
   `numactl --membind` on top of single-node pinning buys nothing (+0.35%,
   inside the noise). So if this is ever worth fixing, the fix is making the
-  lease node-aware rather than adding `set_mempolicy`. It is not worth fixing
-  today. Full write-up while it lasts: `tmp-claude/numaprobe/REPORT.md`.
+  lease node-aware rather than adding `set_mempolicy`. Full write-up while it
+  lasts: `tmp-claude/numaprobe/REPORT.md`.
+
+  Small leases are another matter. A `--cpu 2` hmmsearch keeps about 2.7 cpus
+  busy, and on a private 2-cpu lease a batch of them runs 1.5-1.6x slower than
+  the same batch sharing one pool, which is what pid's hmmer and phmmer
+  slowdown came to. On two cpus, straddling the nodes cost a further 15%, far
+  more than the 2% measured at 32. Jack is building node-aware leases and a
+  batch mode that shares the whole lease among its commands; until they land,
+  every michi-batched hmmer here pays both. `PLAN.md` a.4 has the numbers.
 - `libsail` reads and writes the formats: FASTA, Stockholm, p7hmm, and the hit
   tables nail, HMMER, MMseqs2 and BLAST produce. Since 0.4.0 it also draws the
   samples `build-set` deals from: `sample_in_order(m, seed)` yields a uniform
@@ -143,7 +151,9 @@ missing.
   which shard each record lands in; a fixed round robin over an ascending draw
   is a stride rather than a partition.
 - `tabl` writes the padded, `#`-headed tables, and every one of them here
-  is written and read through it. It is not published: the workspace takes
+  is written and read through it. `Table::parse` reads a table back by
+  position; michi's manifest, which michi writes itself and which drifts off
+  its rule in places, falls through to a split on whitespace. It is not published: the workspace takes
   it as a path dependency on a sibling checkout, `../tabl`.
 - `feisty` sits in `[workspace.dependencies]` and no member uses it.
 
