@@ -248,7 +248,7 @@ def axes():
 
 
 def read_tbl(path):
-    """Reads a `#`-headed padded table (see `benchmarks/util/src/tbl.rs`)
+    """Reads a `#`-headed padded table, as toil writes them,
     and returns its data rows -- the fields after the run name, as floats --
     grouped by run name, in the file's order.
     """
@@ -268,11 +268,13 @@ class Scatter:
     y: [float]
 
     def __init__(self, lines: Iterable[str]) -> None:
-        point_re = re.compile(rf"{FLOAT_RE},{FLOAT_RE}")
+        """The first two columns of a `#`-headed table, as x and y."""
         self.x = []
         self.y = []
         for line in lines:
-            x, y = re.search(point_re, line).groups()
+            if not line.strip() or line.startswith("#"):
+                continue
+            x, y = line.split()[:2]
             self.x.append(float(x))
             self.y.append(float(y))
 

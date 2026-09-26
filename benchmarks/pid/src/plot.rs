@@ -47,12 +47,12 @@ const FIGURES: &[Figure] = &[
     Figure {
         name: "cells",
         script: "plot_cell_frac.py",
-        inputs: &["cells.true.txt", "cells.decoy.txt"],
+        inputs: &["cells.true.tbl", "cells.decoy.tbl"],
     },
     Figure {
         name: "score",
         script: "plot_score.py",
-        inputs: &["score.txt"],
+        inputs: &["score.tbl"],
     },
 ];
 

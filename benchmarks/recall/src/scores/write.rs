@@ -90,8 +90,9 @@ pub fn collect(args: Args<'_>) -> anyhow::Result<Count> {
         .with_context(|| format!("failed to create {}", args.out.display()))?;
     let mut out = BufWriter::with_capacity(1 << 20, file);
 
-    meta.write(super::FORMAT, &mut out)?;
-    Stream::new(schema.clone(), widths.clone(), &mut out).header()?;
+    let mut head = Stream::new(schema.clone(), widths.clone(), &mut out);
+    meta.write(super::FORMAT, &mut head)?;
+    head.header()?;
 
     let results = args.dir.join("results");
     let work = Shard {
@@ -119,7 +120,8 @@ pub fn collect(args: Args<'_>) -> anyhow::Result<Count> {
         &mut out,
     )?;
 
-    writeln!(out, "#= end {}", count.rows)?;
+    Stream::continued(schema.clone(), widths.clone(), &mut out)
+        .meta(format!("end {}", count.rows))?;
     out.flush()?;
 
     if count.disagreements > 0 {

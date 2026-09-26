@@ -350,6 +350,7 @@ dependencies = [
  "libsail",
  "michi",
  "serde",
+ "toil",
  "util",
 ]
 

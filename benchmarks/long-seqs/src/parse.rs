@@ -5,8 +5,6 @@
 //! checked in. A pair whose search failed is left out with a warning instead of
 //! coming back as a missing file.
 
-use std::fs::File;
-use std::io::{BufWriter, Write};
 use std::path::{Path, PathBuf};
 
 use anyhow::{Context, bail, ensure};
@@ -22,7 +20,7 @@ use crate::run::RUN_NAME;
 /// Analysis subcommands for this benchmark.
 #[derive(Subcommand)]
 pub enum Cmd {
-    /// Emit `cells.long.txt`: DP matrix area against the fraction of it
+    /// Emit `cells.long.tbl`: DP matrix area against the fraction of it
     /// computed, one row per pair. The pid benchmark overlays this on its
     /// own cell-fraction figure via `--long_hits`.
     Cells(CellsArgs),
@@ -34,7 +32,7 @@ pub struct CellsArgs {
     #[arg(long, value_name = "dir")]
     out: Option<PathBuf>,
 
-    /// Where cells.long.txt goes. Defaults to figures/ beside the run
+    /// Where cells.long.tbl goes. Defaults to figures/ beside the run
     #[arg(short, long, value_name = "dir")]
     figures: Option<PathBuf>,
 
@@ -64,10 +62,11 @@ fn cells(args: CellsArgs, paths: &crate::Paths) -> anyhow::Result<()> {
     std::fs::create_dir_all(&figures)
         .with_context(|| format!("failed to create {}", figures.display()))?;
 
-    let path = figures.join("cells.long.txt");
-    let mut file = BufWriter::new(
-        File::create(&path).with_context(|| format!("failed to create {}", path.display()))?,
-    );
+    let path = figures.join("cells.long.tbl");
+    let mut file = toil::Table::new(toil::Schema::new([
+        toil::Column::new("cells"),
+        toil::Column::new("fraction").fixed(5),
+    ]));
 
     for (pair, table) in searches {
         let cell_frac = last_cell_frac(&table)
@@ -82,10 +81,11 @@ fn cells(args: CellsArgs, paths: &crate::Paths) -> anyhow::Result<()> {
         let q_len = unit.number("query_residues")?;
         let t_len = unit.number("residues")?;
 
-        writeln!(file, "{},{:.5}", q_len * t_len, cell_frac)?;
+        file.row([toil::Cell::from((q_len * t_len) as u64), cell_frac.into()]);
     }
 
-    file.flush()?;
+    file.write(&path)
+        .with_context(|| format!("failed to write {}", path.display()))?;
     println!("wrote {}", path.display());
     Ok(())
 }

@@ -13,8 +13,6 @@
 
 use std::{
     collections::{HashMap, HashSet},
-    fs::File,
-    io::{BufWriter, Write},
     path::{Path, PathBuf},
 };
 
@@ -168,14 +166,20 @@ fn score(args: ScoreArgs, paths: &crate::Paths) -> anyhow::Result<()> {
     let figures = args.which.out_dir(&paths.analysis);
     std::fs::create_dir_all(&figures)?;
 
-    let mut out = BufWriter::new(File::create(figures.join("score.txt"))?);
+    let mut table = toil::Table::new(toil::Schema::new([
+        toil::Column::new("full").fixed(1),
+        toil::Column::new("sparse").fixed(1),
+    ]));
     for k in intersection {
         let x = full_tbl.get(k).expect("present by intersection");
         let y = sparse_tbl.get(k).expect("present by intersection");
-        writeln!(out, "{x:.1},{y:.1}")?;
+        table.row([*x, *y]);
     }
 
-    Ok(())
+    let path = figures.join("score.tbl");
+    table
+        .write(&path)
+        .with_context(|| format!("failed to write {}", path.display()))
 }
 
 fn cells(args: CellsArgs, paths: &crate::Paths) -> anyhow::Result<()> {
@@ -209,8 +213,8 @@ fn cells(args: CellsArgs, paths: &crate::Paths) -> anyhow::Result<()> {
     let figures = args.which.out_dir(&paths.analysis);
     std::fs::create_dir_all(&figures)?;
 
-    let mut true_out = BufWriter::new(File::create(figures.join("cells.true.txt"))?);
-    let mut decoy_out = BufWriter::new(File::create(figures.join("cells.decoy.txt"))?);
+    let points = || toil::Table::new(toil::Schema::new(["cells", "fraction"]));
+    let (mut true_out, mut decoy_out) = (points(), points());
 
     hits.iter().try_for_each(|h| -> anyhow::Result<()> {
         let intended_query = h
@@ -227,17 +231,26 @@ fn cells(args: CellsArgs, paths: &crate::Paths) -> anyhow::Result<()> {
             .get(&h.target)
             .with_context(|| format!("no target len for: {}", h.target))?;
 
-        let x = (qlen * tlen) as f64;
-        let y = h.cell_fraction;
+        let x = toil::Cell::from(qlen * tlen);
+        let y = toil::Cell::from(h.cell_fraction);
 
         if h.target.starts_with("decoy") {
-            writeln!(decoy_out, "{x},{y}")?;
+            decoy_out.row([x, y]);
         } else if h.query == intended_query {
-            writeln!(true_out, "{x},{y}")?;
+            true_out.row([x, y]);
         }
 
         Ok(())
-    })
+    })?;
+
+    for (table, name) in [(true_out, "cells.true.tbl"), (decoy_out, "cells.decoy.tbl")] {
+        let path = figures.join(name);
+        table
+            .write(&path)
+            .with_context(|| format!("failed to write {}", path.display()))?;
+    }
+
+    Ok(())
 }
 
 fn recall(args: RecallArgs, paths: &crate::Paths) -> anyhow::Result<()> {

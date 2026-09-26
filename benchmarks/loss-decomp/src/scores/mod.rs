@@ -477,34 +477,36 @@ impl Meta {
     /// `format` is the table's own `#= format` line. Everything under it is
     /// the same whatever the columns turn out to be, which is why the two
     /// tables share a preamble and not a schema.
-    pub fn write(&self, format: &str, out: &mut impl std::io::Write) -> std::io::Result<()> {
-        writeln!(out, "{format}")?;
-        writeln!(
-            out,
-            "#= query {} {} {}",
+    pub fn write<W: std::io::Write>(
+        &self,
+        format: &str,
+        out: &mut toil::Stream<W>,
+    ) -> std::io::Result<()> {
+        out.meta(format.strip_prefix("#= ").unwrap_or(format))?;
+        out.meta(format!(
+            "query {} {} {}",
             self.query.count, self.query.residues, self.query.bytes
-        )?;
+        ))?;
 
         for (shard, size) in &self.targets {
-            writeln!(
-                out,
-                "#= target {} {} {} {}",
+            out.meta(format!(
+                "target {} {} {} {}",
                 label(shard),
                 size.count,
                 size.residues,
                 size.bytes
-            )?;
+            ))?;
         }
 
         for id in &self.tools {
-            writeln!(out, "#= tool {} {} {}", id.name, id.version, id.hash)?;
+            out.meta(format!("tool {} {} {}", id.name, id.version, id.hash))?;
         }
 
         for (name, wall) in &self.seeds {
-            writeln!(out, "#= seed {} {wall:.4}", label(name))?;
+            out.meta(format!("seed {} {wall:.4}", label(name)))?;
         }
 
-        writeln!(out, "#= cutoffs {} c={}", self.cutoffs.display(), self.c)?;
+        out.meta(format!("cutoffs {} c={}", self.cutoffs.display(), self.c))?;
 
         for run in &self.runs {
             // written with the settings and read back out of them, so the
@@ -516,11 +518,10 @@ impl Meta {
                 .chain(run.params.iter().map(|(k, v)| format!(" {k}={v}")))
                 .collect();
 
-            writeln!(
-                out,
-                "#= run {} {} {:.4}{params}",
+            out.meta(format!(
+                "run {} {} {:.4}{params}",
                 run.name, run.tool, run.wall_s
-            )?;
+            ))?;
         }
 
         // the legend belongs to the pass string, so a table without one gets
@@ -528,7 +529,7 @@ impl Meta {
         // column would read as saying the column is there
         if format == FORMAT {
             let names: Vec<&str> = self.runs.iter().map(|run| run.name.as_str()).collect();
-            writeln!(out, "#= pass {}", names.join(" "))?;
+            out.meta(format!("pass {}", names.join(" ")))?;
         }
 
         Ok(())
