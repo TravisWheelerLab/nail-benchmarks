@@ -136,7 +136,7 @@ pub fn main(args: Args, paths: &crate::Paths) -> anyhow::Result<()> {
 
     let load = Load::new(dirs.root.join(LOAD));
 
-    let mut pl = PipelineBuilder::new().step(dirs.clean());
+    let mut pl = PipelineBuilder::new().pool(top).step(dirs.clean());
 
     // ---- what every rep reuses: mmseqs' target databases and hmmer's splits
 

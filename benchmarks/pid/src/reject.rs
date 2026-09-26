@@ -134,6 +134,7 @@ pub fn main(args: Args, paths: &crate::Paths) -> anyhow::Result<()> {
     };
 
     let mut pl = PipelineBuilder::new()
+        .pool(threads)
         .step(dirs.clean())
         .step(Cmd::new("mkdir").name("dirs").flag("-p").path(&dirs.tmp))
         .step(Step::from_closures([Closure::new("subset", move || Ok(subset()?))]).name("subset"));

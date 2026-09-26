@@ -13,8 +13,8 @@ Each binary has a shim beside its `Cargo.toml`, named after it, so the
 type:
 
 ```
-benchmarks/recall/recall run --in real
-benchmarks/build-set/build-set --in recall-toy
+benchmarks/recall/recall run --in real --threads 32
+benchmarks/build-set/build-set --in recall-toy --threads 8
 benchmarks/pid/pid parse recall
 ```
 
@@ -142,12 +142,17 @@ missing.
   hmmer and phmmer slowdown came to. nail and mmseqs are not batched this way;
   time them before switching. `PLAN.md` a.4 has the numbers.
 
-  No core count is written into the code. Every `.cores` and `.pool` comes
-  from a command-line value with no default: `--threads` on each pipeline,
-  `--rungs` on thread-scaling, and `--jobs` on cutoffs' fanout, whose
-  single-threaded per-family batches share one pool of that many cores. The
-  tools' own thread counts are another matter: `HMMER_CPU` is 2 and cutoffs'
-  fanout runs each search at one thread, both by design.
+  No core count is written into the code. Every pipeline, build-set's
+  included, runs in a michi pool of `--threads` cores, and that value has no
+  default: a command that asks for no cores of its own shares the pool, and
+  one that does leases out of it. thread-scaling's pool is its top rung, and
+  `--rungs` has no default either. cutoffs' fanout sizes its pool by `--jobs`,
+  since its per-family searches run one thread each. The tools' own thread
+  counts are another matter: `HMMER_CPU` is 2, and cutoffs' fanout runs each
+  search at 1, both on purpose. build-set used to read hmmbuild's threads out
+  of the profmark recipe, which broke the rule that `paths.toml` holds no
+  threads, and it takes `--threads` now. The plot commands are the only
+  pipelines left unpinned.
 - `libsail` reads and writes the formats: FASTA, Stockholm, p7hmm, and the hit
   tables nail, HMMER, MMseqs2 and BLAST produce. Since 0.4.0 it also draws the
   samples `build-set` deals from: `sample_in_order(m, seed)` yields a uniform
@@ -334,7 +339,7 @@ A benchmark that draws nothing has no `figures` key and no field for it:
 recall, cutoffs and long-seqs stop at `analysis`.
 
 A label is a whole set of paths under one name, so a toy run and a real run
-differ by a word: `recall run --in toy`. Running a tool without `--in` prints
+differ by a word: `recall run --in toy --threads 8`. Running a tool without `--in` prints
 the labels its file holds.
 
 Every benchmark has `toy` and `real`, over two sets of its own:
@@ -820,7 +825,7 @@ writes the copy's sets.
 
 Then run inside `$SB`, through its own shims. Every binary links to the same
 `benchmarks/shim`, which builds the crate the link is named after and runs what
-it built: `benchmarks/recall/recall run --in toy`, and so on. Every path these
+it built: `benchmarks/recall/recall run --in toy --threads 8`, and so on. Every path these
 crates resolve comes from a `CARGO_MANIFEST_DIR` (`util/src/tools.rs:18` for
 the repo root, and pid's own for its tree), so a build in the sandbox reads the
 sandbox's `data/` and

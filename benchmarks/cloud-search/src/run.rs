@@ -154,7 +154,7 @@ pub fn main(args: Args, paths: &crate::Paths) -> anyhow::Result<()> {
     let set = Set::load_needing(&paths.set, crate::NEEDS)?;
     ensure!(set.units().count() > 0, "{} is empty", paths.set.display());
 
-    let mut pl = PipelineBuilder::new().step(dirs.mkdir());
+    let mut pl = PipelineBuilder::new().pool(threads).step(dirs.mkdir());
 
     // every unit gets the whole grid. On a `fixed` set that is the one shard
     // the label names; on a `cross` it is each target source in turn, which is

@@ -137,7 +137,7 @@ pub fn build(
         println!("reusing the profmark split in {}", pm.display());
     }
 
-    let mut pl = PipelineBuilder::new().step(
+    let mut pl = PipelineBuilder::new().pool(threads).step(
         Cmd::new("mkdir")
             .name("dirs")
             .flag("-p")

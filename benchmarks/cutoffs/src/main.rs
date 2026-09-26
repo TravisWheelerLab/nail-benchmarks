@@ -514,7 +514,9 @@ fn recruit(args: RecruitArgs, paths: &Paths) -> anyhow::Result<()> {
     let stage = layout.recruit()?;
     let (results, tmp) = (stage.results(), stage.tmp());
 
-    let mut pl = PipelineBuilder::new().step(PCmd::new("mkdir").flag("-p").path(&results));
+    let mut pl = PipelineBuilder::new()
+        .pool(threads)
+        .step(PCmd::new("mkdir").flag("-p").path(&results));
 
     for (idx, shard) in layout.targets() {
         let scratch = tmp.join(format!("shard-{idx}"));
@@ -938,7 +940,9 @@ fn reject_union(
         util::search::jobs(threads),
     );
 
-    let mut pl = PipelineBuilder::new().step(split.step("split", &[]));
+    let mut pl = PipelineBuilder::new()
+        .pool(threads)
+        .step(split.step("split", &[]));
 
     for (form, target) in &targets {
         let scratch = tmp.join(form);

@@ -135,6 +135,7 @@ pub fn main(args: Args, paths: &crate::Paths) -> anyhow::Result<()> {
     );
 
     let mut pl = PipelineBuilder::new()
+        .pool(threads)
         .step(dirs.mkdir())
         .step(split.step("split", &[]));
 

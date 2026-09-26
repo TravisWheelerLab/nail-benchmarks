@@ -74,7 +74,7 @@ pub fn main(args: Args, paths: &crate::Paths) -> anyhow::Result<()> {
 
     let nail_bin = nail()?;
 
-    let mut pl = PipelineBuilder::new().step(
+    let mut pl = PipelineBuilder::new().pool(threads).step(
         Cmd::new("mkdir")
             .name("dirs")
             .flag("-p")

@@ -161,9 +161,6 @@ enum Recipe {
         min_test: usize,
         #[serde(default = "default_max_test")]
         max_test: usize,
-        /// Threads for hmmbuild.
-        #[serde(default = "default_threads")]
-        threads: usize,
     },
     /// Nested rungs on both axes, each a prefix of the one above.
     Ladder {
@@ -188,10 +185,6 @@ fn default_min_test() -> usize {
 
 fn default_max_test() -> usize {
     30
-}
-
-fn default_threads() -> usize {
-    8
 }
 
 fn default_seed() -> u64 {
@@ -238,6 +231,10 @@ struct Cli {
     /// recipe can be rebuilt in place
     #[arg(long)]
     rebuild: bool,
+
+    /// Threads for the draw and the tools, and the cores the build is pinned to
+    #[arg(short, long)]
+    threads: Option<usize>,
 }
 
 fn main() -> anyhow::Result<()> {
@@ -251,6 +248,14 @@ fn main() -> anyhow::Result<()> {
     };
 
     let recipe: Recipe = paths.get(&label)?;
+    let threads = cli.threads.context("--threads is required")?;
+
+    // the draw runs on rayon's global pool, which would otherwise take one
+    // thread per logical cpu however few cores the build is pinned to
+    rayon::ThreadPoolBuilder::new()
+        .num_threads(threads)
+        .build_global()
+        .context("failed to size the thread pool")?;
 
     if cli.rebuild {
         take_back(paths.at(recipe.out()))?;
@@ -275,13 +280,14 @@ fn main() -> anyhow::Result<()> {
             fams,
             reversed,
             seed,
+            threads,
         ),
         Recipe::Cross {
             out,
             queries,
             targets,
             seed,
-        } => cross(&paths, paths.at(out), queries, targets, seed),
+        } => cross(&paths, paths.at(out), queries, targets, seed, threads),
         Recipe::Pairs {
             queries,
             targets,
@@ -298,7 +304,6 @@ fn main() -> anyhow::Result<()> {
             train_test_id,
             min_test,
             max_test,
-            threads,
         } => make_profmark(
             paths.at(alignments),
             paths.at(decoys),
@@ -325,6 +330,7 @@ fn main() -> anyhow::Result<()> {
             &query_rungs,
             &target_rungs,
             seed,
+            threads,
         ),
     }
 }
@@ -448,6 +454,7 @@ fn plural(n: usize, word: &str) -> String {
 
 // -------------------------------------------------------------------- fixed
 
+#[allow(clippy::too_many_arguments)]
 fn fixed(
     src: Sources,
     root: PathBuf,
@@ -456,6 +463,7 @@ fn fixed(
     n_fams: Option<usize>,
     reversed: bool,
     seed: u64,
+    threads: usize,
 ) -> anyhow::Result<()> {
     claim(&root)?;
 
@@ -468,6 +476,7 @@ fn fixed(
     let counted: Arc<Mutex<Vec<Shard>>> = Arc::default();
 
     PipelineBuilder::new()
+        .pool(threads)
         .step(
             PCmd::new("mkdir")
                 .name("dirs")
@@ -695,6 +704,7 @@ fn cross(
     queries: Vec<QuerySrc>,
     targets: Vec<TargetSrc>,
     seed: u64,
+    threads: usize,
 ) -> anyhow::Result<()> {
     ensure!(!queries.is_empty(), "a cross needs a query source");
     ensure!(!targets.is_empty(), "a cross needs a target source");
@@ -707,7 +717,7 @@ fn cross(
     // about a missing mmseqs after the targets are dealt would be miserable
     let mmseqs_bin = mmseqs()?;
 
-    let mut pl = PipelineBuilder::new().step(
+    let mut pl = PipelineBuilder::new().pool(threads).step(
         PCmd::new("mkdir")
             .name("dirs")
             .flag("-p")
@@ -986,6 +996,7 @@ fn ladder(
     query_rungs: &[usize],
     target_rungs: &[usize],
     seed: u64,
+    threads: usize,
 ) -> anyhow::Result<()> {
     claim(&root)?;
 
@@ -1003,7 +1014,7 @@ fn ladder(
     println!("pfam holds {n_fams} families; query rungs: {query_ladder:?}");
 
     let mut query_residues: Vec<u64> = Vec::new();
-    let mut pl = PipelineBuilder::new();
+    let mut pl = PipelineBuilder::new().pool(threads);
 
     for &q in &query_ladder {
         let dir = queries.join(q.to_string());

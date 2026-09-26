@@ -118,6 +118,7 @@ pub fn main(args: Args, paths: &crate::Paths) -> anyhow::Result<()> {
     let diamond_db = dirs.tmp.join("diamond/db");
 
     let mut pl = PipelineBuilder::new()
+        .pool(threads)
         .step(dirs.clean())
         // a rejection settles a pair of the search it was drawn from, so a new
         // search leaves none behind to be read against it
