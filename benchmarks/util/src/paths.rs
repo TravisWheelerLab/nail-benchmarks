@@ -177,6 +177,10 @@ run = \"../sets/mgy-fixed/outputs/recall\"
 
         let p: Paths = f.get("toy").unwrap();
         assert_eq!(f.at(&p.set), dir.parent().unwrap().join("sets/toy/inputs"));
+        assert_eq!(
+            f.at(&p.run),
+            dir.parent().unwrap().join("sets/toy/outputs/recall")
+        );
 
         std::fs::remove_dir_all(&dir).ok();
     }

@@ -373,7 +373,7 @@ fn assemble(
 
     pairs_by_fam.retain(|_, pairs| pairs.len() > FAM_MIN);
     pairs_by_fam.iter_mut().for_each(|(_, pairs)| {
-        pairs.sort_by(|a, b| a.pid.cmp(&b.pid));
+        pairs.sort_by_key(|pair| pair.pid);
         pairs.truncate(FAM_MAX);
     });
 
@@ -393,7 +393,7 @@ fn assemble(
         Some(max) if max < pairs.len() => pairs.sample(&mut rng, max).cloned().collect(),
         _ => pairs,
     };
-    pairs.sort_by(|a, b| a.pid.cmp(&b.pid));
+    pairs.sort_by_key(|pair| pair.pid);
 
     println!("{} benchmark pairs", pairs.len());
 
