@@ -769,8 +769,8 @@ draws wall clock and that percentage against threads into
 `thread-scaling.pdf`.
 
 The split arm is `util::search::hmmer`, so its parts share one pool of N
-cores. The real run in `sets/thread-scaling/` predates that: it ran on michi
-0.1.0 with a private 2-core lease per part.
+cores. The first real run gave each part a private 2-core lease on michi
+0.1.0; its record is kept in `tmp-claude/thread-scaling-michi-0.1/`.
 
 ## Formatting
 
