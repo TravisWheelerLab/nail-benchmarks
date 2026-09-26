@@ -96,7 +96,7 @@ pub struct Args {
     rungs: Vec<usize>,
 
     /// Times each point is run
-    #[arg(long, default_value_t = 3)]
+    #[arg(long, default_value_t = 1)]
     reps: usize,
 
     /// Arms to run

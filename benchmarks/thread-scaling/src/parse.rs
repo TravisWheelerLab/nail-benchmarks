@@ -1,8 +1,9 @@
 //! Turning a finished ladder into the two tables the figure and a reader want.
 //!
 //! `scaling.tbl` is one row per unit per arm per rung: the median over reps of
-//! wall clock and core-seconds, the largest resident set, speedup and
-//! efficiency against the arm's lowest rung, and the highest 1-minute load
+//! wall clock and core-seconds, the largest resident set, the time perfect
+//! scaling from the arm's lowest rung would take, the percentage of that
+//! perfect speedup the measured time reached, and the highest 1-minute load
 //! seen either side of any rep.
 //!
 //! `agree.tbl` is one row per run: how its hits compare with the first rep of
@@ -27,7 +28,7 @@ use libsail::tbl::{HitColumns, HitParser, Table};
 use util::ledger::{self, Ledger, Row};
 use util::manifest;
 
-use crate::run::{ARM, LOAD, REP, THREADS};
+use crate::run::{ARM, Arm, LOAD, REP, THREADS};
 
 #[derive(Parser, Debug)]
 pub struct Args {
@@ -82,6 +83,21 @@ pub fn main(args: Args, paths: &crate::Paths) -> anyhow::Result<()> {
             .entry(run.threads)
             .or_default()
             .push(run);
+    }
+
+    // hmmer-split at one thread is one part at --cpu 1, which is the
+    // command hmmer's own one-thread rung ran, so it takes that point as
+    // its first rather than starting its ladder at 2
+    let (hmmer, split) = (Arm::Hmmer.name(), Arm::HmmerSplit.name());
+    let ones: Vec<(&str, Vec<&Run>)> = ladders
+        .iter()
+        .filter(|((_, arm), _)| *arm == hmmer)
+        .filter_map(|(&(shard, _), rungs)| rungs.get(&1).map(|one| (shard, one.clone())))
+        .collect();
+    for (shard, one) in ones {
+        if let Some(rungs) = ladders.get_mut(&(shard, split)) {
+            rungs.entry(1).or_insert(one);
+        }
     }
 
     std::fs::create_dir_all(&paths.analysis)
@@ -164,13 +180,16 @@ fn write_scaling(
             "wall_s",
             "cpu_s",
             "max_rss",
-            "speedup",
-            "efficiency",
+            "ideal_s",
+            "pct_ideal",
             "load",
         ])
         .style(style()),
     );
-    table.meta("wall_s and cpu_s are medians over reps; speedup is against the arm's lowest rung");
+    table.meta("wall_s and cpu_s are medians over reps");
+    table.meta(
+        "ideal_s is the arm's lowest rung scaled perfectly: wall_s x lowest threads / threads",
+    );
 
     let dash = || "-".to_string();
 
@@ -186,8 +205,8 @@ fn write_scaling(
             let wall_s = wall(runs);
             let cpu_s = median(runs.iter().filter_map(|r| r.row.cpu_s).collect());
             let rss = runs.iter().filter_map(|r| r.row.max_rss_kb).max();
-            let speedup = base_wall.zip(wall_s).map(|(b, w)| b / w);
-            let efficiency = speedup.map(|s| s * base_threads as f64 / threads as f64);
+            let ideal = base_wall.map(|b| b * base_threads as f64 / threads as f64);
+            let pct = ideal.zip(wall_s).map(|(i, w)| 100.0 * i / w);
             let max_load = runs
                 .iter()
                 .filter_map(|r| load.get(&(r.row.name.clone(), r.row.shard.clone())))
@@ -202,8 +221,8 @@ fn write_scaling(
                 wall_s.map_or_else(dash, |x| format!("{x:.2}")),
                 cpu_s.map_or_else(dash, |x| format!("{x:.2}")),
                 rss.map_or_else(dash, |x| x.to_string()),
-                speedup.map_or_else(dash, |x| format!("{x:.3}")),
-                efficiency.map_or_else(dash, |x| format!("{x:.3}")),
+                ideal.map_or_else(dash, |x| format!("{x:.2}")),
+                pct.map_or_else(dash, |x| format!("{x:.1}")),
                 max_load.map_or_else(dash, |x| format!("{x:.2}")),
             ]);
         }

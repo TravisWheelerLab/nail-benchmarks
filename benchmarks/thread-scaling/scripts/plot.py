@@ -1,4 +1,5 @@
-"""Speedup and efficiency against thread count, one column per unit.
+"""Wall clock, and the percentage of perfect speedup reached, against thread
+count, one column per unit.
 
 Reads scaling.tbl as `thread-scaling parse` writes it: `#` lines are metadata
 and the header, `-` is an empty cell. Writes thread-scaling.pdf into --out.
@@ -69,34 +70,33 @@ def main():
 
         for arm in arms:
             pts = sorted(
-                (int(r["threads"]), num(r, "speedup"), num(r, "efficiency"))
+                (int(r["threads"]), num(r, "wall_s"), num(r, "ideal_s"), num(r, "pct_ideal"))
                 for r in rows
-                if r["unit"] == unit and r["arm"] == arm and num(r, "speedup")
+                if r["unit"] == unit and r["arm"] == arm and num(r, "wall_s")
             )
             if not pts:
                 continue
             t = [p[0] for p in pts]
+            color = ARMS.get(arm, "#777777")
             kw = dict(
-                color=ARMS.get(arm, "#777777"),
+                color=color,
                 marker=MARKERS.get(arm, "o"),
                 markersize=6,
                 linewidth=2,
                 label=arm,
             )
             top.plot(t, [p[1] for p in pts], **kw)
-            bottom.plot(t, [p[2] for p in pts], **kw)
+            # perfect scaling from this arm's lowest rung, in its colour
+            top.plot(t, [p[2] for p in pts], color=color, linestyle="--", linewidth=1)
+            bottom.plot(t, [p[3] for p in pts], **kw)
 
-        # ideal speedup, from each arm's own lowest rung; drawn from 1 so it
-        # reads against the arms that start there
-        lo, hi = threads_all[0], threads_all[-1]
-        top.plot([lo, hi], [1, hi / lo], color="#999999", linestyle="--", linewidth=1)
-        bottom.axhline(1.0, color="#999999", linestyle="--", linewidth=1)
+        bottom.axhline(100.0, color="#999999", linestyle="--", linewidth=1)
 
         top.set_title(unit)
         top.set_xscale("log", base=2)
-        top.set_yscale("log", base=2)
+        top.set_yscale("log")
         bottom.set_xscale("log", base=2)
-        bottom.set_ylim(0, 1.15)
+        bottom.set_ylim(0, 110)
         bottom.set_xticks(threads_all, [str(t) for t in threads_all])
         bottom.set_xlabel("threads")
         for ax in (top, bottom):
@@ -105,8 +105,8 @@ def main():
             for side in ("top", "right"):
                 ax.spines[side].set_visible(False)
 
-    axes[0][0].set_ylabel("speedup over lowest rung")
-    axes[1][0].set_ylabel("efficiency")
+    axes[0][0].set_ylabel("wall clock (s); dashed = perfect scaling")
+    axes[1][0].set_ylabel("% of perfect speedup")
     axes[0][0].legend(frameon=False, fontsize=9)
 
     out = Path(args.out)

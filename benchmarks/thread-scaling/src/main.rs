@@ -29,7 +29,7 @@ enum Command {
     Run(run::Args),
     /// Write scaling.tbl and agree.tbl from a finished run.
     Parse(parse::Args),
-    /// Draw speedup and efficiency against threads from scaling.tbl.
+    /// Draw wall clock, and the % of perfect speedup reached, against threads.
     Plot(plot::Args),
 }
 

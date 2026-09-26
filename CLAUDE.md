@@ -740,19 +740,21 @@ never on both sides.
 Strong scaling for nail, mmseqs and hmmer over its own `cross` set, Pfam
 against MGnify and against Swissprot, built by `build-set --in
 thread-scaling-toy|thread-scaling-real`. `run` searches every unit at every
-rung of `--rungs` (1 2 4 8 16 32 48 by default), `--reps` times over, with
-the reps as the outer loop so load from other users spreads across rungs.
-Four arms: nail `-t N`, mmseqs `--threads N`, one `hmmsearch --cpu N`, and
-`hmmer-split`, the query cut N/2 ways at `--cpu 2`, which has no one-thread
-point. Each search is pinned to N cores. `/proc/loadavg` is read either side
-of every search into `outputs/load.tbl`, and it counts the search's own
-threads as well as anyone else's.
+rung of `--rungs` (1 2 4 8 16 32 48 by default), `--reps` times over, with the
+reps as the outer loop so load from other users spreads across rungs. Four
+arms: nail `-t N`, mmseqs `--threads N`, one `hmmsearch --cpu N`, and
+`hmmer-split`, the query cut N/2 ways at `--cpu 2`. `run` gives the split arm
+no one-thread search, because one part at `--cpu 1` is `hmmer-t1`, and `parse`
+takes `hmmer-t1` as its first point. Each search is pinned to N cores.
+`/proc/loadavg` is read either side of every search into `outputs/load.tbl`,
+and it counts the search's own threads as well as anyone else's.
 
 `parse` writes `scaling.tbl`, one row per unit per arm per rung with median
-wall and core-seconds, peak RSS, speedup and efficiency against the arm's
-lowest rung, and the highest load seen; and `agree.tbl`, one row per run
-counting the pairs missing, extra or rescored against rep 1 of the arm's
-lowest rung. `plot` draws both of speedup and efficiency into
+wall and core-seconds, peak RSS, the time perfect scaling from the arm's
+lowest rung would take and the percentage of that speedup reached, and the
+highest load seen; and `agree.tbl`, one row per run counting the pairs
+missing, extra or rescored against rep 1 of the arm's lowest rung. `plot`
+draws wall clock and that percentage against threads into
 `thread-scaling.pdf`.
 
 The split arm moves onto michi's shared-pool batch mode when that lands; it

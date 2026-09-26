@@ -1,5 +1,5 @@
-//! Draws speedup and efficiency against threads, by handing scaling.tbl to
-//! matplotlib.
+//! Draws wall clock, and the percentage of perfect speedup reached, against
+//! threads, by handing scaling.tbl to matplotlib.
 //!
 //! It goes through a pipeline like the other benchmarks' plots, which is what
 //! gets it a --dry-run and its stderr kept on failure.
