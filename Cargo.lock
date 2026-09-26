@@ -88,9 +88,15 @@ dependencies = [
  "rand",
  "rayon",
  "serde",
- "toil 0.2.1",
+ "toil 0.3.0",
  "util",
 ]
+
+[[package]]
+name = "bytemuck"
+version = "1.25.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "95832e849adfb21180ccb6826a99da14e5d266ae5c2e668e1602cf234f153797"
 
 [[package]]
 name = "cfg-if"
@@ -161,7 +167,7 @@ dependencies = [
  "michi",
  "rayon",
  "serde",
- "toil 0.2.1",
+ "toil 0.3.0",
  "util",
 ]
 
@@ -234,7 +240,7 @@ dependencies = [
  "michi",
  "rayon",
  "serde",
- "toil 0.2.1",
+ "toil 0.3.0",
  "util",
 ]
 
@@ -350,7 +356,7 @@ dependencies = [
  "libsail",
  "michi",
  "serde",
- "toil 0.2.1",
+ "toil 0.3.0",
  "util",
 ]
 
@@ -366,7 +372,7 @@ dependencies = [
  "michi",
  "rayon",
  "serde",
- "toil 0.2.1",
+ "toil 0.3.0",
  "util",
 ]
 
@@ -405,7 +411,7 @@ dependencies = [
  "rand",
  "regex",
  "serde",
- "toil 0.2.1",
+ "toil 0.3.0",
  "util",
 ]
 
@@ -482,7 +488,7 @@ dependencies = [
  "michi",
  "rayon",
  "serde",
- "toil 0.2.1",
+ "toil 0.3.0",
  "util",
 ]
 
@@ -514,6 +520,15 @@ name = "regex-syntax"
 version = "0.8.11"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "d6f6ff9a378485b298a5286656da665ba74413d36db0979633275d2e708145d4"
+
+[[package]]
+name = "safe_arch"
+version = "1.2.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "42c6efa15875e6ecb39ca61fb0b0c1a40b84fac5a5ffe71eef7d1000c8eb3f5f"
+dependencies = [
+ "bytemuck",
+]
 
 [[package]]
 name = "serde"
@@ -591,7 +606,7 @@ dependencies = [
  "libsail",
  "michi",
  "serde",
- "toil 0.2.1",
+ "toil 0.3.0",
  "util",
 ]
 
@@ -603,9 +618,12 @@ checksum = "a0b23875e02fefb29784071229ed44c65d6c5b107cc8340bffd145787f3e4d94"
 
 [[package]]
 name = "toil"
-version = "0.2.1"
+version = "0.3.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "e4c09f7b21144ca84fbb7bd8f53323cb1dc8aa1ebb6f2ffa9e9cf059f6886c5e"
+checksum = "4ceaf4c7c44549d5fed7f68e7091f5e92b49f70c703c6c82fb3c6d241082c276"
+dependencies = [
+ "wide",
+]
 
 [[package]]
 name = "toml"
@@ -673,7 +691,7 @@ dependencies = [
  "michi",
  "serde",
  "sha2",
- "toil 0.2.1",
+ "toil 0.3.0",
  "toml",
 ]
 
@@ -682,6 +700,16 @@ name = "version_check"
 version = "0.9.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "0b928f33d975fc6ad9f86c8f283853ad26bdd5b10b7f1542aa2fa15e2289105a"
+
+[[package]]
+name = "wide"
+version = "1.7.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "d920ac99c3c8edce110cb8d07dbb324d6d026011dce85b1e9355b70f0adacc4f"
+dependencies = [
+ "bytemuck",
+ "safe_arch",
+]
 
 [[package]]
 name = "windows-link"
