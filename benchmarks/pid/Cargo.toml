@@ -10,7 +10,7 @@ path = "src/main.rs"
 [dependencies]
 libsail = { workspace = true }
 michi = { workspace = true }
-tabl = { workspace = true }
+toil = { workspace = true }
 util = { workspace = true }
 
 anyhow = { workspace = true }

@@ -186,6 +186,8 @@ fn is_metric(key: &str) -> bool {
             | "cpu(%)"
             | "max_rss"
             | "cpus"
+            | "node"
+            | "policy"
             | "exit"
             | "status"
             | "argv"
@@ -207,7 +209,7 @@ impl Manifest {
 
         // argv is the last column and full of spaces, and comes back whole.
         // nothing reads it
-        let table = tabl::Table::parse(&text)
+        let table = toil::Table::parse(&text)
             .with_context(|| format!("failed to read {}", path.display()))?;
         let labels = table.labels();
 

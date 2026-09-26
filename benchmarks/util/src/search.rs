@@ -99,7 +99,7 @@ impl Dirs {
     /// A stale table from an earlier run reads as a run that simply found
     /// less, and mmseqs refuses to overwrite an existing alignment db. Doing
     /// it as a step is what keeps `--dry-run` from touching the disk.
-    pub fn clean(&self) -> Step {
+    pub fn clean(&self) -> Step<'static> {
         Step::serial([
             Cmd::new("rm")
                 .name("clean")
@@ -163,7 +163,7 @@ pub fn nail(
     flags: &[&str],
     name: &str,
     fields: &[(&str, String)],
-) -> Step {
+) -> Step<'static> {
     let cmd = Cmd::new(bin)
         .sub("search")
         // nail looks for mmseqs at startup even where it will never call it,
@@ -233,7 +233,7 @@ impl Split {
     /// `name` is the step's, which is what a ledger row falls back to when a
     /// command carries no run name. `extra` is whatever tells one split from
     /// another, for a pipeline that cuts up more than one query set.
-    pub fn step(&self, name: &str, extra: &[(&str, String)]) -> Step {
+    pub fn step(&self, name: &str, extra: &[(&str, String)]) -> Step<'static> {
         let (query, kind, dir, jobs) = (
             self.query.clone(),
             self.kind,
@@ -241,7 +241,7 @@ impl Split {
             self.parts.len(),
         );
 
-        let closure = Closure::new("split", move || {
+        let split = move || -> anyhow::Result<()> {
             std::fs::remove_dir_all(&dir).ok();
             let written = split::write_splits(&query, kind, jobs, &dir)?;
 
@@ -256,8 +256,9 @@ impl Split {
             );
 
             Ok(())
-        })
-        .field(manifest::STAGE, SPLIT);
+        };
+        let closure = Closure::new("split", move || split().map_err(Into::into))
+            .field(manifest::STAGE, SPLIT);
 
         let closure = extra
             .iter()
@@ -290,8 +291,8 @@ pub fn createdb(mmseqs: &Path, target: &Path, db: &Path, shard: &str, threads: u
 /// Named rather than a pair, so a caller that relabels the steps can say which
 /// one it is relabelling.
 pub struct Hmmer {
-    pub search: Step,
-    pub cat: Step,
+    pub search: Step<'static>,
+    pub cat: Step<'static>,
 }
 
 /// One hmmer run over one shard, and the two tables it leaves behind.
@@ -348,10 +349,11 @@ pub fn hmmer(
             }),
         )
         .name(step_name(name, shard_name))
-        // per command, not per step, so this asks for HMMER_CPU x parts, which
-        // is --threads again. a machine with a smaller pool than that won't
-        // fail, it will just run fewer of the parts at once
-        .cores(HMMER_CPU),
+        // one pool of HMMER_CPU x parts cores, which is --threads again, that
+        // every part runs across. a --cpu 2 hmmsearch keeps about 2.7 cpus
+        // busy, and on a private 2-core lease each part ran 1.5-1.6x slower
+        // than the same batch sharing one pool
+        .pool(HMMER_CPU * parts.len()),
         cat: Step::serial(
             [fields(
                 cat(
@@ -438,7 +440,7 @@ pub fn seed(
     threads: usize,
     seeding: &Seeding,
     fields: &[(&str, String)],
-) -> Step {
+) -> Step<'static> {
     let mut cmd = Cmd::new(nail)
         .sub("search")
         .arg("--mmseqs-path", mmseqs)

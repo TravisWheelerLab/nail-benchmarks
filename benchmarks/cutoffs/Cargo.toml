@@ -14,5 +14,5 @@ libsail = { workspace = true }
 michi = { workspace = true }
 rayon = { workspace = true }
 serde = { workspace = true }
-tabl = { workspace = true }
+toil = { workspace = true }
 util = { workspace = true }

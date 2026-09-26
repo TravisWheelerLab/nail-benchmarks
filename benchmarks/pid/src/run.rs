@@ -57,8 +57,9 @@ pub struct Args {
     )]
     pub mmseqs_s: Vec<f32>,
 
-    #[arg(short, long, default_value_t = 24)]
-    pub threads: usize,
+    /// Threads per search
+    #[arg(short, long)]
+    pub threads: Option<usize>,
 
     #[arg(long)]
     pub tmp: Option<PathBuf>,
@@ -68,8 +69,10 @@ pub struct Args {
 }
 
 pub fn main(args: Args, paths: &crate::Paths) -> anyhow::Result<()> {
+    let threads = args.threads.context("--threads is required")?;
+
     ensure!(
-        args.threads.is_multiple_of(util::search::HMMER_CPU),
+        threads.is_multiple_of(util::search::HMMER_CPU),
         "--threads needs to be a multiple of {} (for hmmer)",
         util::search::HMMER_CPU
     );
@@ -191,7 +194,7 @@ pub fn main(args: Args, paths: &crate::Paths) -> anyhow::Result<()> {
                 &target_fa,
                 &dirs.table(&name, ""),
                 &dirs.tmp.join(&name),
-                args.threads,
+                threads,
                 EVALUE,
                 &[
                     ("--mmseqs-s", format!("{s:.1}")),
@@ -218,7 +221,7 @@ pub fn main(args: Args, paths: &crate::Paths) -> anyhow::Result<()> {
             query,
             kind,
             dirs.tmp.join(format!("{name}-parts")),
-            jobs(args.threads),
+            jobs(threads),
         );
 
         let hmmer = hmmer(
@@ -255,7 +258,7 @@ pub fn main(args: Args, paths: &crate::Paths) -> anyhow::Result<()> {
                 aln_db: scratch.join("alnDB"),
                 work: scratch.join("work"),
                 out: dirs.table(&name, ""),
-                threads: args.threads,
+                threads,
                 s: Some(format!("{s:.1}")),
                 max_seqs: Some(MAX_SEQS),
                 evalue: EVALUE,
@@ -284,7 +287,7 @@ pub fn main(args: Args, paths: &crate::Paths) -> anyhow::Result<()> {
         &query_fa,
         &blast_db,
         &dirs.table("blast.seq", ""),
-        args.threads,
+        threads,
         "blast.seq",
     ));
 
@@ -299,7 +302,7 @@ pub fn main(args: Args, paths: &crate::Paths) -> anyhow::Result<()> {
             // one family's search is a fraction of the run rather than a run
             // of its own, so every command carries blast.prf's name and their
             // wall times sum into it
-            let cmd = psiblast(&psiblast_bin, msa, &blast_db, args.threads, "blast.prf");
+            let cmd = psiblast(&psiblast_bin, msa, &blast_db, threads, "blast.prf");
 
             // the first invocation truncates whatever an earlier run left
             // behind; the rest append to it
@@ -319,7 +322,7 @@ pub fn main(args: Args, paths: &crate::Paths) -> anyhow::Result<()> {
         &last_db,
         &query_fa,
         &dirs.table("last.seq", ""),
-        args.threads,
+        threads,
         "last.seq",
     ));
 
@@ -332,7 +335,7 @@ pub fn main(args: Args, paths: &crate::Paths) -> anyhow::Result<()> {
             &query_fa,
             &diamond_db,
             &dirs.table(&name, ""),
-            args.threads,
+            threads,
             &name,
             preset,
         ));
@@ -372,7 +375,14 @@ fn alignments(dir: &Path) -> anyhow::Result<Vec<PathBuf>> {
 }
 
 /// blastp over sequences: one call, its own table.
-fn blastp(bin: &Path, query: &Path, db: &Path, out: &Path, threads: usize, name: &str) -> Step {
+fn blastp(
+    bin: &Path,
+    query: &Path,
+    db: &Path,
+    out: &Path,
+    threads: usize,
+    name: &str,
+) -> Step<'static> {
     // deliberately no -evalue: matching the other tools' 1e9 makes blast
     // dramatically slower for no extra recall
     let cmd = Cmd::new(bin)
@@ -408,7 +418,14 @@ fn psiblast(bin: &Path, msa: &Path, db: &Path, threads: usize, name: &str) -> Cm
 }
 
 /// lastal over sequences, writing blast's tabular format to stdout.
-fn lastal(bin: &Path, db: &Path, query: &Path, out: &Path, threads: usize, name: &str) -> Step {
+fn lastal(
+    bin: &Path,
+    db: &Path,
+    query: &Path,
+    out: &Path,
+    threads: usize,
+    name: &str,
+) -> Step<'static> {
     let cmd = Cmd::new(bin)
         .path(db)
         .path(query)
@@ -429,7 +446,7 @@ fn diamond(
     threads: usize,
     name: &str,
     preset: &str,
-) -> Step {
+) -> Step<'static> {
     let mut cmd = Cmd::new(bin)
         .sub("blastp")
         .arg("--query", query)

@@ -115,12 +115,6 @@ pub fn main(args: Args, paths: &crate::Paths) -> anyhow::Result<()> {
     Ok(())
 }
 
-fn style() -> tabl::Style {
-    tabl::Style::default()
-        .marker(tabl::Marker::Indent)
-        .trailing(tabl::Trailing::Keep)
-}
-
 fn median(mut xs: Vec<f64>) -> Option<f64> {
     xs.sort_by(f64::total_cmp);
     let n = xs.len();
@@ -141,7 +135,7 @@ fn load(path: &Path) -> anyhow::Result<HashMap<(String, String), f64>> {
     }
 
     let table =
-        tabl::Table::read(path).with_context(|| format!("failed to read {}", path.display()))?;
+        toil::Table::read(path).with_context(|| format!("failed to read {}", path.display()))?;
     let at = |label: &str| {
         table
             .index(label)
@@ -171,21 +165,18 @@ fn write_scaling(
     ladders: &Ladders,
     load: &HashMap<(String, String), f64>,
 ) -> anyhow::Result<()> {
-    let mut table = tabl::Table::new(
-        tabl::Schema::new([
-            "unit",
-            "arm",
-            "threads",
-            "reps",
-            "wall_s",
-            "cpu_s",
-            "max_rss",
-            "ideal_s",
-            "pct_ideal",
-            "load",
-        ])
-        .style(style()),
-    );
+    let mut table = toil::Table::new(toil::Schema::new([
+        "unit",
+        "arm",
+        "threads",
+        "reps",
+        "wall_s",
+        "cpu_s",
+        "max_rss",
+        "ideal_s",
+        "pct_ideal",
+        "load",
+    ]));
     table.meta("wall_s and cpu_s are medians over reps");
     table.meta(
         "ideal_s is the arm's lowest rung scaled perfectly: wall_s x lowest threads / threads",
@@ -259,20 +250,17 @@ fn hits(tool: &str, path: &Path) -> anyhow::Result<HashMap<(String, String), f32
 }
 
 fn write_agree(path: &Path, results: &Path, ladders: &Ladders) -> anyhow::Result<()> {
-    let mut table = tabl::Table::new(
-        tabl::Schema::new([
-            "unit",
-            "arm",
-            "threads",
-            "rep",
-            "hits",
-            "missing",
-            "extra",
-            "rescored",
-            "max_delta",
-        ])
-        .style(style()),
-    );
+    let mut table = toil::Table::new(toil::Schema::new([
+        "unit",
+        "arm",
+        "threads",
+        "rep",
+        "hits",
+        "missing",
+        "extra",
+        "rescored",
+        "max_delta",
+    ]));
     table.meta("against rep 1 of each arm's lowest rung, or its lowest rep there");
 
     for ((shard, arm), rungs) in ladders {

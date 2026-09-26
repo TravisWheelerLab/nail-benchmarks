@@ -54,8 +54,9 @@ pub struct Args {
     )]
     mmseqs_s: Vec<f32>,
 
-    #[arg(short, long, default_value_t = 8)]
-    threads: usize,
+    /// Threads per search, and the cores each search is pinned to
+    #[arg(short, long)]
+    threads: Option<usize>,
 
     #[arg(long)]
     tmp: Option<PathBuf>,
@@ -74,8 +75,10 @@ pub const MMSEQS_S: &str = "7.5,12.0";
 const MMSEQS_MAX_SEQS: usize = 2000;
 
 pub fn main(args: Args, paths: &crate::Paths) -> anyhow::Result<()> {
+    let threads = args.threads.context("--threads is required")?;
+
     ensure!(
-        args.threads.is_multiple_of(util::search::HMMER_CPU),
+        threads.is_multiple_of(util::search::HMMER_CPU),
         "--threads needs to be a multiple of {} (for hmmer)",
         util::search::HMMER_CPU
     );
@@ -128,7 +131,7 @@ pub fn main(args: Args, paths: &crate::Paths) -> anyhow::Result<()> {
         &query_hmm,
         Kind::Hmm,
         dirs.tmp.join("hmmer-query"),
-        util::search::jobs(args.threads),
+        util::search::jobs(threads),
     );
 
     let mut pl = PipelineBuilder::new()
@@ -150,7 +153,7 @@ pub fn main(args: Args, paths: &crate::Paths) -> anyhow::Result<()> {
                         .path(scratch.join("targetDB")),
                     |cmd, s| cmd.path(scratch.join(format!("alnDB-s{s:.1}"))),
                 ),
-                util::search::createdb(&bins.mmseqs, target, &target_db, &shard, args.threads),
+                util::search::createdb(&bins.mmseqs, target, &target_db, &shard, threads),
             ])
             .name(format!("prep.{shard}")),
         );
@@ -164,7 +167,7 @@ pub fn main(args: Args, paths: &crate::Paths) -> anyhow::Result<()> {
                 Cmd::new(&bins.nail)
                     .sub("search")
                     .arg("--mmseqs-path", &bins.mmseqs)
-                    .arg("-t", args.threads)
+                    .arg("-t", threads)
                     .arg("--tmp-dir", scratch.join(&name))
                     .arg("--mmseqs-s", format!("{s:.1}"))
                     .arg("--seed-mode", SEED_MODE)
@@ -179,7 +182,7 @@ pub fn main(args: Args, paths: &crate::Paths) -> anyhow::Result<()> {
                     .field("s", format!("{s:.1}"))
             }))
             .name(format!("nail.{shard}"))
-            .cores(args.threads),
+            .cores(threads),
         );
 
         // ---- mmseqs
@@ -198,7 +201,7 @@ pub fn main(args: Args, paths: &crate::Paths) -> anyhow::Result<()> {
                             aln_db: scratch.join(format!("alnDB-s{s:.1}/alnDB")),
                             work: scratch.join(format!("work-s{s:.1}")),
                             out: dirs.table(&name, &shard),
-                            threads: args.threads,
+                            threads,
                             s: Some(format!("{s:.1}")),
                             max_seqs: Some(MMSEQS_MAX_SEQS),
                             evalue: util::search::EVALUE,
@@ -219,7 +222,7 @@ pub fn main(args: Args, paths: &crate::Paths) -> anyhow::Result<()> {
                     .collect::<Vec<_>>(),
             )
             .name(format!("mmseqs.{shard}"))
-            .cores(args.threads),
+            .cores(threads),
         );
 
         // ---- hmmer

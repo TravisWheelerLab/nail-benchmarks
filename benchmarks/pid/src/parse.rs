@@ -395,7 +395,7 @@ pub fn runs(dir: &Path) -> anyhow::Result<Vec<Run>> {
 /// sequence query is judged by its family's profile. Nothing here pools a
 /// decoy across families.
 pub fn rejections(dir: &Path) -> anyhow::Result<Rejections> {
-    let tested = tabl::Table::read(dir.join(TESTED))
+    let tested = toil::Table::read(dir.join(TESTED))
         .with_context(|| format!("failed to read {}", dir.join(TESTED).display()))
         .with_context(|| format!("no rejections in {}; run `pid reject` first", dir.display()))?;
     let column = |label: &str| {
@@ -658,11 +658,7 @@ impl RecallData {
             }
         }
 
-        let style = tabl::Style::default()
-            .marker(tabl::Marker::Indent)
-            .trailing(tabl::Trailing::Keep);
-        let mut table =
-            tabl::Table::new(tabl::Schema::new(["run", "pid", "n", "recall"]).style(style));
+        let mut table = toil::Table::new(toil::Schema::new(["run", "pid", "n", "recall"]));
         table.meta(format!("fpr {FIXED_FPR}"));
         for row in rows {
             table.row(row);
@@ -725,10 +721,7 @@ impl RecallData {
             }
         }
 
-        let style = tabl::Style::default()
-            .marker(tabl::Marker::Indent)
-            .trailing(tabl::Trailing::Keep);
-        let mut table = tabl::Table::new(tabl::Schema::new(["run", "fpr", "recall"]).style(style));
+        let mut table = toil::Table::new(toil::Schema::new(["run", "fpr", "recall"]));
         for row in rows {
             table.row(row);
         }
@@ -761,11 +754,7 @@ impl RecallData {
             })
             .collect();
 
-        let style = tabl::Style::default()
-            .marker(tabl::Marker::Indent)
-            .trailing(tabl::Trailing::Keep);
-        let mut table =
-            tabl::Table::new(tabl::Schema::new(["run", "wall_s", "recall"]).style(style));
+        let mut table = toil::Table::new(toil::Schema::new(["run", "wall_s", "recall"]));
         table.meta(format!("fpr {FIXED_FPR}"));
         for row in rows {
             table.row(row);

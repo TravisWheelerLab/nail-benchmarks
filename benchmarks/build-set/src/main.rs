@@ -479,7 +479,7 @@ fn fixed(
             Step::from_closures([
                 Closure::new("query", {
                     let src = src.clone();
-                    move || subset_query(&src, n_fams, &query_hmm, &query_sto)
+                    move || Ok(subset_query(&src, n_fams, &query_hmm, &query_sto)?)
                 }),
                 Closure::new("target", {
                     let src = src.clone();
@@ -735,7 +735,7 @@ fn cross(
             )
             .step(
                 Step::from_closures([Closure::new("query", move || {
-                    subset_query(&src, fams, &hmm, &sto)
+                    Ok(subset_query(&src, fams, &hmm, &sto)?)
                 })])
                 .name(format!("query.{}", q.name)),
             )
@@ -1404,7 +1404,7 @@ fn subset_query(
 ///
 /// msaDB is an intermediate on the way to the profiles and is thrown away, so
 /// it lands in the same directory rather than anywhere a pipeline would look.
-fn profile_db(mmseqs: &Path, dir: &Path) -> Step {
+fn profile_db(mmseqs: &Path, dir: &Path) -> Step<'static> {
     let msa_db = dir.join("msaDB");
     let query_db = dir.join("queryDB");
 

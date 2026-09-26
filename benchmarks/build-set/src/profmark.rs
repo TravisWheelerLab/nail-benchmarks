@@ -183,7 +183,7 @@ pub fn build(
             Step::from_closures([Closure::new("assemble", {
                 let at = at.clone();
 
-                move || assemble(&at, &src_sto, &src_fa, pairs, seed)
+                move || Ok(assemble(&at, &src_sto, &src_fa, pairs, seed)?)
             })])
             .name("assemble"),
         )

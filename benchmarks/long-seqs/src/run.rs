@@ -47,8 +47,9 @@ impl Dirs {
 
 #[derive(Parser, Debug)]
 pub struct Args {
-    #[arg(short, long, default_value_t = 24)]
-    pub threads: usize,
+    /// Threads per search
+    #[arg(short, long)]
+    pub threads: Option<usize>,
 
     /// Which label of paths.toml to run under. Omit to list them
     #[arg(long = "in", value_name = "label")]
@@ -62,6 +63,8 @@ pub struct Args {
 }
 
 pub fn main(args: Args, paths: &crate::Paths) -> anyhow::Result<()> {
+    let threads = args.threads.context("--threads is required")?;
+
     let mut dirs = Dirs::new(&paths.run, &paths.tmp);
     if let Some(tmp) = args.tmp {
         dirs.tmp = tmp;
@@ -84,7 +87,7 @@ pub fn main(args: Args, paths: &crate::Paths) -> anyhow::Result<()> {
         pl = pl.step(
             Step::serial([Cmd::new(&nail_bin)
                 .sub("search")
-                .arg("-t", args.threads)
+                .arg("-t", threads)
                 .arg("--tmp-dir", dirs.tmp.join(&pair))
                 .flag("--allow-overwrite")
                 // widens the sparse band enough that these pairs align at all

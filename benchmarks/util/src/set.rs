@@ -365,24 +365,17 @@ impl Set {
 
     pub fn read(root: impl Into<PathBuf>, path: &Path) -> anyhow::Result<Set> {
         let root = root.into();
-        let table = tabl::Table::read(path)
+        let table = toil::Table::read(path)
             .with_context(|| format!("failed to read {}", path.display()))?;
-        let labels = table.labels();
-
-        let attrs: Vec<&String> = labels
+        let attrs: Vec<&String> = table
+            .labels()
             .iter()
             .filter(|h| !SPINE.contains(&h.as_str()))
             .collect();
 
         let mut rows = Vec::new();
-        for cells in table.rows() {
-            let cell = |key: &str| {
-                labels
-                    .iter()
-                    .position(|label| label == key)
-                    .and_then(|i| cells.get(i))
-                    .unwrap_or_default()
-            };
+        for i in 0..table.rows().len() {
+            let cell = |key: &str| table.get(i, key).unwrap_or_default();
 
             let target = cell(TARGET);
             ensure!(
@@ -411,7 +404,7 @@ impl Set {
         Ok(Set {
             root,
             rows,
-            meta: read_meta(table.preamble()),
+            meta: read_meta(table.meta_lines()),
         })
     }
 
@@ -437,30 +430,28 @@ impl Set {
             .iter()
             .map(|h| h.to_string())
             .chain(keys.iter().cloned())
-            .map(tabl::Column::new);
-        let style = tabl::Style::default()
-            .marker(tabl::Marker::Indent)
-            .trailing(tabl::Trailing::Keep);
-        let mut table = tabl::Table::new(tabl::Schema::new(columns).style(style));
+            .map(toil::Column::new);
+        let mut table = toil::Table::new(toil::Schema::new(columns));
 
         for (key, value) in &self.meta {
             table.meta(format!("{key} {value}"));
         }
 
         for row in &self.rows {
-            let mut cells = vec![
-                dash(&row.unit),
-                dash(&row.query_hmm),
-                dash(&row.query_sto),
-                dash(&row.query_fa),
-                dash(&row.query_db),
-                dash(&row.target),
+            let spine = [
+                &row.unit,
+                &row.query_hmm,
+                &row.query_sto,
+                &row.query_fa,
+                &row.query_db,
+                &row.target,
             ];
-            cells.extend(keys.iter().map(|key| match row.attrs.get(key) {
-                Some(value) => value.clone(),
-                None => "-".to_string(),
-            }));
-            table.row(cells);
+            table.row(
+                spine
+                    .into_iter()
+                    .map(|cell| (!cell.is_empty()).then_some(cell))
+                    .chain(keys.iter().map(|key| row.attrs.get(key))),
+            );
         }
 
         table
@@ -588,24 +579,12 @@ impl<'a> Unit<'a> {
 
 // ---
 
-fn dash(cell: &str) -> String {
-    match cell.is_empty() {
-        true => "-".to_string(),
-        false => cell.to_string(),
-    }
-}
-
-fn read_meta(lines: &[String]) -> BTreeMap<String, String> {
+fn read_meta<'a>(lines: impl Iterator<Item = &'a str>) -> BTreeMap<String, String> {
     lines
-        .iter()
-        .filter_map(|line| line.strip_prefix("#="))
-        .filter_map(|rest| {
-            let mut parts = rest.trim().splitn(2, char::is_whitespace);
-            let key = parts.next()?;
-            Some((
-                key.to_string(),
-                parts.next().unwrap_or("").trim().to_string(),
-            ))
+        .map(|line| {
+            let line = line.trim();
+            let (key, value) = line.split_once(char::is_whitespace).unwrap_or((line, ""));
+            (key.to_string(), value.trim().to_string())
         })
         .collect()
 }

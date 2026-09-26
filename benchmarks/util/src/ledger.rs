@@ -122,20 +122,13 @@ impl Ledger {
     }
 
     pub fn read(path: &Path) -> anyhow::Result<Ledger> {
-        let table = tabl::Table::read(path)
+        let table = toil::Table::read(path)
             .with_context(|| format!("failed to read {}", path.display()))?;
-        let labels = table.labels();
-        let params: Vec<&String> = labels.iter().filter(|h| !is_column(h)).collect::<Vec<_>>();
+        let params: Vec<&String> = table.labels().iter().filter(|h| !is_column(h)).collect();
 
         let mut rows = Vec::new();
-        for cells in table.rows() {
-            let cell = |key: &str| {
-                labels
-                    .iter()
-                    .position(|label| label == key)
-                    .and_then(|i| cells.get(i))
-                    .unwrap_or_default()
-            };
+        for i in 0..table.rows().len() {
+            let cell = |key: &str| table.get(i, key).unwrap_or_default();
 
             let number = |key: &str, what: &str| -> anyhow::Result<Option<f64>> {
                 let text = cell(key);
@@ -166,8 +159,8 @@ impl Ledger {
 
         Ok(Ledger {
             rows,
-            failed: failed_meta(table.preamble()),
-            tools: tool_meta(table.preamble()),
+            failed: failed_meta(table.meta_lines()),
+            tools: tool_meta(table.meta_lines()),
         })
     }
 
@@ -192,12 +185,13 @@ impl Ledger {
         .into_iter()
         .map(str::to_string)
         .chain(keys.iter().cloned())
-        .chain([WALL, CPU, RSS].map(str::to_string))
-        .map(tabl::Column::new);
-        let style = tabl::Style::default()
-            .marker(tabl::Marker::Indent)
-            .trailing(tabl::Trailing::Keep);
-        let mut table = tabl::Table::new(tabl::Schema::new(columns).style(style));
+        .map(toil::Column::new)
+        .chain([
+            toil::Column::new(WALL).fixed(2),
+            toil::Column::new(CPU).fixed(2),
+            toil::Column::new(RSS),
+        ]);
+        let mut table = toil::Table::new(toil::Schema::new(columns));
 
         for id in &self.tools {
             table.meta(format!("tool {} {} {}", id.name, id.version, id.hash));
@@ -207,28 +201,13 @@ impl Ledger {
         }
 
         for row in &self.rows {
-            let mut cells = vec![
-                dash(&row.name),
-                dash(&row.tool),
-                dash(&row.shard),
-                dash(&row.stage),
-            ];
-            cells.extend(keys.iter().map(|key| match row.params.get(key) {
-                Some(value) => value.clone(),
-                None => "-".to_string(),
-            }));
-            cells.push(match row.wall_s {
-                Some(wall) => format!("{wall:.2}"),
-                None => "-".to_string(),
-            });
-            cells.push(match row.cpu_s {
-                Some(cpu) => format!("{cpu:.2}"),
-                None => "-".to_string(),
-            });
-            cells.push(match row.max_rss_kb {
-                Some(rss) => rss.to_string(),
-                None => "-".to_string(),
-            });
+            let spine = [&row.name, &row.tool, &row.shard, &row.stage];
+            let cells: Vec<toil::Cell> = spine
+                .into_iter()
+                .map(|cell| (!cell.is_empty()).then_some(cell).into())
+                .chain(keys.iter().map(|key| row.params.get(key).into()))
+                .chain([row.wall_s.into(), row.cpu_s.into(), row.max_rss_kb.into()])
+                .collect();
             table.row(cells);
         }
 
@@ -380,45 +359,34 @@ fn dash(cell: &str) -> String {
     }
 }
 
-fn tool_meta(meta: &[String]) -> Vec<tools::Identity> {
-    let mut out = Vec::new();
-
-    for line in meta {
+fn tool_meta<'a>(meta: impl Iterator<Item = &'a str>) -> Vec<tools::Identity> {
+    meta.filter_map(|line| {
         let mut fields = line.split_whitespace();
-        if fields.next() != Some("#=") || fields.next() != Some("tool") {
-            continue;
+        if fields.next() != Some("tool") {
+            return None;
         }
 
-        let (Some(name), Some(version), Some(hash)) = (fields.next(), fields.next(), fields.next())
-        else {
-            continue;
-        };
-
-        out.push(tools::Identity {
-            name: name.to_string(),
-            version: version.to_string(),
-            hash: hash.to_string(),
-        });
-    }
-
-    out
+        Some(tools::Identity {
+            name: fields.next()?.to_string(),
+            version: fields.next()?.to_string(),
+            hash: fields.next()?.to_string(),
+        })
+    })
+    .collect()
 }
 
-fn failed_meta(meta: &[String]) -> Vec<(String, String)> {
-    let mut out = Vec::new();
-
-    for line in meta {
+fn failed_meta<'a>(meta: impl Iterator<Item = &'a str>) -> Vec<(String, String)> {
+    meta.filter_map(|line| {
         let mut fields = line.split_whitespace();
-        if fields.next() != Some("#=") || fields.next() != Some("failed") {
-            continue;
+        if fields.next() != Some("failed") {
+            return None;
         }
 
         let what = fields.next().unwrap_or("-");
         let shard = fields.next().unwrap_or("-");
-        out.push((undash(what), undash(shard)));
-    }
-
-    out
+        Some((undash(what), undash(shard)))
+    })
+    .collect()
 }
 
 fn undash(cell: &str) -> String {

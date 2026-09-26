@@ -11,7 +11,7 @@ path = "src/main.rs"
 libsail = { workspace = true }
 michi = { workspace = true }
 serde = { workspace = true }
-tabl = { workspace = true }
+toil = { workspace = true }
 util = { workspace = true }
 
 anyhow = { workspace = true }

@@ -7,7 +7,7 @@
 //! A build describes what it produced in [`set`], one row per search unit. A
 //! run is recorded by a `michi::Table` sink as `manifest.tbl`, which [`ledger`]
 //! distills into the part an analysis needs. What the analysis works out gets
-//! written through `tabl`, which is the format all three ride on.
+//! written through `toil`, which is the format all three ride on.
 //!
 //! Nothing here decides where any of that goes. [`paths`] reads the file each
 //! tool keeps beside its own source, naming what it reads and what it writes,

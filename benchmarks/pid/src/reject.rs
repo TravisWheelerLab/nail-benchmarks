@@ -37,8 +37,9 @@ pub struct Args {
     #[arg(long = "in", value_name = "label")]
     pub label: Option<String>,
 
-    #[arg(short, long, default_value_t = 24)]
-    pub threads: usize,
+    /// Threads per search, and the cores each search is pinned to
+    #[arg(short, long)]
+    pub threads: Option<usize>,
 
     #[arg(long)]
     pub tmp: Option<PathBuf>,
@@ -48,8 +49,10 @@ pub struct Args {
 }
 
 pub fn main(args: Args, paths: &crate::Paths) -> anyhow::Result<()> {
+    let threads = args.threads.context("--threads is required")?;
+
     ensure!(
-        args.threads.is_multiple_of(HMMER_CPU),
+        threads.is_multiple_of(HMMER_CPU),
         "--threads needs to be a multiple of {HMMER_CPU} (for hmmer)"
     );
 
@@ -120,11 +123,7 @@ pub fn main(args: Args, paths: &crate::Paths) -> anyhow::Result<()> {
 
         move || -> anyhow::Result<()> {
             write_originals(&originals, &decoys, &target)?;
-            let style = tabl::Style::default()
-                .marker(tabl::Marker::Indent)
-                .trailing(tabl::Trailing::Keep);
-            let mut table =
-                tabl::Table::new(tabl::Schema::new(["tool", "mode", "decoys"]).style(style));
+            let mut table = toil::Table::new(toil::Schema::new(["tool", "mode", "decoys"]));
             for row in rows {
                 table.row(row);
             }
@@ -137,10 +136,10 @@ pub fn main(args: Args, paths: &crate::Paths) -> anyhow::Result<()> {
     let mut pl = PipelineBuilder::new()
         .step(dirs.clean())
         .step(Cmd::new("mkdir").name("dirs").flag("-p").path(&dirs.tmp))
-        .step(Step::from_closures([Closure::new("subset", subset)]).name("subset"));
+        .step(Step::from_closures([Closure::new("subset", move || Ok(subset()?))]).name("subset"));
 
     if !decoys.is_empty() {
-        let split = Split::new(&inp.query_hmm, Kind::Hmm, &parts, jobs(args.threads));
+        let split = Split::new(&inp.query_hmm, Kind::Hmm, &parts, jobs(threads));
         let fields = [(MODE, PRF.to_string())];
 
         let search = split.parts().iter().enumerate().map(|(i, part)| {
@@ -167,7 +166,9 @@ pub fn main(args: Args, paths: &crate::Paths) -> anyhow::Result<()> {
             .step(
                 Step::batched(split.parts().len(), search)
                     .name(JUDGE)
-                    .cores(HMMER_CPU),
+                    // one pool the parts share, as util::search::hmmer runs
+                    // them, rather than a private HMMER_CPU lease each
+                    .pool(HMMER_CPU * split.parts().len()),
             )
             .step(
                 Step::serial([tag(cat, JUDGE, JUDGE_TOOL, &fields)]).name(format!("cat.{JUDGE}")),

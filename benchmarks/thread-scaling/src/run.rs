@@ -86,13 +86,8 @@ pub struct Args {
     #[arg(long = "in", value_name = "label")]
     pub label: Option<String>,
 
-    /// Thread counts to run each arm at
-    #[arg(
-        long,
-        value_delimiter = ',',
-        default_value = "1,2,4,8,16,32,48",
-        value_name = "N,N,..."
-    )]
+    /// Thread counts to run each arm at, and the cores each search is pinned to
+    #[arg(long, value_delimiter = ',', value_name = "N,N,...")]
     rungs: Vec<usize>,
 
     /// Times each point is run
@@ -347,7 +342,7 @@ impl Load {
     /// A step that reads the load and records it against one run.
     ///
     /// It carries no `name` and no `stage`, so the ledger has no row for it.
-    fn step(&self, name: &str, shard: &str, when: &str) -> Step {
+    fn step(&self, name: &str, shard: &str, when: &str) -> Step<'static> {
         let load = self.clone();
         let (name, shard, when) = (name.to_string(), shard.to_string(), when.to_string());
 
@@ -359,19 +354,16 @@ impl Load {
 
             let mut rows = load.rows.lock().expect("no reading panics holding it");
             rows.push([name, shard, when, next(), next(), next()]);
-            write_load(&load.path, &rows)
+            Ok(write_load(&load.path, &rows)?)
         })])
         .name("load")
     }
 }
 
 fn write_load(path: &Path, rows: &[[String; 6]]) -> anyhow::Result<()> {
-    let style = tabl::Style::default()
-        .marker(tabl::Marker::Indent)
-        .trailing(tabl::Trailing::Keep);
-    let mut table = tabl::Table::new(
-        tabl::Schema::new(["name", "shard", "when", "load1", "load5", "load15"]).style(style),
-    );
+    let mut table = toil::Table::new(toil::Schema::new([
+        "name", "shard", "when", "load1", "load5", "load15",
+    ]));
     for row in rows {
         table.row(row.clone());
     }

@@ -328,8 +328,9 @@ pub struct RecruitArgs {
     #[command(flatten)]
     pub place: Where,
 
-    #[arg(short, long, default_value_t = 8)]
-    pub threads: usize,
+    /// Threads per search
+    #[arg(short, long)]
+    pub threads: Option<usize>,
 
     /// List the commands and exit without executing anything
     #[arg(long)]
@@ -362,15 +363,16 @@ pub struct RejectArgs {
     #[arg(long)]
     pub dry_run: bool,
 
-    /// How many families to search at once. Each search is single-threaded,
-    /// so this is the whole of the parallelism. `fanout` only
+    /// How many families to search at once, and the cores they share. Each
+    /// search is single-threaded, so this is the whole of the parallelism.
+    /// `fanout` only
     #[arg(short = 'j', long)]
     pub jobs: Option<usize>,
 
-    /// Threads per search. `union` only, where there are two searches per tool
-    /// rather than two per family
-    #[arg(short, long, default_value_t = 8)]
-    pub threads: usize,
+    /// Threads per search, and the cores each search is pinned to. `union`
+    /// only, where there are two searches per tool rather than two per family
+    #[arg(short, long)]
+    pub threads: Option<usize>,
 }
 
 #[derive(Parser, Debug)]
@@ -400,9 +402,11 @@ pub struct AllArgs {
     #[arg(long, value_enum, default_value_t = Strategy::Fanout)]
     pub strategy: Strategy,
 
-    #[arg(short, long, default_value_t = 4)]
-    pub threads: usize,
+    /// Threads per search, and for gather and learn the threads they read with
+    #[arg(short, long)]
+    pub threads: Option<usize>,
 
+    /// How many families `reject` searches at once, and the cores they share
     #[arg(short = 'j', long)]
     pub jobs: Option<usize>,
 }
@@ -498,6 +502,7 @@ fn run_cmd(cmd: Cmd, paths: &Paths) -> anyhow::Result<()> {
 // ----------------------------------------------------------------- recruit
 
 fn recruit(args: RecruitArgs, paths: &Paths) -> anyhow::Result<()> {
+    let threads = args.threads.context("--threads is required")?;
     let layout = Layout::new(paths)?;
 
     let nail_bin = nail()?;
@@ -529,7 +534,7 @@ fn recruit(args: RecruitArgs, paths: &Paths) -> anyhow::Result<()> {
                         shard,
                         &target_db,
                         &idx.to_string(),
-                        args.threads,
+                        threads,
                     ),
                 ])
                 .name(format!("prep.{idx}")),
@@ -541,7 +546,7 @@ fn recruit(args: RecruitArgs, paths: &Paths) -> anyhow::Result<()> {
                     .field(manifest::TOOL, NAIL)
                     .field(manifest::SHARD, idx.to_string())
                     .arg("--mmseqs-path", &mmseqs_bin)
-                    .arg("-t", args.threads)
+                    .arg("-t", threads)
                     .arg("--tmp-dir", scratch.join("nail"))
                     .arg("--mmseqs-s", RECRUIT_S)
                     .arg("--seed-mode", util::search::SEED_MODE)
@@ -565,7 +570,7 @@ fn recruit(args: RecruitArgs, paths: &Paths) -> anyhow::Result<()> {
                         aln_db: aln_db.clone(),
                         work: scratch.join("work"),
                         out: manifest::table_path(&results, MMSEQS, &idx.to_string()),
-                        threads: args.threads,
+                        threads,
                         s: Some(RECRUIT_S.to_string()),
                         max_seqs: Some(RECRUIT_MAX_SEQS),
                         evalue: util::search::EVALUE,
@@ -596,7 +601,7 @@ fn recruit(args: RecruitArgs, paths: &Paths) -> anyhow::Result<()> {
         return Ok(());
     }
 
-    pipeline.run()
+    Ok(pipeline.run()?)
 }
 
 // ------------------------------------------------------------------ decoys
@@ -1052,7 +1057,9 @@ fn reject(args: RejectArgs, paths: &Paths) -> anyhow::Result<()> {
 
     if args.strategy == Strategy::Union {
         let stage = layout.reject()?;
-        let threads = args.threads;
+        let threads = args
+            .threads
+            .context("--threads is required with --strategy union")?;
 
         let results = stage.results();
         if results.exists() {
@@ -1098,9 +1105,9 @@ fn reject(args: RejectArgs, paths: &Paths) -> anyhow::Result<()> {
     let mmseqs_bin = mmseqs()?;
     let hmmsearch_bin = hmmsearch()?;
 
-    let jobs = args
-        .jobs
-        .unwrap_or_else(|| std::thread::available_parallelism().map_or(4, |n| n.get()));
+    let jobs = args.jobs.context(
+        "--jobs is required: it is how many families run at once, and the cores they share",
+    )?;
 
     println!("searching {} families, {jobs} at once...", families.len());
 
@@ -1126,7 +1133,9 @@ fn reject(args: RejectArgs, paths: &Paths) -> anyhow::Result<()> {
     let dir_scratch = |family: &str, direction: &str| scratch(family).join(direction);
     let query_db = |family: &str| scratch(family).join("queryDB");
 
-    let mut pl = PipelineBuilder::new().step(
+    // every batch below runs in one pool of `jobs` cores, which its commands
+    // share rather than each leasing one
+    let mut pl = PipelineBuilder::new().pool(jobs).step(
         Step::batched(
             jobs,
             per_family(&|family| {
@@ -1538,10 +1547,7 @@ fn learn(args: LearnArgs, paths: &Paths) -> anyhow::Result<()> {
         headers.push(format!("{tool}_n"));
     }
 
-    let style = tabl::Style::default()
-        .marker(tabl::Marker::Indent)
-        .trailing(tabl::Trailing::Keep);
-    let mut table = tabl::Table::new(tabl::Schema::new(headers).style(style));
+    let mut table = toil::Table::new(toil::Schema::new(headers));
     for row in rows {
         table.row(row);
     }
@@ -1642,10 +1648,12 @@ where
 // --------------------------------------------------------------------- all
 
 fn all(args: AllArgs, paths: &Paths) -> anyhow::Result<()> {
+    let threads = args.threads.context("--threads is required")?;
+
     recruit(
         RecruitArgs {
             place: args.place.clone(),
-            threads: args.threads,
+            threads: Some(threads),
             dry_run: false,
         },
         paths,
@@ -1655,7 +1663,7 @@ fn all(args: AllArgs, paths: &Paths) -> anyhow::Result<()> {
         GatherArgs {
             place: args.place.clone(),
             strategy: args.strategy,
-            threads: args.threads,
+            threads,
         },
         paths,
     )?;
@@ -1664,7 +1672,7 @@ fn all(args: AllArgs, paths: &Paths) -> anyhow::Result<()> {
         RejectArgs {
             place: args.place.clone(),
             strategy: args.strategy,
-            threads: args.threads,
+            threads: Some(threads),
             dry_run: false,
             jobs: args.jobs,
         },
@@ -1676,7 +1684,7 @@ fn all(args: AllArgs, paths: &Paths) -> anyhow::Result<()> {
             place: args.place.clone(),
             strategy: args.strategy,
             reverse_e_cutoff: 1e-3,
-            threads: args.threads,
+            threads,
         },
         paths,
     )

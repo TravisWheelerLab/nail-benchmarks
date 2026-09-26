@@ -130,10 +130,7 @@ pub fn summary(path: &Path, out: &Path) -> anyhow::Result<()> {
         })
         .collect();
 
-    let style = tabl::Style::default()
-        .marker(tabl::Marker::Indent)
-        .trailing(tabl::Trailing::Keep);
-    let mut table = tabl::Table::new(tabl::Schema::new(headers).style(style));
+    let mut table = toil::Table::new(toil::Schema::new(headers));
     preamble(&mut table, &scores.meta, truth, rows);
     for row in cells {
         table.row(row);
@@ -146,7 +143,7 @@ pub fn summary(path: &Path, out: &Path) -> anyhow::Result<()> {
 
 /// What was searched, what the fractions are fractions of, and the two times
 /// the figures use as reference lines.
-fn preamble(table: &mut tabl::Table, meta: &crate::scores::Meta, truth: usize, rows: u64) {
+fn preamble(table: &mut toil::Table, meta: &crate::scores::Meta, truth: usize, rows: u64) {
     let (mut count, mut residues, mut bytes) = (0usize, 0u64, 0u64);
     for (_, size) in &meta.targets {
         count += size.count;
@@ -309,10 +306,7 @@ pub fn stages(path: &Path, out: &Path) -> anyhow::Result<()> {
 
     let truth: usize = at.values().map(|tally| tally.truth).sum();
 
-    let style = tabl::Style::default()
-        .marker(tabl::Marker::Indent)
-        .trailing(tabl::Trailing::Keep);
-    let mut table = tabl::Table::new(tabl::Schema::new(headers).style(style));
+    let mut table = toil::Table::new(toil::Schema::new(headers));
     preamble(&mut table, scores.meta(), truth, rows);
     for row in cells {
         table.row(row);

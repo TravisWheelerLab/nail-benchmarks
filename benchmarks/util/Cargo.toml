@@ -9,5 +9,5 @@ libsail = { workspace = true }
 michi = { workspace = true }
 serde = { workspace = true }
 sha2 = { workspace = true }
-tabl = { workspace = true }
+toil = { workspace = true }
 toml = { workspace = true }

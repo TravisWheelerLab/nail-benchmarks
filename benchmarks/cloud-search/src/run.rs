@@ -70,8 +70,8 @@ pub struct Args {
     beta: Vec<f32>,
 
     /// Threads per search, and the cores each search is pinned to
-    #[arg(short, long, default_value_t = 8)]
-    threads: usize,
+    #[arg(short, long)]
+    threads: Option<usize>,
 
     #[arg(long)]
     tmp: Option<PathBuf>,
@@ -134,8 +134,10 @@ fn cells(alphas: &[f32], betas: &[f32]) -> Vec<Cell> {
 }
 
 pub fn main(args: Args, paths: &crate::Paths) -> anyhow::Result<()> {
+    let threads = args.threads.context("--threads is required")?;
+
     ensure!(
-        args.threads.is_multiple_of(util::search::HMMER_CPU),
+        threads.is_multiple_of(util::search::HMMER_CPU),
         "--threads needs to be a multiple of {} (for hmmer)",
         util::search::HMMER_CPU
     );
@@ -170,7 +172,7 @@ pub fn main(args: Args, paths: &crate::Paths) -> anyhow::Result<()> {
             &query_hmm,
             Kind::Hmm,
             dirs.tmp.join("hmmer-query").join(&shard),
-            util::search::jobs(args.threads),
+            util::search::jobs(threads),
         );
 
         pl = pl
@@ -183,7 +185,7 @@ pub fn main(args: Args, paths: &crate::Paths) -> anyhow::Result<()> {
                 &shard,
                 &dirs.seeds(SEEDING, &shard),
                 &dirs,
-                args.threads,
+                threads,
                 &util::search::Seeding::new(SEED_S, SEED_MODE),
                 &[
                     (manifest::STAGE, util::search::SEED.to_string()),
@@ -216,7 +218,7 @@ pub fn main(args: Args, paths: &crate::Paths) -> anyhow::Result<()> {
                 // nail looks for mmseqs at startup even when it is replaying seeds
                 // and will never call it, and nothing here is on PATH
                 .arg("--mmseqs-path", &bins.mmseqs)
-                .arg("-t", args.threads)
+                .arg("-t", threads)
                 .arg("--seeds", dirs.seeds(SEEDING, &shard))
                 .arg("-E", util::search::EVALUE)
                 .arg("--tmp-dir", dirs.tmp.join("cell"))
@@ -251,7 +253,7 @@ pub fn main(args: Args, paths: &crate::Paths) -> anyhow::Result<()> {
                     // between them is -A and -B. without this a cell is timed
                     // against whatever else the scheduler ran that second, and
                     // the differences here are small enough for that to show
-                    .cores(args.threads),
+                    .cores(threads),
             );
         }
     }

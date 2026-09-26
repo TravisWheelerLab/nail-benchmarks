@@ -109,8 +109,8 @@ pub struct Args {
     prog_f: Vec<f64>,
 
     /// Threads per search, and the cores each search is pinned to
-    #[arg(short, long, default_value_t = 8)]
-    threads: usize,
+    #[arg(short, long)]
+    threads: Option<usize>,
 
     #[arg(long)]
     tmp: Option<PathBuf>,
@@ -120,8 +120,10 @@ pub struct Args {
 }
 
 pub fn main(args: Args, paths: &crate::Paths) -> anyhow::Result<()> {
+    let threads = args.threads.context("--threads is required")?;
+
     ensure!(
-        args.threads.is_multiple_of(util::search::HMMER_CPU),
+        threads.is_multiple_of(util::search::HMMER_CPU),
         "--threads needs to be a multiple of {} (for hmmer)",
         util::search::HMMER_CPU
     );
@@ -179,7 +181,7 @@ pub fn main(args: Args, paths: &crate::Paths) -> anyhow::Result<()> {
             &query_hmm,
             Kind::Hmm,
             dirs.tmp.join("hmmer-query").join(&shard),
-            util::search::jobs(args.threads),
+            util::search::jobs(threads),
         );
         pl = pl.step(split.step("split", &[(manifest::SHARD, shard.clone())]));
 
@@ -193,7 +195,7 @@ pub fn main(args: Args, paths: &crate::Paths) -> anyhow::Result<()> {
                     &shard,
                     &dirs.seeds(&arm.name, &shard),
                     &dirs,
-                    args.threads,
+                    threads,
                     &arm.seeding,
                     &[
                         (manifest::STAGE, util::search::SEED.to_string()),
@@ -225,7 +227,7 @@ pub fn main(args: Args, paths: &crate::Paths) -> anyhow::Result<()> {
                     // nail looks for mmseqs at startup even when it is replaying
                     // seeds and will never call it, and nothing here is on PATH
                     .arg("--mmseqs-path", &bins.mmseqs)
-                    .arg("-t", args.threads)
+                    .arg("-t", threads)
                     .arg("--seeds", dirs.seeds(&arm.name, &shard))
                     .arg("-E", args.nail_evalue)
                     .arg("--tmp-dir", dirs.tmp.join("align").join(&arm.name))
@@ -240,7 +242,7 @@ pub fn main(args: Args, paths: &crate::Paths) -> anyhow::Result<()> {
                     .field(manifest::SHARD, &shard)
                     .field("E", args.nail_evalue)])
                 .name(format!("{}.{shard}", arm.name))
-                .cores(args.threads),
+                .cores(threads),
             );
         }
     }

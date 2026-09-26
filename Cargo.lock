@@ -160,7 +160,7 @@ dependencies = [
  "michi",
  "rayon",
  "serde",
- "tabl",
+ "toil",
  "util",
 ]
 
@@ -233,7 +233,7 @@ dependencies = [
  "michi",
  "rayon",
  "serde",
- "tabl",
+ "toil",
  "util",
 ]
 
@@ -364,7 +364,7 @@ dependencies = [
  "michi",
  "rayon",
  "serde",
- "tabl",
+ "toil",
  "util",
 ]
 
@@ -376,12 +376,12 @@ checksum = "cf8baf1c55e62ffcace7a9f06f4bd9cd3f0c4beb022d3b367256b91b87513d98"
 
 [[package]]
 name = "michi"
-version = "0.1.0"
+version = "0.2.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "528e7c74e05c6d5f40bc1d1ac7fb2a3dbdbee04e2899dc59427d5ffd5fe52d3a"
+checksum = "3a1ae7285719622272093c4ffddd782ab1f700de14f6fec969513784b326f763"
 dependencies = [
- "anyhow",
  "libc",
+ "toil",
 ]
 
 [[package]]
@@ -403,7 +403,7 @@ dependencies = [
  "rand",
  "regex",
  "serde",
- "tabl",
+ "toil",
  "util",
 ]
 
@@ -480,7 +480,7 @@ dependencies = [
  "michi",
  "rayon",
  "serde",
- "tabl",
+ "toil",
  "util",
 ]
 
@@ -581,10 +581,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "tabl"
-version = "0.1.0"
-
-[[package]]
 name = "thread-scaling"
 version = "0.1.0"
 dependencies = [
@@ -593,9 +589,15 @@ dependencies = [
  "libsail",
  "michi",
  "serde",
- "tabl",
+ "toil",
  "util",
 ]
+
+[[package]]
+name = "toil"
+version = "0.1.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "5cc016f3cb463d4189d589f96e3ec86c7141c4db4d9d67e9b1f5da1f7b097095"
 
 [[package]]
 name = "toml"
@@ -663,7 +665,7 @@ dependencies = [
  "michi",
  "serde",
  "sha2",
- "tabl",
+ "toil",
  "toml",
 ]
 

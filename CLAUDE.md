@@ -126,23 +126,28 @@ missing.
 ## External crates
 
 - `michi` runs a pipeline of commands, times each one, and writes what it did to
-  `manifest.tbl`. It pins each command with `sched_setaffinity` and sets no
-  memory policy, handing out one logical cpu per physical core from the low end
-  of the pool. On this two-node box that lease straddles both nodes, since node
-  membership goes by parity. Measured, four reps of a 350s nail search at 32
-  cores: straddling costs about 2% against 32 cores of a single node, and
-  `numactl --membind` on top of single-node pinning buys nothing (+0.35%,
-  inside the noise). So if this is ever worth fixing, the fix is making the
-  lease node-aware rather than adding `set_mempolicy`. Full write-up while it
-  lasts: `tmp-claude/numaprobe/REPORT.md`.
+  `manifest.tbl`. Since 0.2.0 its leases are node-aware: a command asking for
+  cores gets them off one memory node where one has that many free, and asks
+  the kernel for its pages there. The table says which node and which memory
+  policy each command ran under, in `node` and `policy` columns that
+  `util::manifest` counts as michi's accounting rather than a run's settings.
+  Before 0.2.0 a lease was the lowest-numbered physical cores, which on this
+  box straddled both nodes; at 32 cores that cost about 2%.
 
-  Small leases are another matter. A `--cpu 2` hmmsearch keeps about 2.7 cpus
-  busy, and on a private 2-cpu lease a batch of them runs 1.5-1.6x slower than
-  the same batch sharing one pool, which is what pid's hmmer and phmmer
-  slowdown came to. On two cpus, straddling the nodes cost a further 15%, far
-  more than the 2% measured at 32. Jack is building node-aware leases and a
-  batch mode that shares the whole lease among its commands; until they land,
-  every michi-batched hmmer here pays both. `PLAN.md` a.4 has the numbers.
+  Every michi-batched hmmer here runs in a shared pool: `util::search::hmmer`
+  gives its batch `Step::pool(HMMER_CPU x parts)` and its parts no cores of
+  their own, so each part runs across the whole pool. A `--cpu 2` hmmsearch
+  keeps about 2.7 cpus busy, and on a private 2-core lease a batch of them ran
+  1.5-1.6x slower than the same batch sharing one pool, which is what pid's
+  hmmer and phmmer slowdown came to. nail and mmseqs are not batched this way;
+  time them before switching. `PLAN.md` a.4 has the numbers.
+
+  No core count is written into the code. Every `.cores` and `.pool` comes
+  from a command-line value with no default: `--threads` on each pipeline,
+  `--rungs` on thread-scaling, and `--jobs` on cutoffs' fanout, whose
+  single-threaded per-family batches share one pool of that many cores. The
+  tools' own thread counts are another matter: `HMMER_CPU` is 2 and cutoffs'
+  fanout runs each search at one thread, both by design.
 - `libsail` reads and writes the formats: FASTA, Stockholm, p7hmm, and the hit
   tables nail, HMMER, MMseqs2 and BLAST produce. Since 0.4.0 it also draws the
   samples `build-set` deals from: `sample_in_order(m, seed)` yields a uniform
@@ -151,11 +156,9 @@ missing.
   billion records. The draw arriving in file order is why the deal shuffles
   which shard each record lands in; a fixed round robin over an ascending draw
   is a stride rather than a partition.
-- `tabl` writes the padded, `#`-headed tables, and every one of them here
-  is written and read through it. `Table::parse` reads a table back by
-  position; michi's manifest, which michi writes itself and which drifts off
-  its rule in places, falls through to a split on whitespace. It is not published: the workspace takes
-  it as a path dependency on a sibling checkout, `../tabl`.
+- `toil` writes the padded, `#`-headed tables, and every one of them here is
+  written and read through it, michi's manifest included: michi 0.2.0 lays
+  its table out through toil too.
 - `feisty` sits in `[workspace.dependencies]` and no member uses it.
 
 ## The shape a benchmark has
@@ -740,14 +743,14 @@ never on both sides.
 Strong scaling for nail, mmseqs and hmmer over its own `cross` set, Pfam
 against MGnify and against Swissprot, built by `build-set --in
 thread-scaling-toy|thread-scaling-real`. `run` searches every unit at every
-rung of `--rungs` (1 2 4 8 16 32 48 by default), `--reps` times over, with the
-reps as the outer loop so load from other users spreads across rungs. Four
-arms: nail `-t N`, mmseqs `--threads N`, one `hmmsearch --cpu N`, and
-`hmmer-split`, the query cut N/2 ways at `--cpu 2`. `run` gives the split arm
-no one-thread search, because one part at `--cpu 1` is `hmmer-t1`, and `parse`
-takes `hmmer-t1` as its first point. Each search is pinned to N cores.
-`/proc/loadavg` is read either side of every search into `outputs/load.tbl`,
-and it counts the search's own threads as well as anyone else's.
+rung of `--rungs`, `--reps` times over, with the reps as the outer loop so
+load from other users spreads across rungs. Four arms: nail `-t N`, mmseqs
+`--threads N`, one `hmmsearch --cpu N`, and `hmmer-split`, the query cut N/2
+ways at `--cpu 2`. `run` gives the split arm no one-thread search, because one
+part at `--cpu 1` is `hmmer-t1`, and `parse` takes `hmmer-t1` as its first
+point. Each search is pinned to N cores. `/proc/loadavg` is read either side
+of every search into `outputs/load.tbl`, and it counts the search's own
+threads as well as anyone else's.
 
 `parse` writes `scaling.tbl`, one row per unit per arm per rung with median
 wall and core-seconds, peak RSS, the time perfect scaling from the arm's
@@ -757,8 +760,9 @@ missing, extra or rescored against rep 1 of the arm's lowest rung. `plot`
 draws wall clock and that percentage against threads into
 `thread-scaling.pdf`.
 
-The split arm moves onto michi's shared-pool batch mode when that lands; it
-is `util::search::hmmer` today, a private lease per part.
+The split arm is `util::search::hmmer`, so its parts share one pool of N
+cores. The real run in `sets/thread-scaling/` predates that: it ran on michi
+0.1.0 with a private 2-core lease per part.
 
 ## Formatting
 
@@ -797,8 +801,6 @@ if [ -d "$ROOT/benchmarks/pid/profmark" ] &&
   ln -sfn "$ROOT/benchmarks/pid/profmark" "$SB/benchmarks/pid/profmark"
 fi
 
-# the workspace names tabl `../tabl`, which from the copy is this
-ln -sfn "$(dirname "$ROOT")/tabl" "$ROOT/tmp-claude/tabl"
 ```
 
 Run that before testing anything, and again after every edit: a copy goes
@@ -829,9 +831,7 @@ seconds.
 The links are the two directories worth 4.3G between them, plus the profmark
 split, which is expensive for the reasons the pid section gives. The sandbox
 reads all three; nothing in it should write them, so do not run `make data` or
-`make tools` from the copy. The fourth is source rather than data: `tabl` is
-built from wherever that link points, so an edit to it reaches the sandbox
-without a sync.
+`make tools` from the copy.
 
 `/sets` and `/sets-toy` are excluded because a build writes them and nothing
 commits them, so the copy builds its own. Without the exclude,

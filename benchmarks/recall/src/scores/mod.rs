@@ -433,34 +433,20 @@ fn parse(
     c: usize,
     mut row: impl FnMut(&str, Option<f32>, Option<f32>),
 ) -> anyhow::Result<()> {
-    let text = std::fs::read_to_string(path)
-        .with_context(|| format!("failed to read {}", path.display()))?;
-
-    let headers: Vec<&str> = text
-        .lines()
-        .find_map(|line| {
-            let rest = line.strip_prefix('#')?.trim_start();
-            (!rest.starts_with('-')).then(|| rest.split_whitespace().collect())
-        })
-        .with_context(|| format!("no header in {}", path.display()))?;
+    let table =
+        toil::Table::read(path).with_context(|| format!("failed to read {}", path.display()))?;
 
     let column = |tool: &str| -> anyhow::Result<usize> {
         let name = format!("{tool}_{}", c + 1);
-        headers
-            .iter()
-            .position(|h| *h == name)
+        table
+            .index(&name)
             .with_context(|| format!("{} has no {name} column", path.display()))
     };
 
     let (nail_at, mmseqs_at) = (column("nail")?, column("mmseqs")?);
 
-    for line in text.lines() {
-        if line.starts_with('#') || line.trim().is_empty() {
-            continue;
-        }
-
-        let cells: Vec<&str> = line.split_whitespace().collect();
-        let Some(family) = cells.first() else {
+    for cells in table.rows() {
+        let Some(family) = cells.get(0) else {
             continue;
         };
 

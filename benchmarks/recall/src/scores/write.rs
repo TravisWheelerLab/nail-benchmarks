@@ -12,7 +12,7 @@ use std::path::Path;
 
 use anyhow::{Context, ensure};
 
-use tabl::{Column, Schema, Stream, Widths};
+use toil::{Column, Schema, Stream, Widths};
 
 use util::ledger::{self, Ledger};
 use util::set::Set;
