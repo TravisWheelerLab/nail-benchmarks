@@ -679,7 +679,7 @@ impl RecallData {
         }
 
         let mut table = toil::Table::new(toil::Schema::new(["run", "pid", "n", "recall"]));
-        table.meta(format!("fpr {FIXED_FPR}"));
+        table.meta("fpr", [format!("{FIXED_FPR}")]);
         for row in rows {
             table.row(row);
         }
@@ -775,7 +775,7 @@ impl RecallData {
             .collect();
 
         let mut table = toil::Table::new(toil::Schema::new(["run", "wall_s", "recall"]));
-        table.meta(format!("fpr {FIXED_FPR}"));
+        table.meta("fpr", [format!("{FIXED_FPR}")]);
         for row in rows {
             table.row(row);
         }

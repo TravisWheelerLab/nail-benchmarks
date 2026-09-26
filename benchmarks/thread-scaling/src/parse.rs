@@ -177,8 +177,8 @@ fn write_scaling(
         "pct_ideal",
         "load",
     ]));
-    table.meta("wall_s and cpu_s are medians over reps");
-    table.meta(
+    table.comment("wall_s and cpu_s are medians over reps");
+    table.comment(
         "ideal_s is the arm's lowest rung scaled perfectly: wall_s x lowest threads / threads",
     );
 
@@ -261,7 +261,7 @@ fn write_agree(path: &Path, results: &Path, ladders: &Ladders) -> anyhow::Result
         "rescored",
         "max_delta",
     ]));
-    table.meta("against rep 1 of each arm's lowest rung, or its lowest rep there");
+    table.comment("against rep 1 of each arm's lowest rung, or its lowest rep there");
 
     for ((shard, arm), rungs) in ladders {
         let base = rungs

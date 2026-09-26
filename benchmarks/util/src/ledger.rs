@@ -159,8 +159,26 @@ impl Ledger {
 
         Ok(Ledger {
             rows,
-            failed: failed_meta(table.meta_lines()),
-            tools: tool_meta(table.meta_lines()),
+            failed: table
+                .meta_rows()
+                .filter(|row| row.key() == "failed")
+                .map(|row| {
+                    let word = |i| row.get(i).unwrap_or_default().to_string();
+                    (word(0), word(1))
+                })
+                .collect(),
+            tools: table
+                .meta_rows()
+                .filter(|row| row.key() == "tool")
+                .filter_map(|row| match row.exactly::<3>()? {
+                    [Some(name), Some(version), Some(hash)] => Some(tools::Identity {
+                        name: name.to_string(),
+                        version: version.to_string(),
+                        hash: hash.to_string(),
+                    }),
+                    _ => None,
+                })
+                .collect(),
         })
     }
 
@@ -194,10 +212,10 @@ impl Ledger {
         let mut table = toil::Table::new(toil::Schema::new(columns));
 
         for id in &self.tools {
-            table.meta(format!("tool {} {} {}", id.name, id.version, id.hash));
+            table.meta("tool", [&id.name, &id.version, &id.hash]);
         }
         for (what, shard) in &self.failed {
-            table.meta(format!("failed {} {}", dash(what), dash(shard)));
+            table.meta("failed", [what, shard]);
         }
 
         for row in &self.rows {
@@ -350,50 +368,6 @@ fn is_column(header: &str) -> bool {
         header,
         manifest::NAME | manifest::TOOL | manifest::SHARD | manifest::STAGE | WALL | CPU | RSS
     )
-}
-
-fn dash(cell: &str) -> String {
-    match cell.is_empty() {
-        true => "-".to_string(),
-        false => cell.to_string(),
-    }
-}
-
-fn tool_meta<'a>(meta: impl Iterator<Item = &'a str>) -> Vec<tools::Identity> {
-    meta.filter_map(|line| {
-        let mut fields = line.split_whitespace();
-        if fields.next() != Some("tool") {
-            return None;
-        }
-
-        Some(tools::Identity {
-            name: fields.next()?.to_string(),
-            version: fields.next()?.to_string(),
-            hash: fields.next()?.to_string(),
-        })
-    })
-    .collect()
-}
-
-fn failed_meta<'a>(meta: impl Iterator<Item = &'a str>) -> Vec<(String, String)> {
-    meta.filter_map(|line| {
-        let mut fields = line.split_whitespace();
-        if fields.next() != Some("failed") {
-            return None;
-        }
-
-        let what = fields.next().unwrap_or("-");
-        let shard = fields.next().unwrap_or("-");
-        Some((undash(what), undash(shard)))
-    })
-    .collect()
-}
-
-fn undash(cell: &str) -> String {
-    match cell {
-        "-" => String::new(),
-        cell => cell.to_string(),
-    }
 }
 
 // ------------------------------------------------------------ from a manifest

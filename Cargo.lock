@@ -88,7 +88,7 @@ dependencies = [
  "rand",
  "rayon",
  "serde",
- "toil",
+ "toil 0.2.1",
  "util",
 ]
 
@@ -161,7 +161,7 @@ dependencies = [
  "michi",
  "rayon",
  "serde",
- "toil",
+ "toil 0.2.1",
  "util",
 ]
 
@@ -234,7 +234,7 @@ dependencies = [
  "michi",
  "rayon",
  "serde",
- "toil",
+ "toil 0.2.1",
  "util",
 ]
 
@@ -350,7 +350,7 @@ dependencies = [
  "libsail",
  "michi",
  "serde",
- "toil",
+ "toil 0.2.1",
  "util",
 ]
 
@@ -366,7 +366,7 @@ dependencies = [
  "michi",
  "rayon",
  "serde",
- "toil",
+ "toil 0.2.1",
  "util",
 ]
 
@@ -383,7 +383,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "3a1ae7285719622272093c4ffddd782ab1f700de14f6fec969513784b326f763"
 dependencies = [
  "libc",
- "toil",
+ "toil 0.1.1",
 ]
 
 [[package]]
@@ -405,7 +405,7 @@ dependencies = [
  "rand",
  "regex",
  "serde",
- "toil",
+ "toil 0.2.1",
  "util",
 ]
 
@@ -482,7 +482,7 @@ dependencies = [
  "michi",
  "rayon",
  "serde",
- "toil",
+ "toil 0.2.1",
  "util",
 ]
 
@@ -591,15 +591,21 @@ dependencies = [
  "libsail",
  "michi",
  "serde",
- "toil",
+ "toil 0.2.1",
  "util",
 ]
 
 [[package]]
 name = "toil"
-version = "0.1.0"
+version = "0.1.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "5cc016f3cb463d4189d589f96e3ec86c7141c4db4d9d67e9b1f5da1f7b097095"
+checksum = "a0b23875e02fefb29784071229ed44c65d6c5b107cc8340bffd145787f3e4d94"
+
+[[package]]
+name = "toil"
+version = "0.2.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "e4c09f7b21144ca84fbb7bd8f53323cb1dc8aa1ebb6f2ffa9e9cf059f6886c5e"
 
 [[package]]
 name = "toml"
@@ -667,7 +673,7 @@ dependencies = [
  "michi",
  "serde",
  "sha2",
- "toil",
+ "toil 0.2.1",
  "toml",
 ]
 

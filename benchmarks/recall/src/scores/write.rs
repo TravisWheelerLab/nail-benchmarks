@@ -19,7 +19,7 @@ use util::set::Set;
 
 use crate::scores::collect::{self, Job};
 use crate::scores::shard::{Count, Pair, Scratch, Shard};
-use crate::scores::{Cutoffs, Meta, Queries, Tool, label, runs, tools};
+use crate::scores::{Cutoffs, Meta, Queries, Tool, runs, tools};
 
 /// How wide a target name is written. MGnify's are sixteen characters, and a
 /// wider one overruns rather than widening the column, since the header has
@@ -120,8 +120,7 @@ pub fn collect(args: Args<'_>) -> anyhow::Result<Count> {
         &mut out,
     )?;
 
-    Stream::continued(schema.clone(), widths.clone(), &mut out)
-        .meta(format!("end {}", count.rows))?;
+    Stream::continued(schema.clone(), widths.clone(), &mut out).meta("end", [count.rows])?;
     out.flush()?;
 
     if count.disagreements > 0 {
@@ -145,7 +144,7 @@ fn block(
     tools: &[Tool],
 ) -> anyhow::Result<(Vec<u8>, Count)> {
     let mut out = Stream::continued(schema.clone(), widths.clone(), Vec::new());
-    out.meta(format!("shard {}", label(shard)))?;
+    out.meta("shard", [shard])?;
 
     let mut doms = String::new();
     let mut by_tool = ByTool::default();

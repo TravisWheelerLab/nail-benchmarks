@@ -493,54 +493,61 @@ impl Meta {
         format: &str,
         out: &mut toil::Stream<W>,
     ) -> std::io::Result<()> {
-        out.meta(format.strip_prefix("#= ").unwrap_or(format))?;
-        out.meta(format!(
-            "query {} {} {}",
-            self.query.count, self.query.residues, self.query.bytes
-        ))?;
+        let format = format.strip_prefix("#= ").unwrap_or(format);
+        let (key, words) = format.split_once(' ').unwrap_or((format, ""));
+        out.meta(key, [words])?;
 
-        for (shard, size) in &self.targets {
-            out.meta(format!(
-                "target {} {} {} {}",
-                label(shard),
-                size.count,
-                size.residues,
-                size.bytes
-            ))?;
+        let size = |size: &Size| {
+            [
+                toil::Cell::from(size.count),
+                size.residues.into(),
+                size.bytes.into(),
+            ]
+        };
+        out.meta("query", size(&self.query))?;
+
+        for (shard, size_of) in &self.targets {
+            let words = [toil::Cell::from(shard)].into_iter().chain(size(size_of));
+            out.meta("target", words)?;
         }
 
         for id in &self.tools {
-            out.meta(format!("tool {} {} {}", id.name, id.version, id.hash))?;
+            out.meta("tool", [&id.name, &id.version, &id.hash])?;
         }
 
         for (name, wall) in &self.seeds {
-            out.meta(format!("seed {} {wall:.4}", label(name)))?;
+            out.meta("seed", [name.clone(), format!("{wall:.4}")])?;
         }
 
-        out.meta(format!("cutoffs {} c={}", self.cutoffs.display(), self.c))?;
+        out.meta(
+            "cutoffs",
+            [self.cutoffs.display().to_string(), format!("c={}", self.c)],
+        )?;
 
         for run in &self.runs {
             // written with the settings and read back out of them, so the
             // line stays one shape and a reader needs no new field
-            let params: String = run
-                .seeds
-                .iter()
-                .map(|name| format!(" {}={name}", util::manifest::SEEDS))
-                .chain(run.params.iter().map(|(k, v)| format!(" {k}={v}")))
-                .collect();
+            let words = [
+                run.name.clone(),
+                run.tool.to_string(),
+                format!("{:.4}", run.wall_s),
+            ]
+            .into_iter()
+            .chain(
+                run.seeds
+                    .iter()
+                    .map(|name| format!("{}={name}", util::manifest::SEEDS)),
+            )
+            .chain(run.params.iter().map(|(k, v)| format!("{k}={v}")));
 
-            out.meta(format!(
-                "run {} {} {:.4}{params}",
-                run.name, run.tool, run.wall_s
-            ))?;
+            out.meta("run", words)?;
         }
 
         // the legend belongs to the pass string, so a table without one gets
         // no line: `#= run` already gives the order, and a legend beside no
         // column would read as saying the column is there
-        if format == FORMAT {
-            let names: Vec<&str> = self.runs.iter().map(|run| run.name.as_str()).collect();
-            out.meta(format!("pass {}", names.join(" ")))?;
+        if format == FORMAT.strip_prefix("#= ").unwrap_or(FORMAT) {
+            out.meta("pass", self.runs.iter().map(|run| run.name.as_str()))?;
         }
 
         Ok(())
@@ -584,31 +591,27 @@ pub struct Preamble {
 }
 
 impl Preamble {
-    /// Take in one `#=` line's key and fields.
-    pub fn absorb(&mut self, key: &str, fields: &[&str]) -> anyhow::Result<()> {
-        match key {
-            "query" => self.query = Some(size(fields)?),
-            "target" => self.targets.push((shard_of(fields)?, size(&fields[1..])?)),
+    /// Take in one `#=` line.
+    pub fn absorb(&mut self, row: &toil::MetaRow) -> anyhow::Result<()> {
+        match row.key() {
+            "query" => self.query = Some(size(row, 0)?),
+            "target" => self.targets.push((word(row, 0), size(row, 1)?)),
             "seed" => {
-                let wall = fields
-                    .get(1)
-                    .context("a `#= seed` line wants a wall time")?;
-                self.seeds.push((shard_of(fields)?, wall.parse()?));
+                let wall = row.get(1).context("a `#= seed` line wants a wall time")?;
+                self.seeds.push((word(row, 0), wall.parse()?));
             }
             "cutoffs" => {
-                let [path, rest @ ..] = fields else {
-                    bail!("a `#= cutoffs` line wants a path");
-                };
+                let path = row.get(0).context("a `#= cutoffs` line wants a path")?;
 
                 self.cutoffs = Some(PathBuf::from(path));
-                self.c = rest
-                    .iter()
+                self.c = words(row)
+                    .skip(1)
                     .find_map(|field| field.strip_prefix("c="))
                     .map(str::parse)
                     .transpose()?;
             }
             "tool" => {
-                let [name, version, hash] = fields else {
+                let Some([Some(name), Some(version), Some(hash)]) = row.exactly::<3>() else {
                     bail!("a `#= tool` line wants a name, a version and a hash");
                 };
 
@@ -618,8 +621,8 @@ impl Preamble {
                     hash: hash.to_string(),
                 });
             }
-            "run" => self.runs.push(run(fields)?),
-            "pass" => self.pass = fields.iter().map(|name| name.to_string()).collect(),
+            "run" => self.runs.push(run(row)?),
+            "pass" => self.pass = words(row).map(str::to_string).collect(),
             other => bail!("unknown `#= {other}` line"),
         }
 
@@ -657,26 +660,28 @@ impl Preamble {
     }
 }
 
-/// A shard with no name, from a pipeline that only ever searched one target.
-pub fn label(shard: &str) -> &str {
-    match shard.is_empty() {
-        true => "-",
-        false => shard,
-    }
+/// Word `i` of a `#=` line, or empty where it holds the placeholder: a shard
+/// with no name, from a pipeline that only ever searched one target.
+fn word(row: &toil::MetaRow, i: usize) -> String {
+    row.get(i).unwrap_or_default().to_string()
 }
 
-/// The shard a `#= target` line is about, back from its label.
-fn shard_of(fields: &[&str]) -> anyhow::Result<String> {
-    match *fields.first().context("a metadata line names no shard")? {
-        "-" => Ok(String::new()),
-        shard => Ok(shard.to_string()),
-    }
+/// Every word of a `#=` line after its key.
+fn words<'a>(row: &toil::MetaRow<'a>) -> impl Iterator<Item = &'a str> {
+    let row = *row;
+    (0..row.len()).filter_map(move |i| row.get(i))
 }
 
-fn size(fields: &[&str]) -> anyhow::Result<Size> {
-    let [count, residues, bytes] = fields else {
+fn size(row: &toil::MetaRow, from: usize) -> anyhow::Result<Size> {
+    let (Some(count), Some(residues), Some(bytes)) =
+        (row.get(from), row.get(from + 1), row.get(from + 2))
+    else {
         bail!("a size wants a count, a residue count and a byte count");
     };
+    ensure!(
+        row.len() == from + 3,
+        "a size wants a count, a residue count and a byte count"
+    );
 
     Ok(Size {
         count: count.parse()?,
@@ -687,13 +692,13 @@ fn size(fields: &[&str]) -> anyhow::Result<Size> {
 
 /// One `#= run` line: a name, a tool, a wall time, then whatever settings told
 /// this run apart from the others.
-fn run(fields: &[&str]) -> anyhow::Result<Run> {
-    let [name, tool, wall, params @ ..] = fields else {
+fn run(row: &toil::MetaRow) -> anyhow::Result<Run> {
+    let (Some(name), Some(tool), Some(wall)) = (row.get(0), row.get(1), row.get(2)) else {
         bail!("a `#= run` line wants a name, a tool and a wall time");
     };
 
-    let mut params: BTreeMap<String, String> = params
-        .iter()
+    let mut params: BTreeMap<String, String> = words(row)
+        .skip(3)
         .filter_map(|p| p.split_once('='))
         .map(|(k, v)| (k.to_string(), v.to_string()))
         .collect();

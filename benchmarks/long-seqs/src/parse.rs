@@ -81,7 +81,7 @@ fn cells(args: CellsArgs, paths: &crate::Paths) -> anyhow::Result<()> {
         let q_len = unit.number("query_residues")?;
         let t_len = unit.number("residues")?;
 
-        file.row([toil::Cell::from((q_len * t_len) as u64), cell_frac.into()]);
+        file.row([toil::Cell::from(q_len * t_len), cell_frac.into()]);
     }
 
     file.write(&path)

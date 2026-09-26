@@ -404,7 +404,15 @@ impl Set {
         Ok(Set {
             root,
             rows,
-            meta: read_meta(table.meta_lines()),
+            meta: table
+                .meta_rows()
+                .map(|row| {
+                    (
+                        row.key().to_string(),
+                        row.rest(0).unwrap_or_default().to_string(),
+                    )
+                })
+                .collect(),
         })
     }
 
@@ -434,7 +442,7 @@ impl Set {
         let mut table = toil::Table::new(toil::Schema::new(columns));
 
         for (key, value) in &self.meta {
-            table.meta(format!("{key} {value}"));
+            table.meta(key, [value]);
         }
 
         for row in &self.rows {
@@ -578,16 +586,6 @@ impl<'a> Unit<'a> {
 }
 
 // ---
-
-fn read_meta<'a>(lines: impl Iterator<Item = &'a str>) -> BTreeMap<String, String> {
-    lines
-        .map(|line| {
-            let line = line.trim();
-            let (key, value) = line.split_once(char::is_whitespace).unwrap_or((line, ""));
-            (key.to_string(), value.trim().to_string())
-        })
-        .collect()
-}
 
 #[cfg(test)]
 mod tests {

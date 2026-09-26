@@ -55,7 +55,7 @@ use util::set::Set;
 use crate::scores::collect::{self, Job};
 use crate::scores::frame::{Frame, Layout, Verdict};
 use crate::scores::shard::{Count, Pair, Scratch, Shard};
-use crate::scores::{Cutoffs, Meta, Named, Queries, label, runs};
+use crate::scores::{Cutoffs, Meta, Named, Queries, runs};
 
 /// The `#= format` line a runs table opens with.
 pub const FORMAT: &str = "#= format runs 1";
@@ -204,8 +204,7 @@ pub fn collect(args: Args<'_>) -> anyhow::Result<Count> {
         &mut out,
     )?;
 
-    Stream::continued(schema.clone(), widths.clone(), &mut out)
-        .meta(format!("end {}", count.rows))?;
+    Stream::continued(schema.clone(), widths.clone(), &mut out).meta("end", [count.rows])?;
     out.flush()?;
 
     Ok(count)
@@ -220,7 +219,7 @@ fn block(
     widths: &Widths,
 ) -> anyhow::Result<(Vec<u8>, Count)> {
     let mut out = Stream::continued(schema.clone(), widths.clone(), Vec::new());
-    out.meta(format!("shard {}", label(shard)))?;
+    out.meta("shard", [shard])?;
 
     let mut doms = String::new();
 
@@ -309,7 +308,7 @@ pub fn layout(meta: &Meta) -> Layout {
     }
 }
 
-pub struct Reader<R> {
+pub struct Reader<R: Read> {
     frame: Frame<R>,
     /// Where the first run's score column sits.
     scores: usize,

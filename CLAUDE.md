@@ -163,7 +163,10 @@ missing.
   is a stride rather than a partition.
 - `toil` writes the padded, `#`-headed tables, and every one of them here is
   written and read through it, michi's manifest included: michi 0.2.0 lays
-  its table out through toil too.
+  its table out through toil too. A `#=` line is a key and its words, written
+  with `meta(key, words)` and read back as a `MetaRow`, so nothing here
+  splits one by hand. The score tables, too big to hold, are read a row at a
+  time through toil's `Reader` in each benchmark's `scores/frame.rs`.
 - `feisty` sits in `[workspace.dependencies]` and no member uses it.
 
 ## The shape a benchmark has

@@ -7,9 +7,10 @@
 //! read here once rather than in each table's reader.
 //!
 //! The file is bigger than the machine, so an analysis is a pass over it
-//! rather than a structure built from it. A row is a borrowed line with its
-//! fields located, and what a cell means is worked out when it is asked for:
-//! a summary reads the pass string and never parses a score at all.
+//! rather than a structure built from it. toil's `Reader` cuts each line into
+//! cells, and a row is those cells copied into one buffer reused for every
+//! row. What a cell means is worked out when it is asked for: a summary reads
+//! the pass string and never parses a score at all.
 //!
 //! What is rejected here is what would make an answer wrong rather than
 //! merely odd: a legend that disagrees with the runs, a row of the wrong
@@ -19,7 +20,7 @@
 
 use std::collections::HashSet;
 use std::fs::File;
-use std::io::{BufRead, BufReader, Read};
+use std::io::{BufReader, Read};
 use std::path::Path;
 
 use anyhow::{Context, bail, ensure};
@@ -49,8 +50,10 @@ pub struct Verdict {
     pub cutoffs: Named,
 }
 
-pub struct Frame<R> {
-    src: BufReader<R>,
+pub struct Frame<R: Read> {
+    reader: toil::Reader<BufReader<R>>,
+    /// The row in hand, copied out of the reader so a caller can ask for its
+    /// fields after `step` returns.
     buf: Vec<u8>,
     spans: Vec<(usize, usize)>,
 
@@ -96,65 +99,56 @@ impl<R: Read> Frame<R> {
     /// Read the format line, the preamble and the first block marker, leaving
     /// the first row next.
     pub fn new(src: R, file: &str) -> anyhow::Result<Frame<R>> {
-        let mut src = BufReader::with_capacity(BUFFER, src);
-        let mut buf = Vec::new();
-        let mut at = 0u64;
+        let mut reader = toil::Reader::new(BufReader::with_capacity(BUFFER, src))
+            .with_context(|| format!("failed to read {file}"))?;
+
+        // the first line says which table this is, and nothing else may come
+        // before it: a file that opens any other way was written in a shape no
+        // reader here parses
+        let format = reader
+            .header()
+            .preamble()
+            .first()
+            .filter(|line| line.starts_with("#= format "))
+            .with_context(|| {
+                format!("{file} does not open a `#= format` line; it was written in an older shape")
+            })?
+            .clone();
 
         let mut preamble = Preamble::default();
-        let mut format = String::new();
-        let shard_at;
-
-        loop {
-            let Some(line) = read(&mut src, &mut buf, &mut at)? else {
-                bail!("{file} ends before its header");
-            };
-
-            let text =
-                std::str::from_utf8(line).with_context(|| format!("{file}:{at} is not text"))?;
-
-            // the first line says which table this is, and nothing else may
-            // come before it: a file that opens any other way was written in
-            // a shape no reader here parses
-            if at == 1 {
-                ensure!(
-                    text.starts_with("#= format "),
-                    "{file} does not open a `#= format` line; \
-                     it was written in an older shape",
-                );
-
-                format = text.to_string();
-                continue;
-            }
-
-            let Some(rest) = text.strip_prefix("#=") else {
-                ensure!(
-                    text.starts_with('#'),
-                    "{file}:{at} is a row before any `#= shard` marker"
-                );
-                continue;
-            };
-
-            let mut fields = rest.split_whitespace();
-            let Some(key) = fields.next() else { continue };
-            let fields: Vec<&str> = fields.collect();
-
-            // the first block marker ends the preamble, and the shard it
-            // names is the one the rows after it are in
-            if key == "shard" {
-                shard_at = shard(&fields)?;
-                break;
-            }
-
+        for row in reader
+            .header()
+            .meta_rows()
+            .filter(|row| row.key() != "format")
+        {
             preamble
-                .absorb(key, &fields)
-                .with_context(|| format!("{file}:{at}"))?;
+                .absorb(&row)
+                .with_context(|| format!("in the preamble of {file}"))?;
         }
+
+        // the first block marker ends the preamble, and the shard it names is
+        // the one the rows after it are in
+        let (shard_at, at) = loop {
+            match reader.next_entry()? {
+                None => bail!("{file} ends before its first `#= shard` marker"),
+                Some((at, toil::Entry::Row(_))) => {
+                    bail!("{file}:{at} is a row before any `#= shard` marker")
+                }
+                Some((_, toil::Entry::Comment(_))) => {}
+                Some((at, toil::Entry::Meta(row))) => match row.key() {
+                    "shard" => break (row.get(0).unwrap_or_default().to_string(), at),
+                    _ => preamble
+                        .absorb(&row)
+                        .with_context(|| format!("{file}:{at}"))?,
+                },
+            }
+        };
 
         let meta = preamble.finish().with_context(|| format!("in {file}"))?;
 
         Ok(Frame {
-            src,
-            buf,
+            reader,
+            buf: Vec::new(),
             spans: Vec::new(),
             prev: Vec::new(),
             next: Vec::new(),
@@ -165,7 +159,7 @@ impl<R: Read> Frame<R> {
             seen: HashSet::from([shard_at.clone()]),
             shard: shard_at,
             rows: 0,
-            line: at,
+            line: at as u64,
             done: false,
             verdict: None,
             cutoff: (None, None),
@@ -200,65 +194,66 @@ impl<R: Read> Frame<R> {
                 return Ok(false);
             }
 
-            let Some(line) = read(&mut self.src, &mut self.buf, &mut self.line)? else {
+            let Some((at, entry)) = self.reader.next_entry()? else {
                 bail!(
                     "{} ends without a `#= end` line; the run that wrote it did not finish",
                     self.file
                 );
             };
+            self.line = at as u64;
 
-            if line.first() == Some(&b'#') {
-                let text = std::str::from_utf8(line)
-                    .with_context(|| format!("{}:{} is not text", self.file, self.line))?;
+            let cells = match entry {
+                toil::Entry::Row(cells) => cells,
+                toil::Entry::Comment(_) => continue,
+                toil::Entry::Meta(row) => {
+                    match row.key() {
+                        "shard" => {
+                            let shard = row.get(0).unwrap_or_default().to_string();
+                            ensure!(
+                                self.seen.insert(shard.clone()),
+                                "{}:{} opens shard {shard:?} a second time",
+                                self.file,
+                                self.line
+                            );
 
-                let Some(rest) = text.strip_prefix("#=") else {
+                            self.shard = shard;
+                            // a target lives in one shard, so the order starts
+                            // again at every block
+                            self.prev.clear();
+                        }
+                        "end" => {
+                            let count: u64 = row
+                                .get(0)
+                                .context("a `#= end` line wants a row count")?
+                                .parse()
+                                .with_context(|| format!("{}:{}", self.file, self.line))?;
+
+                            ensure!(
+                                count == self.rows,
+                                "{} says it holds {count} rows and holds {}",
+                                self.file,
+                                self.rows
+                            );
+
+                            self.done = true;
+                            return Ok(false);
+                        }
+                        other => bail!("{}:{} has a `#= {other}` line", self.file, self.line),
+                    }
                     continue;
-                };
-
-                let mut fields = rest.split_whitespace();
-                let Some(key) = fields.next() else { continue };
-                let fields: Vec<&str> = fields.collect();
-
-                match key {
-                    "shard" => {
-                        let shard = shard(&fields)?;
-                        ensure!(
-                            self.seen.insert(shard.clone()),
-                            "{}:{} opens shard {shard:?} a second time",
-                            self.file,
-                            self.line
-                        );
-
-                        self.shard = shard;
-                        // a target lives in one shard, so the order starts
-                        // again at every block
-                        self.prev.clear();
-                    }
-                    "end" => {
-                        let count: u64 = fields
-                            .first()
-                            .context("a `#= end` line wants a row count")?
-                            .parse()
-                            .with_context(|| format!("{}:{}", self.file, self.line))?;
-
-                        ensure!(
-                            count == self.rows,
-                            "{} says it holds {count} rows and holds {}",
-                            self.file,
-                            self.rows
-                        );
-
-                        self.done = true;
-                        return Ok(false);
-                    }
-                    other => bail!("{}:{} has a `#= {other}` line", self.file, self.line),
                 }
-
+            };
+            if cells.is_empty() {
                 continue;
             }
 
-            if line.is_empty() {
-                continue;
+            self.buf.clear();
+            self.spans.clear();
+            for i in 0..cells.len() {
+                let start = self.buf.len();
+                self.buf
+                    .extend_from_slice(cells.field(i).expect("i is below the cell count"));
+                self.spans.push((start, self.buf.len()));
             }
 
             self.row()?;
@@ -274,26 +269,6 @@ impl<R: Read> Frame<R> {
             .layout
             .as_ref()
             .expect("a frame is given its layout before its first row");
-
-        self.spans.clear();
-
-        let mut at = 0usize;
-        while at < self.buf.len() {
-            while at < self.buf.len() && self.buf[at].is_ascii_whitespace() {
-                at += 1;
-            }
-
-            if at == self.buf.len() {
-                break;
-            }
-
-            let start = at;
-            while at < self.buf.len() && !self.buf[at].is_ascii_whitespace() {
-                at += 1;
-            }
-
-            self.spans.push((start, at));
-        }
 
         let want = layout.fields;
         ensure!(
@@ -403,33 +378,5 @@ impl<R: Read> Frame<R> {
         self.layout
             .as_ref()
             .expect("a frame is given its layout before its first row")
-    }
-}
-
-/// One line, without its newline, into a buffer the reader keeps.
-fn read<'a, R: Read>(
-    src: &mut BufReader<R>,
-    buf: &'a mut Vec<u8>,
-    line: &mut u64,
-) -> std::io::Result<Option<&'a [u8]>> {
-    buf.clear();
-
-    if src.read_until(b'\n', buf)? == 0 {
-        return Ok(None);
-    }
-
-    *line += 1;
-
-    while let Some(b'\n' | b'\r') = buf.last() {
-        buf.pop();
-    }
-
-    Ok(Some(buf))
-}
-
-fn shard(fields: &[&str]) -> anyhow::Result<String> {
-    match *fields.first().context("a `#= shard` line names no shard")? {
-        "-" => Ok(String::new()),
-        shard => Ok(shard.to_string()),
     }
 }
