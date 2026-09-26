@@ -85,18 +85,15 @@ const BATCH: &str = "||";
 
 /// Everything one command line of `manifest.tbl` had to say.
 pub struct Row {
+    /// The cells that hold a value. A field a command never set renders as
+    /// the placeholder in every row of the block, and has no entry here.
     cells: BTreeMap<String, String>,
 }
 
 impl Row {
-    /// One cell, or `None` where the table wrote a dash. Absent and "had
-    /// nothing to say" are the same answer here, since a field a command never
-    /// set renders as a dash in every row of the block.
+    /// One cell, or `None` where the table wrote the placeholder.
     pub fn get(&self, key: &str) -> Option<&str> {
-        match self.cells.get(key).map(String::as_str) {
-            Some("-") | None => None,
-            Some(value) => Some(value),
-        }
+        self.cells.get(key).map(String::as_str)
     }
 
     pub(crate) fn wall_s(&self) -> Option<f64> {
@@ -147,7 +144,7 @@ impl Row {
     /// The step cell: a label on a step's own summary row, `|` or `||` on the
     /// commands under it.
     pub(crate) fn step(&self) -> Option<&str> {
-        self.cells.get("step").map(String::as_str)
+        self.get("step")
     }
 
     /// Whether this command ran alongside the others in its step rather than
@@ -156,7 +153,7 @@ impl Row {
     // a step holding one command collapses to a single row and reads as
     // serial, which for one command comes to the same thing either way
     pub(crate) fn batched(&self) -> bool {
-        self.cells.get("step").map(String::as_str) == Some(BATCH)
+        self.get("step") == Some(BATCH)
     }
 
     /// Everything this row set that isn't part of the contract: the parameters
@@ -167,7 +164,6 @@ impl Row {
             .filter(|(key, _)| {
                 !matches!(key.as_str(), NAME | TOOL | SHARD | STAGE) && !is_metric(key)
             })
-            .filter(|(_, value)| value.as_str() != "-")
             .map(|(key, value)| (key.clone(), value.clone()))
             .collect()
     }
@@ -213,8 +209,6 @@ impl Manifest {
             .with_context(|| format!("failed to read {}", path.display()))?;
         let labels = table.labels();
 
-        // a dash is kept as the text "-" and an empty cell as no key at all,
-        // which is how `get`, `step` and `params` tell them apart
         let rows = table
             .rows()
             .iter()
@@ -222,11 +216,9 @@ impl Manifest {
                 cells: labels
                     .iter()
                     .enumerate()
-                    .take(row.len())
-                    .filter_map(|(i, label)| match row.get(i) {
-                        Some("") => None,
-                        Some(value) => Some((label.clone(), value.to_string())),
-                        None => Some((label.clone(), "-".to_string())),
+                    .filter_map(|(i, label)| {
+                        let value = row.get(i).filter(|value| !value.is_empty())?;
+                        Some((label.clone(), value.to_string()))
                     })
                     .collect(),
             })

@@ -33,7 +33,7 @@ pub fn summary(path: &Path, out: &Path) -> anyhow::Result<()> {
 
     ensure!(
         scores.format() == runs::FORMAT,
-        "{} opens `{}`, which is not a runs table",
+        "{} opens `#= format {}`, which is not a runs table",
         path.display(),
         scores.format()
     );

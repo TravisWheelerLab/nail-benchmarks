@@ -102,18 +102,18 @@ impl<R: Read> Frame<R> {
         let mut reader = toil::Reader::new(BufReader::with_capacity(BUFFER, src))
             .with_context(|| format!("failed to read {file}"))?;
 
-        // the first line says which table this is, and nothing else may come
-        // before it: a file that opens any other way was written in a shape no
-        // reader here parses
+        // the first `#=` line says which table this is: a file that opens any
+        // other way was written in a shape no reader here parses
         let format = reader
             .header()
-            .preamble()
-            .first()
-            .filter(|line| line.starts_with("#= format "))
+            .meta_rows()
+            .next()
+            .filter(|row| row.key() == "format")
+            .and_then(|row| row.rest(0))
             .with_context(|| {
                 format!("{file} does not open a `#= format` line; it was written in an older shape")
             })?
-            .clone();
+            .to_string();
 
         let mut preamble = Preamble::default();
         for row in reader
@@ -167,7 +167,7 @@ impl<R: Read> Frame<R> {
         })
     }
 
-    /// The `#= format` line this file opened with.
+    /// What the `#= format` line this file opened with says, after the key.
     pub fn format(&self) -> &str {
         &self.format
     }

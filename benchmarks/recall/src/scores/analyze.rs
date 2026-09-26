@@ -32,7 +32,7 @@ pub fn summary(path: &Path, out: &Path) -> anyhow::Result<()> {
 
     ensure!(
         scores.format() == crate::scores::FORMAT,
-        "{} opens `{}`, which is not recall's table",
+        "{} opens `#= format {}`, which is not recall's table",
         path.display(),
         scores.format()
     );

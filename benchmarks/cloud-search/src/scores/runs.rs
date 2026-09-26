@@ -58,7 +58,7 @@ use crate::scores::shard::{Count, Pair, Scratch, Shard};
 use crate::scores::{Cutoffs, Meta, Named, Queries, runs};
 
 /// The `#= format` line a runs table opens with.
-pub const FORMAT: &str = "#= format runs 1";
+pub const FORMAT: &str = "runs 1";
 
 /// How wide a target name is written. MGnify's are sixteen characters, and a
 /// wider one overruns rather than widening the column, since the header has
@@ -329,7 +329,7 @@ impl<R: Read> Reader<R> {
     fn wrap(mut frame: Frame<R>) -> anyhow::Result<Reader<R>> {
         ensure!(
             frame.format() == FORMAT,
-            "{} does not open `{FORMAT}`; it is not a runs table",
+            "{} does not open `#= format {FORMAT}`; it is not a runs table",
             frame.file(),
         );
 
@@ -505,7 +505,7 @@ gamma MGYP000000000003 .    .      28.0   1   28.0
 
     #[test]
     fn a_table_of_another_format_is_refused() {
-        let other = file().replace(FORMAT, "#= format scores 2");
+        let other = file().replace(&format!("#= format {FORMAT}"), "#= format scores 2");
         assert!(Reader::new(other.as_bytes(), "test").is_err());
     }
 

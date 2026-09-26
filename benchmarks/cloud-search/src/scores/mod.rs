@@ -82,7 +82,7 @@ use util::ledger::{self, Ledger};
 use util::set::Set;
 
 /// What recall's table opens with. The sweeps' is [`runs::FORMAT`].
-pub const FORMAT: &str = "#= format scores 2";
+pub const FORMAT: &str = "scores 2";
 
 /// A tenth of the best domain, which is mgnify's threshold for a domain
 /// carrying enough of a hit to count as its own.
@@ -486,9 +486,7 @@ impl Meta {
         format: &str,
         out: &mut toil::Stream<W>,
     ) -> std::io::Result<()> {
-        let format = format.strip_prefix("#= ").unwrap_or(format);
-        let (key, words) = format.split_once(' ').unwrap_or((format, ""));
-        out.meta(key, [words])?;
+        out.meta("format", [format])?;
 
         let size = |size: &Size| {
             [
@@ -539,7 +537,7 @@ impl Meta {
         // the legend belongs to the pass string, so a table without one gets
         // no line: `#= run` already gives the order, and a legend beside no
         // column would read as saying the column is there
-        if format == FORMAT.strip_prefix("#= ").unwrap_or(FORMAT) {
+        if format == FORMAT {
             out.meta("pass", self.runs.iter().map(|run| run.name.as_str()))?;
         }
 
