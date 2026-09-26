@@ -14,7 +14,7 @@
 use std::{
     collections::{HashMap, HashSet},
     fs::File,
-    io::{BufRead, BufReader, BufWriter, Write},
+    io::{BufWriter, Write},
     path::{Path, PathBuf},
 };
 
@@ -272,26 +272,33 @@ pub struct Benchmark {
 
 impl Benchmark {
     pub fn new<P: AsRef<Path>>(tbl_path: P) -> anyhow::Result<Self> {
-        let tbl_reader = BufReader::new(File::open(tbl_path)?);
+        let path = tbl_path.as_ref();
+        let table = toil::Table::read(path)
+            .with_context(|| format!("failed to read {}", path.display()))?;
+        let at = |label: &str| {
+            table
+                .index(label)
+                .with_context(|| format!("{} has no {label} column", path.display()))
+        };
+        let (pid_at, family_at, target_at, query_at) =
+            (at("identity")?, at("family")?, at("target")?, at("query")?);
 
         let mut entries = vec![];
         let mut idx_by_target: HashMap<String, usize> = HashMap::new();
 
-        for line in tbl_reader
-            .lines()
-            .map_while(Result::ok)
-            .filter(|l| !l.starts_with('#'))
-        {
-            let tokens: Vec<&str> = line.split_whitespace().collect();
+        for cells in table.rows() {
+            let cell = |i: usize| {
+                cells
+                    .get(i)
+                    .with_context(|| format!("{} has a row with an empty cell", path.display()))
+            };
 
-            let pid = tokens[0]
-                .strip_suffix('%')
-                .context("pid entry missing % symbol")?
+            let pid = cell(pid_at)?
                 .parse::<usize>()
-                .context("")?;
-            let family = tokens[1].to_string();
-            let target = tokens[2].to_string();
-            let query = tokens[3].to_string();
+                .context("identity is not a whole percentage")?;
+            let family = cell(family_at)?.to_string();
+            let target = cell(target_at)?.to_string();
+            let query = cell(query_at)?.to_string();
 
             let entry = BenchmarkEntry {
                 pid,

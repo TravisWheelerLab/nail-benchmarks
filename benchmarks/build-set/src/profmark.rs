@@ -397,9 +397,7 @@ fn assemble(
 
     println!("{} benchmark pairs", pairs.len());
 
-    let mut tbl_writer =
-        BufWriter::new(File::create(at.truth()).context("failed to open truth.tbl")?);
-    writeln!(tbl_writer, "#identity family target query")?;
+    let mut truth = toil::Table::new(toil::Schema::new(["identity", "family", "target", "query"]));
 
     let mut targets: Vec<FastaRecord> = Vec::new();
     // a hash set because two targets can share a most-similar query
@@ -429,12 +427,17 @@ fn assemble(
         targets.push(target);
         queries.insert(query);
 
-        writeln!(
-            tbl_writer,
-            "{}% {} {} {}",
-            pair.pid, pair.family, pair.target, pair.query
-        )?;
+        truth.row([
+            pair.pid.to_string(),
+            pair.family.clone(),
+            pair.target.clone(),
+            pair.query.clone(),
+        ]);
     }
+
+    truth
+        .write(at.truth())
+        .with_context(|| format!("failed to write {}", at.truth().display()))?;
 
     let mut target_writer =
         BufWriter::new(File::create(at.target_fa()).context("failed to open target.fa")?);
