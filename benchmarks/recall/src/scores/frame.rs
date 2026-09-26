@@ -8,9 +8,9 @@
 //!
 //! The file is bigger than the machine, so an analysis is a pass over it
 //! rather than a structure built from it. toil's `Reader` cuts each line into
-//! cells, and a row is those cells copied into one buffer reused for every
-//! row. What a cell means is worked out when it is asked for: a summary reads
-//! the pass string and never parses a score at all.
+//! cells, and [`Frame::each`] hands a caller each row still borrowed from the
+//! reader's buffer. What a cell means is worked out when it is asked for: a
+//! summary reads the pass string and never parses a score at all.
 //!
 //! What is rejected here is what would make an answer wrong rather than
 //! merely odd: a legend that disagrees with the runs, a row of the wrong
@@ -45,18 +45,18 @@ pub struct Layout {
 
 pub struct Frame<R: Read> {
     reader: toil::Reader<BufReader<R>>,
-    /// The row in hand, copied out of the reader so a caller can ask for its
-    /// fields after `step` returns.
-    buf: Vec<u8>,
-    spans: Vec<(usize, usize)>,
+    pub meta: Meta,
+    state: State,
+}
 
+/// What a frame holds rows against, and what it has seen of the file so far.
+struct State {
     /// Which query and target the last row named, as `query\0target`, which
     /// orders as the pair does.
     prev: Vec<u8>,
     /// The same, being built for the row in hand.
     next: Vec<u8>,
 
-    pub meta: Meta,
     /// The `#= format` line the file opened with, for the caller to check.
     format: String,
     /// What to call the file in an error.
@@ -68,6 +68,13 @@ pub struct Frame<R: Read> {
     rows: u64,
     line: u64,
     done: bool,
+}
+
+/// One row, its cells borrowed from the reader for as long as a caller looks
+/// at it.
+pub struct Row<'a> {
+    cells: toil::Cells<'a>,
+    state: &'a State,
 }
 
 impl Frame<File> {
@@ -132,111 +139,112 @@ impl<R: Read> Frame<R> {
 
         Ok(Frame {
             reader,
-            buf: Vec::new(),
-            spans: Vec::new(),
-            prev: Vec::new(),
-            next: Vec::new(),
             meta,
-            format,
-            file: file.to_string(),
-            layout: None,
-            seen: HashSet::from([shard_at.clone()]),
-            shard: shard_at,
-            rows: 0,
-            line: at as u64,
-            done: false,
+            state: State {
+                prev: Vec::new(),
+                next: Vec::new(),
+                format,
+                file: file.to_string(),
+                layout: None,
+                seen: HashSet::from([shard_at.clone()]),
+                shard: shard_at,
+                rows: 0,
+                line: at as u64,
+                done: false,
+            },
         })
     }
 
     /// What the `#= format` line this file opened with says, after the key.
     pub fn format(&self) -> &str {
-        &self.format
+        &self.state.format
     }
 
     /// Fix where the columns are, once the preamble has declared how many runs and
     /// tools the file carries. Rows cannot be read before this.
     pub fn layout(&mut self, layout: Layout) {
-        self.layout = Some(layout);
+        self.state.layout = Some(layout);
     }
 
-    /// Advance to the next row. `false` at the trailer.
-    pub fn step(&mut self) -> anyhow::Result<bool> {
-        loop {
-            if self.done {
-                return Ok(false);
-            }
+    /// Hand every row to `f` in file order, then check the trailer.
+    pub fn each(&mut self, mut f: impl FnMut(&Row) -> anyhow::Result<()>) -> anyhow::Result<()> {
+        let Frame {
+            reader,
+            meta,
+            state,
+        } = self;
 
-            let Some((at, entry)) = self.reader.next_entry()? else {
+        while !state.done {
+            let Some((at, entry)) = reader.next_entry()? else {
                 bail!(
                     "{} ends without a `#= end` line; the run that wrote it did not finish",
-                    self.file
+                    state.file
                 );
             };
-            self.line = at as u64;
+            state.line = at as u64;
 
-            let cells = match entry {
-                toil::Entry::Row(cells) => cells,
-                toil::Entry::Comment(_) => continue,
-                toil::Entry::Meta(row) => {
-                    match row.key() {
-                        "shard" => {
-                            let shard = row.get(0).unwrap_or_default().to_string();
-                            ensure!(
-                                self.seen.insert(shard.clone()),
-                                "{}:{} opens shard {shard:?} a second time",
-                                self.file,
-                                self.line
-                            );
-
-                            self.shard = shard;
-                            // a target lives in one shard, so the order starts
-                            // again at every block
-                            self.prev.clear();
-                        }
-                        "end" => {
-                            let count: u64 = row
-                                .get(0)
-                                .context("a `#= end` line wants a row count")?
-                                .parse()
-                                .with_context(|| format!("{}:{}", self.file, self.line))?;
-
-                            ensure!(
-                                count == self.rows,
-                                "{} says it holds {count} rows and holds {}",
-                                self.file,
-                                self.rows
-                            );
-
-                            self.done = true;
-                            return Ok(false);
-                        }
-                        other => bail!("{}:{} has a `#= {other}` line", self.file, self.line),
+            match entry {
+                toil::Entry::Comment(_) => {}
+                toil::Entry::Meta(row) => state.marker(&row)?,
+                toil::Entry::Row(cells) => {
+                    if cells.is_empty() {
+                        continue;
                     }
-                    continue;
+
+                    state.check(meta, &cells)?;
+                    state.rows += 1;
+
+                    f(&Row { cells, state })?;
                 }
-            };
-            if cells.is_empty() {
-                continue;
             }
-
-            self.buf.clear();
-            self.spans.clear();
-            for i in 0..cells.len() {
-                let start = self.buf.len();
-                self.buf
-                    .extend_from_slice(cells.field(i).expect("i is below the cell count"));
-                self.spans.push((start, self.buf.len()));
-            }
-
-            self.row()?;
-            self.rows += 1;
-
-            return Ok(true);
         }
+
+        Ok(())
+    }
+}
+
+impl State {
+    /// Take in a `#=` line between the rows: a block's marker or the trailer.
+    fn marker(&mut self, row: &toil::MetaRow) -> anyhow::Result<()> {
+        match row.key() {
+            "shard" => {
+                let shard = row.get(0).unwrap_or_default().to_string();
+                ensure!(
+                    self.seen.insert(shard.clone()),
+                    "{}:{} opens shard {shard:?} a second time",
+                    self.file,
+                    self.line
+                );
+
+                self.shard = shard;
+                // a target lives in one shard, so the order starts again at
+                // every block
+                self.prev.clear();
+            }
+            "end" => {
+                let count: u64 = row
+                    .get(0)
+                    .context("a `#= end` line wants a row count")?
+                    .parse()
+                    .with_context(|| format!("{}:{}", self.file, self.line))?;
+
+                ensure!(
+                    count == self.rows,
+                    "{} says it holds {count} rows and holds {}",
+                    self.file,
+                    self.rows
+                );
+
+                self.done = true;
+            }
+            other => bail!("{}:{} has a `#= {other}` line", self.file, self.line),
+        }
+
+        Ok(())
     }
 
-    /// Locate a row's fields and check it against what the file declared.
-    fn row(&mut self) -> anyhow::Result<()> {
+    /// Check a row against what the file declared.
+    fn check(&mut self, meta: &Meta, cells: &toil::Cells) -> anyhow::Result<()> {
         let layout = self
             .layout
             .as_ref()
@@ -244,55 +252,51 @@ impl<R: Read> Frame<R> {
 
         let want = layout.fields;
         ensure!(
-            self.spans.len() == want,
+            cells.len() == want,
             "{}:{} has {} fields, the header names {want}",
             self.file,
             self.line,
-            self.spans.len()
+            cells.len()
         );
 
-        {
-            let (start, end) = self.spans[layout.pass];
-            let pass = &self.buf[start..end];
+        let pass = field(cells, layout.pass);
+        ensure!(
+            pass.len() == meta.runs.len(),
+            "{}:{} has a pass string of {} for {} runs",
+            self.file,
+            self.line,
+            pass.len(),
+            meta.runs.len()
+        );
 
+        for (at, letter) in pass.iter().enumerate() {
+            // `-` is the one character that is not a tool's: it says the
+            // run's seeding never offered the pair, which is a different
+            // answer from the run having scored it badly
+            if *letter == b'-' {
+                continue;
+            }
+
+            let tool = Tool::of_letter(*letter);
             ensure!(
-                pass.len() == self.meta.runs.len(),
-                "{}:{} has a pass string of {} for {} runs",
+                tool == Some(meta.runs[at].tool),
+                "{}:{} has {:?} where run {} is {}",
                 self.file,
                 self.line,
-                pass.len(),
-                self.meta.runs.len()
+                *letter as char,
+                meta.runs[at].name,
+                meta.runs[at].tool
             );
-
-            for (at, letter) in pass.iter().enumerate() {
-                // `-` is the one character that is not a tool's: it says the
-                // run's seeding never offered the pair, which is a different
-                // answer from the run having scored it badly
-                if *letter == b'-' {
-                    continue;
-                }
-
-                let tool = Tool::of_letter(*letter);
-                ensure!(
-                    tool == Some(self.meta.runs[at].tool),
-                    "{}:{} has {:?} where run {} is {}",
-                    self.file,
-                    self.line,
-                    *letter as char,
-                    self.meta.runs[at].name,
-                    self.meta.runs[at].tool
-                );
-            }
         }
+
+        let (query, target) = (field(cells, 0), field(cells, 1));
 
         // the pair as `query\0target`, which orders as the pair does and costs
         // a copy of thirty bytes rather than two strings
-        let (query, target) = (self.spans[0], self.spans[1]);
-
         self.next.clear();
-        self.next.extend_from_slice(&self.buf[query.0..query.1]);
+        self.next.extend_from_slice(query);
         self.next.push(0);
-        self.next.extend_from_slice(&self.buf[target.0..target.1]);
+        self.next.extend_from_slice(target);
 
         if !self.prev.is_empty() {
             ensure!(
@@ -307,16 +311,30 @@ impl<R: Read> Frame<R> {
         std::mem::swap(&mut self.prev, &mut self.next);
         Ok(())
     }
+}
 
-    /// One field of the row in hand, by its place in the line.
-    pub fn field(&self, at: usize) -> &[u8] {
-        let (start, end) = self.spans[at];
-        &self.buf[start..end]
+/// Cell `at` of a row whose width has been checked against the layout.
+fn field<'a>(cells: &toil::Cells<'a>, at: usize) -> &'a [u8] {
+    cells
+        .field(at)
+        .expect("the row's width is checked against the layout")
+}
+
+impl<'a> Row<'a> {
+    /// One field of the row, by its place in the line.
+    pub fn field(&self, at: usize) -> &'a [u8] {
+        field(&self.cells, at)
     }
 
     /// One character per run, in the order `#= pass` names them.
-    pub fn pass(&self) -> &[u8] {
-        self.field(self.at().pass)
+    pub fn pass(&self) -> &'a [u8] {
+        let layout = self
+            .state
+            .layout
+            .as_ref()
+            .expect("a frame is given its layout before its first row");
+
+        self.field(layout.pass)
     }
 
     /// Whether one run reported this pair at or above its family's cutoff.
@@ -325,8 +343,14 @@ impl<R: Read> Frame<R> {
     }
 
     /// hmmer's domain scores, in the order the domtbl listed them.
-    pub fn domains(&self) -> impl Iterator<Item = f32> + '_ {
-        self.field(self.at().dom)
+    pub fn domains(&self) -> impl Iterator<Item = f32> + 'a {
+        let layout = self
+            .state
+            .layout
+            .as_ref()
+            .expect("a frame is given its layout before its first row");
+
+        self.field(layout.dom)
             .split(|byte| *byte == b',')
             .filter_map(super::scan::score)
     }
@@ -350,11 +374,5 @@ impl<R: Read> Frame<R> {
                 .count(),
             false => self.domains().count(),
         }
-    }
-
-    fn at(&self) -> &Layout {
-        self.layout
-            .as_ref()
-            .expect("a frame is given its layout before its first row")
     }
 }

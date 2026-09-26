@@ -99,14 +99,14 @@ pub fn stages(path: &Path, out: &Path) -> anyhow::Result<()> {
     let mut at: indexmap::IndexMap<String, Tally> = indexmap::IndexMap::new();
     let mut rows = 0u64;
 
-    while scores.step()? {
+    scores.each(|row| {
         rows += 1;
 
-        if !scores.row().passed(hmmer) {
-            continue;
+        if !row.row().passed(hmmer) {
+            return Ok(());
         }
 
-        let unit = scores.row().shard().to_string();
+        let unit = row.row().shard().to_string();
         let tally = at.entry(unit).or_insert_with(|| Tally::new(runs));
         tally.truth += 1;
 
@@ -118,18 +118,16 @@ pub fn stages(path: &Path, out: &Path) -> anyhow::Result<()> {
             // per run rather than per pair: a seeding sweep gives every arm
             // its own seed list, so whether the pair was ever offered is the
             // arm's answer and not the pipeline's
-            match (
-                scores.seeded(run),
-                scores.present(run),
-                scores.row().passed(run),
-            ) {
+            match (row.seeded(run), row.present(run), row.row().passed(run)) {
                 (false, _, _) => tally.lost_seed[run] += 1,
                 (_, false, _) => tally.lost_cloud_align[run] += 1,
                 (_, _, false) => tally.lost_cutoff[run] += 1,
                 (_, _, true) => tally.kept[run] += 1,
             }
         }
-    }
+
+        Ok(())
+    })?;
 
     ensure!(
         at.values().any(|t| t.truth > 0),

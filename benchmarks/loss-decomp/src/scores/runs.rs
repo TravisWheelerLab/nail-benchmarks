@@ -53,7 +53,7 @@ use util::ledger::{self, Ledger};
 use util::set::Set;
 
 use crate::scores::collect::{self, Job};
-use crate::scores::frame::{Frame, Layout, Verdict};
+use crate::scores::frame::{Frame, Layout, Row, Verdict};
 use crate::scores::shard::{Count, Pair, Scratch, Shard};
 use crate::scores::{Cutoffs, Meta, Named, Queries, runs};
 
@@ -350,15 +350,27 @@ impl<R: Read> Reader<R> {
         &self.frame.meta
     }
 
-    /// Advance to the next row. `false` at the end of the file.
-    pub fn step(&mut self) -> anyhow::Result<bool> {
-        self.frame.step()
+    /// Hand every row to `f` in file order, then check the trailer.
+    pub fn each(
+        &mut self,
+        mut f: impl FnMut(&RunsRow) -> anyhow::Result<()>,
+    ) -> anyhow::Result<()> {
+        let scores = self.scores;
+        self.frame.each(|row| f(&RunsRow { row, scores }))
     }
+}
 
-    /// The frame under this reader: every column but the scores and the seed
-    /// flag.
-    pub fn row(&self) -> &Frame<R> {
-        &self.frame
+/// One row of a runs table, read through its frame.
+pub struct RunsRow<'r, 'a> {
+    row: &'r Row<'a>,
+    /// Where the first run's score column sits.
+    scores: usize,
+}
+
+impl RunsRow<'_, '_> {
+    /// The frame's row: every column but the scores and the seed flag.
+    pub fn row(&self) -> &Row<'_> {
+        self.row
     }
 
     /// Whether the seeding this run replayed offered the pair.
@@ -367,7 +379,7 @@ impl<R: Read> Reader<R> {
     /// it, which is a different answer from a seeding that looked and did not
     /// find it, and the `.` is what carries that difference.
     pub fn seeded(&self, run: usize) -> bool {
-        self.frame.field(self.scores + run) != NEVER.as_bytes()
+        self.row.field(self.scores + run) != NEVER.as_bytes()
     }
 
     /// Whether one run reported the pair at all, at any score.
@@ -375,13 +387,13 @@ impl<R: Read> Reader<R> {
         // presence, not a cutoff: a pair that survived to be
         // scored badly was not dropped, which is the
         // distinction the stages is built on
-        super::scan::score(self.frame.field(self.scores + run)).is_some()
+        super::scan::score(self.row.field(self.scores + run)).is_some()
     }
 
     /// What one run scored the pair.
     #[cfg(test)]
     pub fn score(&self, run: usize) -> Option<f32> {
-        super::scan::score(self.frame.field(self.scores + run))
+        super::scan::score(self.row.field(self.scores + run))
     }
 }
 
@@ -446,60 +458,54 @@ gamma MGYP000000000003 .    .      28.0   1   28.0
         )
     }
 
+    /// What `f` makes of each row of `text`, in file order.
+    fn rows<T>(text: &str, f: impl Fn(&RunsRow) -> T) -> Vec<T> {
+        let mut reader = Reader::new(text.as_bytes(), "test").unwrap();
+        let mut out = Vec::new();
+        reader
+            .each(|row| {
+                out.push(f(row));
+                Ok(())
+            })
+            .unwrap();
+        out
+    }
+
     #[test]
     fn a_cell_keeps_its_own_score() {
-        let file = file();
-        let mut reader = Reader::new(file.as_bytes(), "test").unwrap();
-
-        assert!(reader.step().unwrap());
-
-        assert_eq!(reader.score(0), Some(24.0));
-        assert_eq!(reader.score(1), Some(25.0));
-        assert!(reader.present(0));
+        let rows = rows(&file(), |r| (r.score(0), r.score(1), r.present(0)));
+        assert_eq!(rows[0], (Some(24.0), Some(25.0), true));
     }
 
     #[test]
     fn the_checkpoints_are_told_apart() {
-        let file = file();
-        let mut reader = Reader::new(file.as_bytes(), "test").unwrap();
+        let rows = rows(&file(), |r| (r.seeded(0), r.present(0), r.seeded(2)));
+        assert_eq!(rows.len(), 3);
 
-        assert!(reader.step().unwrap());
-        assert!(reader.seeded(0));
-        assert!(reader.present(0));
+        assert!(rows[0].0 && rows[0].1);
 
         // seeded, and then lost between there and the table
-        assert!(reader.step().unwrap());
-        assert!(reader.seeded(0));
-        assert!(!reader.present(0));
+        assert!(rows[1].0 && !rows[1].1);
 
         // never seeded at all, which is a different loss. hmmer replayed no
         // seed list, so its own character is untouched
-        assert!(reader.step().unwrap());
-        assert!(!reader.seeded(0));
-        assert!(!reader.present(0));
-        assert!(reader.seeded(2));
-
-        assert!(!reader.step().unwrap());
+        assert!(!rows[2].0 && !rows[2].1 && rows[2].2);
     }
 
     #[test]
     fn a_run_clears_the_cutoff_on_its_score_alone() {
-        let file = file();
-        let mut reader = Reader::new(file.as_bytes(), "test").unwrap();
+        let rows = rows(&file(), |r| {
+            (r.row().passed(0), r.row().passed(1), r.row().passed(2))
+        });
 
         // alpha's cutoff is 24.5, so the cell's 24.0 is under it and the
         // full run's 25.0 is over. hmmer is held to nail's cutoff and its
         // 24.0 is under it too
-        assert!(reader.step().unwrap());
-        assert!(!reader.row().passed(0));
-        assert!(reader.row().passed(1));
-        assert!(!reader.row().passed(2));
+        assert_eq!(rows[0], (false, true, false));
 
         // a cell that reported nothing cleared nothing, whatever beta's
         // cutoff is
-        assert!(reader.step().unwrap());
-        assert!(!reader.row().passed(0));
-        assert!(reader.row().passed(2));
+        assert!(!rows[1].0 && rows[1].2);
     }
 
     #[test]
@@ -520,10 +526,7 @@ gamma MGYP000000000003 .    .      28.0   1   28.0
                 "gamma MGYP000000000003 -    -",
             );
 
-        let mut reader = Reader::new(text.as_bytes(), "test").unwrap();
-
-        assert!(reader.step().unwrap());
-        assert!(reader.seeded(0));
-        assert_eq!(reader.score(1), Some(25.0));
+        let rows = rows(&text, |r| (r.seeded(0), r.score(1)));
+        assert_eq!(rows[0], (true, Some(25.0)));
     }
 }

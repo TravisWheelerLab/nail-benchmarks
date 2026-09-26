@@ -70,16 +70,17 @@ beta MGYP000000000002 Nh 11.0   -      -   -
         let mut frame = open(text)?;
         let mut out = Vec::new();
 
-        while frame.step()? {
+        frame.each(|row| {
             out.push(format!(
                 "{} {} {} {} {}",
-                String::from_utf8_lossy(frame.field(0)),
-                String::from_utf8_lossy(frame.field(1)),
-                String::from_utf8_lossy(frame.pass()),
-                String::from_utf8_lossy(frame.field(SCORES)),
-                frame.domain_count(),
+                String::from_utf8_lossy(row.field(0)),
+                String::from_utf8_lossy(row.field(1)),
+                String::from_utf8_lossy(row.pass()),
+                String::from_utf8_lossy(row.field(SCORES)),
+                row.domain_count(),
             ));
-        }
+            Ok(())
+        })?;
 
         Ok(out)
     }
@@ -104,14 +105,15 @@ beta MGYP000000000002 Nh 11.0   -      -   -
     #[test]
     fn a_run_is_read_by_where_it_sits() {
         let mut frame = open(FILE).unwrap();
+        let mut passed = Vec::new();
+        frame
+            .each(|row| {
+                passed.push((row.passed(0), row.passed(1)));
+                Ok(())
+            })
+            .unwrap();
 
-        assert!(frame.step().unwrap());
-        assert!(frame.passed(0));
-        assert!(frame.passed(1));
-
-        assert!(frame.step().unwrap());
-        assert!(frame.passed(0));
-        assert!(!frame.passed(1));
+        assert_eq!(passed, [(true, true), (true, false)]);
     }
 
     /// Every way the file can be wrong that would otherwise be read as an
