@@ -1,0 +1,10 @@
+{
+  "slug": "housekeeping-2026-09",
+  "text": "A cleanup on 17 September reclaimed 484 GB (free 1.7 T to 2.2 T): every toy set (rebuild is under a second each), the 2.46 M cloud-search-real and loss-decomp-real sets, and 145 GB of tmp-claude. Kept: recall-real, the cutoffs-real draw, and the four cutoffs-sp-* sets with their runs and analyses.",
+  "created_at": "2026-09-28T19:04:03.353029228Z",
+  "updated_at": "2026-09-28T19:04:03.353029228Z",
+  "stamp": {
+    "commit": "e080da4",
+    "branch": "claude-refactor"
+  }
+}
