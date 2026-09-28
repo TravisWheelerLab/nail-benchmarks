@@ -1,0 +1,10 @@
+{
+  "slug": "watcher-pgrep",
+  "text": "A watcher loop must not pgrep -f for a pattern its own command line contains: the shell running the watch matches itself and the loop never ends. Three watchers leaked this way in one day, one spinning for 17 hours. Match on the process group or on a file the job writes.",
+  "created_at": "2026-09-28T19:03:20.234262384Z",
+  "updated_at": "2026-09-28T19:03:20.234262384Z",
+  "stamp": {
+    "commit": "e080da4",
+    "branch": "claude-refactor"
+  }
+}
