@@ -1,0 +1,28 @@
+{
+  "id": "nail-benchmarks-6a6a83",
+  "title": "delete the ladder shape and its build-set recipe",
+  "body": "util::set::shape declares ladder, nested rungs on both axes. Nothing builds one and nothing reads one since calibrate went, so it and its recipe in build-set are dead code.",
+  "type": "chore",
+  "status": "open",
+  "priority": 3,
+  "labels": [],
+  "parent": null,
+  "blocked_by": [],
+  "related": [],
+  "assignee": null,
+  "lease_expires": null,
+  "defer_until": null,
+  "created_at": "2026-09-28T19:02:30.266590113Z",
+  "updated_at": "2026-09-28T19:02:30.266590113Z",
+  "closed_at": null,
+  "close_reason": null,
+  "resolution": null,
+  "notes": [],
+  "stamps": {
+    "created": {
+      "commit": "e080da4",
+      "branch": "claude-refactor"
+    },
+    "closed": null
+  }
+}
