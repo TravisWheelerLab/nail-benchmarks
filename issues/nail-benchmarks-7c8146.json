@@ -1,0 +1,30 @@
+{
+  "id": "nail-benchmarks-7c8146",
+  "title": "time cutoffs --strategy fanout against union on MGnify recruits",
+  "body": "There is no usable cost model. nail's and mmseqs' runtimes do not scale linearly in target size, so estimating either arm by a per-comparison rate is wrong and any crossover derived that way is not to be trusted. Measured so far: fanout has a per-invocation floor of about 0.65 s seen on a four-family toy; the recruits come to 20,795 families, mean 5,427, max 221,046, 1.13e8 pairs, and the distinct-sequence count union scales with is not recorded. union is clearly right at SwissProt scale, where the pool caps near 570k; for MGnify it is unproven either way. --strategy auto stays unimplemented until this is measured; a rule of thumb is not a model.",
+  "type": "spike",
+  "status": "open",
+  "priority": 3,
+  "labels": [],
+  "parent": null,
+  "blocked_by": [
+    "nail-benchmarks-82984c"
+  ],
+  "related": [],
+  "assignee": null,
+  "lease_expires": null,
+  "defer_until": null,
+  "created_at": "2026-09-28T19:02:30.038192989Z",
+  "updated_at": "2026-09-28T19:02:30.038192989Z",
+  "closed_at": null,
+  "close_reason": null,
+  "resolution": null,
+  "notes": [],
+  "stamps": {
+    "created": {
+      "commit": "e080da4",
+      "branch": "claude-refactor"
+    },
+    "closed": null
+  }
+}
