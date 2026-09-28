@@ -1,0 +1,28 @@
+{
+  "id": "nail-benchmarks-7761c6",
+  "title": "thread-scaling: measure serial and parallel time per tool from outside, then shrink the set and run reps",
+  "body": "The real set is all of Pfam against 500,000 MGnify sequences, sized so that serial work does not dominate any point; one rep, no --reps. A one-off slow single-thread mmseqs run then skewed every efficiency point. The proposal is to measure each tool's serial and parallel time separately, from outside the tools, so the set can shrink a lot and reps become affordable. What survives either stance: a scaling point must not be dominated by fixed costs or by one noisy run, and the fix addresses the cause.",
+  "type": "task",
+  "status": "open",
+  "priority": 2,
+  "labels": [],
+  "parent": null,
+  "blocked_by": [],
+  "related": [],
+  "assignee": null,
+  "lease_expires": null,
+  "defer_until": null,
+  "created_at": "2026-09-28T19:02:29.773506264Z",
+  "updated_at": "2026-09-28T19:02:29.773506264Z",
+  "closed_at": null,
+  "close_reason": null,
+  "resolution": null,
+  "notes": [],
+  "stamps": {
+    "created": {
+      "commit": "e080da4",
+      "branch": "claude-refactor"
+    },
+    "closed": null
+  }
+}
