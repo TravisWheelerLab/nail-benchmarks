@@ -1,0 +1,28 @@
+{
+  "id": "nail-benchmarks-33f188",
+  "title": "does partial coverage of Pfam invalidate SwissProt cutoffs",
+  "body": "At full SwissProt 9,409 of 20,795 families get a cutoff and the count is still climbing steeply (5,567 at 100k, 7,662 at 250k) while the median barely moves (nail 11.3 at 10k to 14.8 at all, across a 57x pool). Either SwissProt is too small a decoy pool to cover Pfam, or a family that never recruits anything needs no cutoff and partial coverage is correct. Which holds decides whether SwissProt cutoffs are promotable or only a check on the MGnify ones.",
+  "type": "decision",
+  "status": "open",
+  "priority": 2,
+  "labels": [],
+  "parent": null,
+  "blocked_by": [],
+  "related": [],
+  "assignee": null,
+  "lease_expires": null,
+  "defer_until": null,
+  "created_at": "2026-09-28T19:02:29.983848262Z",
+  "updated_at": "2026-09-28T19:02:29.983848262Z",
+  "closed_at": null,
+  "close_reason": null,
+  "resolution": null,
+  "notes": [],
+  "stamps": {
+    "created": {
+      "commit": "e080da4",
+      "branch": "claude-refactor"
+    },
+    "closed": null
+  }
+}
