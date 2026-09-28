@@ -1,0 +1,28 @@
+{
+  "id": "nail-benchmarks-46f97d",
+  "title": "wire util::domains into MGnify recall and into pid",
+  "body": "util::domains ports classify_direct, the classifier behind the May 2026 MGnify multi-domain analysis. MGnify recall and pid are its two intended consumers and neither is wired to it. For MGnify, h_cut is nail's cutoff (nail_3 in data/mgy-cutoffs.tbl) held against hmmer's scores, for now: that table has no hmmer column, and the cutoffs.txt the May analysis read is gone. In pid, 9 of the 12 decoys inside hmmer.prf's 1% threshold score through several domains, and 126 of the top 500 do.",
+  "type": "task",
+  "status": "open",
+  "priority": 2,
+  "labels": [],
+  "parent": null,
+  "blocked_by": [],
+  "related": [],
+  "assignee": null,
+  "lease_expires": null,
+  "defer_until": null,
+  "created_at": "2026-09-28T19:02:29.748357067Z",
+  "updated_at": "2026-09-28T19:02:29.748357067Z",
+  "closed_at": null,
+  "close_reason": null,
+  "resolution": null,
+  "notes": [],
+  "stamps": {
+    "created": {
+      "commit": "e080da4",
+      "branch": "claude-refactor"
+    },
+    "closed": null
+  }
+}
