@@ -1,0 +1,28 @@
+{
+  "id": "nail-benchmarks-a4c108",
+  "title": "report nail's -a help text and the -a 0 panic upstream",
+  "body": "nail's args.rs reads 'allow at most N attempts to recover disjoint clouds', which describes N as retries on top of a first attempt. It is the total, including the first, so -a 0 asks for no attempt at all: the loop never runs, the results stay None, and nail hits an unreachable! at cloud_stage.rs:154 rather than erroring out. One attempt with no recovery is -a 1. This cost an overnight cloud-search run. 837ba60 made the give-up respect max_attempts (it was a hard-coded 4, so -a 10 behaved like -a 5); the wording and the panic remain.",
+  "type": "chore",
+  "status": "open",
+  "priority": 3,
+  "labels": [],
+  "parent": null,
+  "blocked_by": [],
+  "related": [],
+  "assignee": null,
+  "lease_expires": null,
+  "defer_until": null,
+  "created_at": "2026-09-28T19:02:30.152089295Z",
+  "updated_at": "2026-09-28T19:02:30.152089295Z",
+  "closed_at": null,
+  "close_reason": null,
+  "resolution": null,
+  "notes": [],
+  "stamps": {
+    "created": {
+      "commit": "e080da4",
+      "branch": "claude-refactor"
+    },
+    "closed": null
+  }
+}
