@@ -1,0 +1,28 @@
+{
+  "id": "nail-benchmarks-82bbc4",
+  "title": "move pid's score and cells subcommands out, or delete them",
+  "body": "pid measures recall against percent identity. parse score correlates two named nail runs' scores and parse cells scatters nail's cell fraction against query by target length; both answer other questions and carry their own readers and output formats. Work that answers a different question is a different benchmark, or a script, or nothing (REFACTOR.md, Scope).",
+  "type": "chore",
+  "status": "open",
+  "priority": 3,
+  "labels": [],
+  "parent": null,
+  "blocked_by": [],
+  "related": [],
+  "assignee": null,
+  "lease_expires": null,
+  "defer_until": null,
+  "created_at": "2026-09-28T19:02:30.353779178Z",
+  "updated_at": "2026-09-28T19:02:30.353779178Z",
+  "closed_at": null,
+  "close_reason": null,
+  "resolution": null,
+  "notes": [],
+  "stamps": {
+    "created": {
+      "commit": "e080da4",
+      "branch": "claude-refactor"
+    },
+    "closed": null
+  }
+}
