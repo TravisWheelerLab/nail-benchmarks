@@ -1,0 +1,10 @@
+{
+  "slug": "pid-judge-agreement",
+  "text": "pid's one hmmsearch judge, on the first real run, moved no nail, mmseqs, diamond or hmmer run's recall by more than 0.006 against the run's own tool judging it. Exceptions: blast.prf 0.4988 under its own judge and 0.3971 under hmmer; last.seq 0.0380 against 0.0346. Their best decoys fall in repeat and coiled-coil families (TPH, Eap1, Vitellogenin_N) hmmer's bias filter does not call.",
+  "created_at": "2026-09-28T19:03:57.917055871Z",
+  "updated_at": "2026-09-28T19:03:57.917055871Z",
+  "stamp": {
+    "commit": "e080da4",
+    "branch": "claude-refactor"
+  }
+}
