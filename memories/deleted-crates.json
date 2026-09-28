@@ -1,0 +1,10 @@
+{
+  "slug": "deleted-crates",
+  "text": "Git has what the tree does not: the store crate (store import made a run directory from a cluster run's .time files, with rename-old-results.sh for the older filenames; store clean removed a run), calibrate (fitted run cost over the ladder shape), compare-scores.py (held a scores.tbl against one in the older shape), and cloud-search's label over pid's split. Restore store when a cluster run next lands.",
+  "created_at": "2026-09-28T19:04:03.273945112Z",
+  "updated_at": "2026-09-28T19:04:03.273945112Z",
+  "stamp": {
+    "commit": "e080da4",
+    "branch": "claude-refactor"
+  }
+}
