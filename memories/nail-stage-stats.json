@@ -1,0 +1,10 @@
+{
+  "slug": "nail-stage-stats",
+  "text": "nail search -s prints a stage-time tree to stdout when the run ends: seeding (mmseqs) with prefilter, align, convertalis, seed index; alignment with memory init, hmm build, cloud search, forward, backward, posterior, optimal accuracy, traceback, null two, output (write), output (mutex). Wall clock via Instant, summed over pairs into whole-search totals; no per-pair times are printed. nail/src/stats.rs write_runtime formats it. The installed 0.7.1 has it.",
+  "created_at": "2026-09-28T19:55:02.841689785Z",
+  "updated_at": "2026-09-28T19:55:02.841689785Z",
+  "stamp": {
+    "commit": "f56673a",
+    "branch": "claude-refactor"
+  }
+}
