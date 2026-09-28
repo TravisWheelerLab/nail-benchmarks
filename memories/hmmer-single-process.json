@@ -1,0 +1,10 @@
+{
+  "slug": "hmmer-single-process",
+  "text": "A single hmmsearch --cpu 48 in cutoffs' union reject stage was a roughly 50x regression against splitting the query and batching the parts at --cpu 2. Every hmmer call here is batched that way.",
+  "created_at": "2026-09-28T19:03:57.735358862Z",
+  "updated_at": "2026-09-28T19:03:57.735358862Z",
+  "stamp": {
+    "commit": "e080da4",
+    "branch": "claude-refactor"
+  }
+}
