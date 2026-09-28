@@ -1,0 +1,28 @@
+{
+  "id": "nail-benchmarks-ca2698",
+  "title": "nail's internal stage times relative to each other",
+  "body": "Plan item d. Pure parsing work; needs no machine time until the runs exist.",
+  "type": "feature",
+  "status": "open",
+  "priority": 3,
+  "labels": [],
+  "parent": null,
+  "blocked_by": [],
+  "related": [],
+  "assignee": null,
+  "lease_expires": null,
+  "defer_until": null,
+  "created_at": "2026-09-28T19:02:30.096947015Z",
+  "updated_at": "2026-09-28T19:02:30.096947015Z",
+  "closed_at": null,
+  "close_reason": null,
+  "resolution": null,
+  "notes": [],
+  "stamps": {
+    "created": {
+      "commit": "e080da4",
+      "branch": "claude-refactor"
+    },
+    "closed": null
+  }
+}
