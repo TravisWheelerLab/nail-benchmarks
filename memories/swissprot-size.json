@@ -1,0 +1,10 @@
+{
+  "slug": "swissprot-size",
+  "text": "Swissprot holds 570,420 sequences in total, which is what sets the 500,000 a side of the cross sets: a target the size of most of its source is a sample of nothing.",
+  "created_at": "2026-09-28T19:03:57.894727799Z",
+  "updated_at": "2026-09-28T19:03:57.894727799Z",
+  "stamp": {
+    "commit": "e080da4",
+    "branch": "claude-refactor"
+  }
+}
