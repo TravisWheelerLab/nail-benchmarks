@@ -1,0 +1,28 @@
+{
+  "id": "nail-benchmarks-68e851",
+  "title": "a figure for loss-decomp's stages.tbl",
+  "body": "stages.tbl is one row per (unit, run) with a column per checkpoint: never seeded, seeded but absent from the table, scored below the family's cutoff, kept. Nothing draws it. A first attempt scattered wall clock against sensitivity and was rejected: this benchmark shows where in nail's pipeline the hits were lost, and a point per arm gives the total without saying which stage took it.",
+  "type": "feature",
+  "status": "open",
+  "priority": 2,
+  "labels": [],
+  "parent": null,
+  "blocked_by": [],
+  "related": [],
+  "assignee": null,
+  "lease_expires": null,
+  "defer_until": null,
+  "created_at": "2026-09-28T19:02:29.824997759Z",
+  "updated_at": "2026-09-28T19:02:29.824997759Z",
+  "closed_at": null,
+  "close_reason": null,
+  "resolution": null,
+  "notes": [],
+  "stamps": {
+    "created": {
+      "commit": "e080da4",
+      "branch": "claude-refactor"
+    },
+    "closed": null
+  }
+}
