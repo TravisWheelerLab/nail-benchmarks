@@ -1,0 +1,10 @@
+{
+  "slug": "cutoffs-scale",
+  "text": "data/mgy-cutoffs.tbl came from 20,795 families, mean 5,427 recruits, max 221,046, 1.13e8 (family, sequence) pairs. The count of distinct sequences those cover is not recorded and is what union scales with. fanout's per-invocation floor is about 0.65 s, seen on a four-family toy with a five-sequence target.",
+  "created_at": "2026-09-28T19:03:57.875104163Z",
+  "updated_at": "2026-09-28T19:03:57.875104163Z",
+  "stamp": {
+    "commit": "e080da4",
+    "branch": "claude-refactor"
+  }
+}
