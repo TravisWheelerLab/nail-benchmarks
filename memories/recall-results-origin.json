@@ -1,0 +1,10 @@
+{
+  "slug": "recall-results-origin",
+  "text": "The 3.4 TB of cluster results under sets/recall/ were moved there from benchmarks/mgy/ by inode-verified rename. Its ledger.tbl was written by the deleted store import from the .time files, and its set.tbl was reconstructed from the old harness's shard sizes; the #= imported line says so.",
+  "created_at": "2026-09-28T19:03:57.80514129Z",
+  "updated_at": "2026-09-28T19:03:57.80514129Z",
+  "stamp": {
+    "commit": "e080da4",
+    "branch": "claude-refactor"
+  }
+}
