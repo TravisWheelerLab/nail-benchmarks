@@ -1,6 +1,6 @@
 {
   "id": "nail-benchmarks-93a92d",
-  "title": "run shapes and analysis shapes, as REFACTOR.md proposes",
+  "title": "run shapes and analysis shapes beside the set shapes",
   "body": "Three stages, each with a small set of shapes a benchmark picks from. Only set shapes exist (util::set::shape). Run shapes: one pass, a seeding that several runs replay, or a named stage per pipeline. Analysis shapes: a matrix is one row per (query, target) with a value column per variant; a tally is one row per group with counters as columns. scores.tbl and runs.tbl are one matrix shape differing in whether a variant is a tool or a run; summary.tbl and stages.tbl are one tally shape differing in what they group by. A benchmark should describe its table rather than implement one, at a cost of one or two hundred lines rather than thousands. Shared code stays a format library that knows nothing about any benchmark's question.",
   "type": "feature",
   "status": "open",
@@ -13,7 +13,7 @@
   "lease_expires": null,
   "defer_until": null,
   "created_at": "2026-09-28T19:02:30.40598851Z",
-  "updated_at": "2026-09-28T19:22:23.995292946Z",
+  "updated_at": "2026-09-28T19:22:33.911941416Z",
   "closed_at": null,
   "close_reason": null,
   "resolution": null,
