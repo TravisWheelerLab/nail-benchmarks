@@ -1,0 +1,10 @@
+{
+  "slug": "mgnify-reversed-set",
+  "text": "The full reversed MGnify set for cutoffs is 501 G: 1000 shards of 2,455,940 sequences, 62.5 minutes to draw. The draw is one core doing syscalls, reversing and wrapping (99.3% of one core, 23 idle); the breakdown is on the streamed-read issue.",
+  "created_at": "2026-09-28T19:03:57.784006092Z",
+  "updated_at": "2026-09-28T19:03:57.784006092Z",
+  "stamp": {
+    "commit": "e080da4",
+    "branch": "claude-refactor"
+  }
+}
