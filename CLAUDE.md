@@ -79,11 +79,13 @@ benchmarks/cutoffs/       per-family score cutoffs from decoys    [reversed]
 benchmarks/long-seqs/     how the tools scale with length         [pairs]
 benchmarks/pid/           recall against percent identity          [profmark]
 benchmarks/thread-scaling/ wall clock against thread count      [cross]
+benchmarks/stage-times/   where nail's wall clock goes, by stage  [any]
 ```
 
 One binary per benchmark, and the shape in brackets is the set it reads.
-`cloud-search` and `loss-decomp` name no shape and would read any set with a
-query and a target; `cross` is what their labels build. One library sits under
+`cloud-search`, `loss-decomp` and `stage-times` name no shape and would read
+any set with a query and a target; `cross` is what the first two build, and
+`stage-times` builds a `cross` and a `profmark`. One library sits under
 them all, and one binary that belongs to no benchmark: `build-set` makes the
 sets.
 
@@ -771,6 +773,30 @@ draws wall clock and that percentage against threads into
 
 The split arm is `util::search::hmmer`, so its parts share one pool of N
 cores.
+
+## benchmarks/stage-times
+
+Where nail's wall clock goes, stage by stage, and how that changes with the
+input. One nail search per unit at the shared settings, with `-s` on, and no
+sweep: the labels are the inputs. `mgy` is a `cross` of all of Pfam against
+one recall shard's worth of MGnify, 2,455,940 sequences, and `pid` is the profmark set pid searches, drawn from
+the same split with the same parameters, each a set of its own under
+`sets/stage-times-<label>/`. Both run at 48 threads.
+
+`-s` makes nail print a stage tree to stdout when it finishes: two branches,
+seeding and alignment, each in wall clock, and under each the stages as leaves.
+michi discards stdout unless told where to put it, so `run` sends it to a
+`.stats` file beside the unit's hit table.
+
+The seeding leaves are wall, since each is one mmseqs invocation. The alignment
+leaves are each stage's time summed over every pair across every thread, and
+a leaf's percentage is its share of that sum. `parse` writes `stages.tbl`, one
+row per unit per stage with nail's seconds, that share, and the share times
+the branch's wall, which is the wall estimate the benchmark is for. It is
+exact when every thread is busy for the whole branch; idle time at a branch's
+tail is spread over the leaves in proportion rather than shown. `counts.tbl`
+carries the counts nail prints above the tree, and a `#= michi` line per unit
+carries what michi timed for the whole command.
 
 ## Formatting
 

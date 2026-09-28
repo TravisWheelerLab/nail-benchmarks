@@ -159,6 +159,56 @@ name = "mgnify"
 from = "../../data/mgnify"
 seqs = 500000
 
+# -------------------------------------------------------------- stage-times
+
+# Two sets, one per kind of input, searched once each so the relative cost of
+# nail's stages can be read across them. The pid labels draw from the same
+# split, with the same parameters, as pid's own.
+[stage-times-mgy-toy]
+shape = "cross"
+out   = "../../sets-toy/stage-times-mgy/inputs"
+
+[[stage-times-mgy-toy.queries]]
+name       = "pfam"
+hmm        = "../../data/pfam.hmm"
+alignments = "../../data/pfam.sto"
+fams       = 50
+
+[[stage-times-mgy-toy.targets]]
+name = "mgnify"
+from = "../../data/mgnify"
+seqs = 20000
+
+[stage-times-mgy]
+shape = "cross"
+out   = "../../sets/stage-times-mgy/inputs"
+
+[[stage-times-mgy.queries]]
+name       = "pfam"
+hmm        = "../../data/pfam.hmm"
+alignments = "../../data/pfam.sto"
+
+# one real recall shard, a thousandth of MGnify
+[[stage-times-mgy.targets]]
+name = "mgnify"
+from = "../../data/mgnify"
+seqs = 2455940
+
+[stage-times-pid-toy]
+shape      = "profmark"
+alignments = "../../data/pfam.sto"
+decoys     = "../../data/trembl.fa"
+split      = "../pid/profmark"
+out        = "../../sets-toy/stage-times-pid/inputs"
+pairs      = 200
+
+[stage-times-pid]
+shape      = "profmark"
+alignments = "../../data/pfam.sto"
+decoys     = "../../data/trembl.fa"
+split      = "../pid/profmark"
+out        = "../../sets/stage-times-pid/inputs"
+
 # ------------------------------------------------------------------ cutoffs
 
 # The same deal recall gets, written backwards. Reversing keeps a sequence's

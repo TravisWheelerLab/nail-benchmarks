@@ -1,0 +1,17 @@
+[package]
+name = "stage-times"
+version = "0.1.0"
+edition = "2024"
+
+[[bin]]
+name = "stage-times"
+path = "src/main.rs"
+
+[dependencies]
+michi = { workspace = true }
+serde = { workspace = true }
+toil = { workspace = true }
+util = { workspace = true }
+
+anyhow = { workspace = true }
+clap = { workspace = true }
