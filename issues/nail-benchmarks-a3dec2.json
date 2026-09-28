@@ -1,0 +1,28 @@
+{
+  "id": "nail-benchmarks-a3dec2",
+  "title": "audit the whole repository against the rules in CLAUDE.md, refining the rules as the audit goes",
+  "body": "CLAUDE.md now carries the refactoring rules that were in REFACTOR.md: what may be shared (consumers per item, no benchmark concept in a shared item, the envelope shared and never the flags, a tool's parameters with the benchmark that sweeps them), what a benchmark is (one question), structure (most nouns do not need a type, and the rest), and method (let the compiler find what is dead, prove a refactor by diffing bytes, work in the sandbox). They were written while taking pid from 2,002 lines to 1,626 and deleting the scores and search crates, and nothing else has been held to them yet. Go crate by crate: util, build-set, recall, cloud-search, loss-decomp, cutoffs, long-seqs, pid, thread-scaling. Each crate's audit is a child of this issue. The rules are expected to be refined and added to as the audit finds cases they do not settle; when a case does, change the rule in CLAUDE.md in the same commit as the code, and note here what changed and why. The existing issues on the ladder shape, feisty, pid's scripts, pid's score and cells subcommands, pid's three table readers, and run and analysis shapes are all cases of this audit.",
+  "type": "milestone",
+  "status": "open",
+  "priority": 2,
+  "labels": [],
+  "parent": null,
+  "blocked_by": [],
+  "related": [],
+  "assignee": null,
+  "lease_expires": null,
+  "defer_until": null,
+  "created_at": "2026-09-28T19:22:16.276807849Z",
+  "updated_at": "2026-09-28T19:22:16.276807849Z",
+  "closed_at": null,
+  "close_reason": null,
+  "resolution": null,
+  "notes": [],
+  "stamps": {
+    "created": {
+      "commit": "e080da4",
+      "branch": "claude-refactor"
+    },
+    "closed": null
+  }
+}
