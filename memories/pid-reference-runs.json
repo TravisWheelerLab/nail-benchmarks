@@ -1,0 +1,10 @@
+{
+  "slug": "pid-reference-runs",
+  "text": "Three pid runs were compared on 24 September over the same 11,187 true pairs: ANCIENT at ../old-nail-benchmarks/pct-id-benchmark, OLDCOPY (the pre-reversal code at ac252c2) run in tmp-claude/pid-old, and NEW. ANCIENT and OLDCOPY agree within 0.01 of recall at 1% FPR and 0.02 per identity bin, so the refactor moved nothing but the decoys and rejection.",
+  "created_at": "2026-09-28T19:03:57.967061662Z",
+  "updated_at": "2026-09-28T19:03:57.967061662Z",
+  "stamp": {
+    "commit": "e080da4",
+    "branch": "claude-refactor"
+  }
+}
