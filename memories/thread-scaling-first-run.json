@@ -1,0 +1,10 @@
+{
+  "slug": "thread-scaling-first-run",
+  "text": "The first real thread-scaling run gave each hmmer-split part a private 2-core lease on michi 0.1.0; its record is in tmp-claude/thread-scaling-michi-0.1/. At 48 threads hmmer-split reached 48% of perfect speedup on MGnify and 54% on Swissprot. An earlier 1,000-family set finished nail in 17.6 s at 48 threads, which is why the set grew to all of Pfam.",
+  "created_at": "2026-09-28T19:03:58.040288567Z",
+  "updated_at": "2026-09-28T19:03:58.040288567Z",
+  "stamp": {
+    "commit": "e080da4",
+    "branch": "claude-refactor"
+  }
+}
