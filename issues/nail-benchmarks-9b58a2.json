@@ -1,0 +1,28 @@
+{
+  "id": "nail-benchmarks-9b58a2",
+  "title": "delete the pre-attrib-fix and pre-deslop tags",
+  "body": "Both are local only and hold the states from before the thirteen-commit rewrite. claude-refactor is pushed and the remote matches it.",
+  "type": "chore",
+  "status": "open",
+  "priority": 4,
+  "labels": [],
+  "parent": null,
+  "blocked_by": [],
+  "related": [],
+  "assignee": null,
+  "lease_expires": null,
+  "defer_until": null,
+  "created_at": "2026-09-28T19:02:30.178800397Z",
+  "updated_at": "2026-09-28T19:02:30.178800397Z",
+  "closed_at": null,
+  "close_reason": null,
+  "resolution": null,
+  "notes": [],
+  "stamps": {
+    "created": {
+      "commit": "e080da4",
+      "branch": "claude-refactor"
+    },
+    "closed": null
+  }
+}
