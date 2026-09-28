@@ -1,0 +1,28 @@
+{
+  "id": "nail-benchmarks-4c0aef",
+  "title": "paths.toml files can drift out of agreement with nothing noticing",
+  "body": "",
+  "type": "task",
+  "status": "open",
+  "priority": 4,
+  "labels": [],
+  "parent": null,
+  "blocked_by": [],
+  "related": [],
+  "assignee": null,
+  "lease_expires": null,
+  "defer_until": null,
+  "created_at": "2026-09-28T19:02:30.232681593Z",
+  "updated_at": "2026-09-28T19:02:30.232681593Z",
+  "closed_at": null,
+  "close_reason": null,
+  "resolution": null,
+  "notes": [],
+  "stamps": {
+    "created": {
+      "commit": "e080da4",
+      "branch": "claude-refactor"
+    },
+    "closed": null
+  }
+}
