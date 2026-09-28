@@ -1,0 +1,10 @@
+{
+  "slug": "thread-scaling-michi-0-2-run",
+  "text": "thread-scaling re-run on michi 0.2.0, 26 September: one 48-core pool on node 0, parts sharing it, 332 steps, 5 h 26 m; a watcher sampling every 2 minutes saw no thread leave node 0. At 48 threads: hmmer-split 79% of perfect speedup on MGnify and 73% on Swissprot, mmseqs 70% and 69%, nail 48% and 50%, one hmmsearch 6%. The ladder stops at 48 because 96 told us nothing. The real set has since dropped its Swissprot side.",
+  "created_at": "2026-09-28T19:04:03.179625766Z",
+  "updated_at": "2026-09-28T19:04:03.179625766Z",
+  "stamp": {
+    "commit": "e080da4",
+    "branch": "claude-refactor"
+  }
+}
