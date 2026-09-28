@@ -1,0 +1,28 @@
+{
+  "id": "nail-benchmarks-a1be25",
+  "title": "decide whether cloud-search's summary follows stages in counting only pairs kept over the family cutoff",
+  "body": "stages counts a pair as found only if nail kept it over the family's cutoff. summary still counts what a run reported, and that is what the cloud-search heatmaps in sets/cloud-search/analysis/summary.tbl are drawn from; the real sweep at -a 5 and -a 1 was parsed under that definition. An earlier stages made the same mistake and read 0.9646 against 0.9103 for static-ms20000 on MGnify.",
+  "type": "decision",
+  "status": "open",
+  "priority": 2,
+  "labels": [],
+  "parent": null,
+  "blocked_by": [],
+  "related": [],
+  "assignee": null,
+  "lease_expires": null,
+  "defer_until": null,
+  "created_at": "2026-09-28T19:02:29.873001451Z",
+  "updated_at": "2026-09-28T19:02:29.873001451Z",
+  "closed_at": null,
+  "close_reason": null,
+  "resolution": null,
+  "notes": [],
+  "stamps": {
+    "created": {
+      "commit": "e080da4",
+      "branch": "claude-refactor"
+    },
+    "closed": null
+  }
+}
