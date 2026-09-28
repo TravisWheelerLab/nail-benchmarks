@@ -1,0 +1,28 @@
+{
+  "id": "nail-benchmarks-c0df99",
+  "title": "streamed sample_in_order in libsail for the read half of build-set's draw",
+  "body": "The full reversed MGnify draw is one core doing syscalls, reversing and line wrapping: 99.3% of one core, 23 idle, 351,432,857 reads for 42.8 GB (one indexed pread per record, about 122 bytes apiece) and 36,310 writes for 39.9 GB, 99% of reads out of page cache. Per record about 0.69 us of pread and 0.69 us of reverse-and-format. The write side is done: deal reads a batch of 16,384 records on one thread, rayon reverses and wraps the batch, results append per shard in batch order, bytes identical to the serial deal. Parallel format alone is 1.9x, a streamed read alone 1.75x, both about 10x (about 6 minutes), at which point 529 GB in six minutes, 1.6 GB/s, is likely the next wall. Framing records off a Read is format knowledge and belongs in libsail; parallel fetching does not, since a library picking its own thread pool fights a caller that pins cores. The most libsail should take is feature-gated IndexedParallelIterator impls. Never parallelise the reads by index: it means reimplementing the draw outside sample_in_order, and one code path for the full draw and the subsample is worth more than the speed.",
+  "type": "task",
+  "status": "open",
+  "priority": 3,
+  "labels": [],
+  "parent": null,
+  "blocked_by": [],
+  "related": [],
+  "assignee": null,
+  "lease_expires": null,
+  "defer_until": null,
+  "created_at": "2026-09-28T19:02:30.124754441Z",
+  "updated_at": "2026-09-28T19:02:30.124754441Z",
+  "closed_at": null,
+  "close_reason": null,
+  "resolution": null,
+  "notes": [],
+  "stamps": {
+    "created": {
+      "commit": "e080da4",
+      "branch": "claude-refactor"
+    },
+    "closed": null
+  }
+}
