@@ -1,0 +1,10 @@
+{
+  "slug": "loss-decomp-hmmer",
+  "text": "In loss-decomp hmmer runs once outside the sweep because the truth set is the same for every arm and is most of the wall clock: 59 minutes of a 68-minute run against 8 minutes an arm, on the 2,455,939-sequence set both real labels carried before they dropped to 500,000. The twelve-arm real run took 130 minutes over 103 steps.",
+  "created_at": "2026-09-28T19:04:03.205013258Z",
+  "updated_at": "2026-09-28T19:04:03.205013258Z",
+  "stamp": {
+    "commit": "e080da4",
+    "branch": "claude-refactor"
+  }
+}
