@@ -1,0 +1,10 @@
+{
+  "slug": "cloud-search-real",
+  "text": "The real cloud-search sweep at -a 5 and -a 1 ran from 19:14 on 17 September: 383 steps over two units at about 47 s a step, five hours against the 3-4 estimated. Its summary.tbl counts what each run reported, not what cleared the cutoff.",
+  "created_at": "2026-09-28T19:04:03.22779082Z",
+  "updated_at": "2026-09-28T19:04:03.22779082Z",
+  "stamp": {
+    "commit": "e080da4",
+    "branch": "claude-refactor"
+  }
+}
