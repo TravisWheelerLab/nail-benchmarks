@@ -1,0 +1,10 @@
+{
+  "slug": "plotting-venv",
+  "text": "uv is at ~/.local/bin. The plotting venv is tmp-claude/venv, built with uv venv and carrying matplotlib and numpy. An earlier one under tmp-claude/overnight/venv went in a cleanup, which is why nothing could draw a figure for a while.",
+  "created_at": "2026-09-28T19:03:20.151238638Z",
+  "updated_at": "2026-09-28T19:03:20.151238638Z",
+  "stamp": {
+    "commit": "e080da4",
+    "branch": "claude-refactor"
+  }
+}
