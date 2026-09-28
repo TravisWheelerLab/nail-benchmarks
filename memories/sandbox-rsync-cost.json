@@ -1,0 +1,10 @@
+{
+  "slug": "sandbox-rsync-cost",
+  "text": "Dropping a single exclude line from the sandbox rsync recipe once copied sets/recall/ into the sandbox, about 3.5 TB, and took the home filesystem to 84% full.",
+  "created_at": "2026-09-28T19:04:03.301806453Z",
+  "updated_at": "2026-09-28T19:04:03.301806453Z",
+  "stamp": {
+    "commit": "e080da4",
+    "branch": "claude-refactor"
+  }
+}
