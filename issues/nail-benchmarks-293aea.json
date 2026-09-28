@@ -1,0 +1,30 @@
+{
+  "id": "nail-benchmarks-293aea",
+  "title": "cutoffs per-decoy table, one row per recruit",
+  "body": "A row per decoy rather than per pair: 42,195 distinct recruits against 11,224 families at sp-all, so about 42k rows and cheap. What goes in a row (which family recruited it, at what score, whether it was rejected) waits until the MGnify cutoff scale can be seen beside SwissProt's.",
+  "type": "feature",
+  "status": "open",
+  "priority": 3,
+  "labels": [],
+  "parent": null,
+  "blocked_by": [
+    "nail-benchmarks-82984c"
+  ],
+  "related": [],
+  "assignee": null,
+  "lease_expires": null,
+  "defer_until": null,
+  "created_at": "2026-09-28T19:02:30.065361291Z",
+  "updated_at": "2026-09-28T19:02:30.065361291Z",
+  "closed_at": null,
+  "close_reason": null,
+  "resolution": null,
+  "notes": [],
+  "stamps": {
+    "created": {
+      "commit": "e080da4",
+      "branch": "claude-refactor"
+    },
+    "closed": null
+  }
+}
