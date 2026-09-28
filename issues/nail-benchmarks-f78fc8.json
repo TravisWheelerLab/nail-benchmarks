@@ -1,0 +1,28 @@
+{
+  "id": "nail-benchmarks-f78fc8",
+  "title": "a CLAUDE.md per crate: move the single-crate sections out of the root file",
+  "body": "The root CLAUDE.md has a section per benchmark (cutoffs, pid, long-seqs, thread-scaling) and one for the three Pfam-against-MGnify benchmarks. A crate's own CLAUDE.md, read only when working in that crate, would hold what applies to that crate alone. Measured today: of 853 lines, about 270 are single-crate (cutoffs 100, pid 51, thread-scaling 29, long-seqs 12, and the recall/cloud-search/loss-decomp block at 81), and the rest is repo-wide: layout, shapes, paths.toml, util, the sandbox recipe, what is tracked. So less moves than it looks. The cutoffs rejection rule and the naming are the one block that should stay visible from the root, since a reader of any benchmark can wander into decoys.",
+  "type": "chore",
+  "status": "open",
+  "priority": 3,
+  "labels": [],
+  "parent": null,
+  "blocked_by": [],
+  "related": [],
+  "assignee": null,
+  "lease_expires": null,
+  "defer_until": null,
+  "created_at": "2026-09-28T19:36:24.017958133Z",
+  "updated_at": "2026-09-28T19:36:24.017958133Z",
+  "closed_at": null,
+  "close_reason": null,
+  "resolution": null,
+  "notes": [],
+  "stamps": {
+    "created": {
+      "commit": "e080da4",
+      "branch": "claude-refactor"
+    },
+    "closed": null
+  }
+}
