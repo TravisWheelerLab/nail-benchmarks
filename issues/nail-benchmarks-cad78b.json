@@ -1,0 +1,30 @@
+{
+  "id": "nail-benchmarks-cad78b",
+  "title": "does recruit need mmseqs at all: count whether the mmseqs-only pairs concentrate in families that would lose their null",
+  "body": "Answer it on MGnify over the 1000 shards, not on Swissprot: a bucket measured against 570k curated proteins says little about 2.4 billion metagenomic fragments. The four cutoffs-sp-* sets still hold their recruit tables and can be counted in minutes as a check.",
+  "type": "spike",
+  "status": "open",
+  "priority": 2,
+  "labels": [],
+  "parent": null,
+  "blocked_by": [
+    "nail-benchmarks-82984c"
+  ],
+  "related": [],
+  "assignee": null,
+  "lease_expires": null,
+  "defer_until": null,
+  "created_at": "2026-09-28T19:02:29.934675012Z",
+  "updated_at": "2026-09-28T19:02:29.934675012Z",
+  "closed_at": null,
+  "close_reason": null,
+  "resolution": null,
+  "notes": [],
+  "stamps": {
+    "created": {
+      "commit": "e080da4",
+      "branch": "claude-refactor"
+    },
+    "closed": null
+  }
+}
