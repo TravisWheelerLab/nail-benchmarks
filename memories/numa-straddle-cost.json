@@ -1,0 +1,10 @@
+{
+  "slug": "numa-straddle-cost",
+  "text": "Straddling both NUMA nodes costs about 2% for a 32-core lease, and numactl --membind on top of single-node pinning buys nothing. At two cpus apiece, private leases cost hmmer 1.5-1.6x and straddling another 15%. michi 0.2.0's node-aware leases closed this. The probe's REPORT.md is in tmp-claude; its 136 GB of raw output was deleted.",
+  "created_at": "2026-09-28T19:03:57.761560296Z",
+  "updated_at": "2026-09-28T19:03:57.761560296Z",
+  "stamp": {
+    "commit": "e080da4",
+    "branch": "claude-refactor"
+  }
+}
