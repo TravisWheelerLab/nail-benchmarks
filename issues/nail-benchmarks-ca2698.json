@@ -13,11 +13,19 @@
   "lease_expires": "2026-09-28T20:08:08.571641896Z",
   "defer_until": null,
   "created_at": "2026-09-28T19:02:30.096947015Z",
-  "updated_at": "2026-09-28T19:53:08.571641896Z",
+  "updated_at": "2026-09-28T20:53:00.583840993Z",
   "closed_at": null,
   "close_reason": null,
   "resolution": null,
-  "notes": [],
+  "notes": [
+    {
+      "at": "2026-09-28T20:53:00.583840091Z",
+      "author": "jackroddy/01dd6c44",
+      "text": "Built benchmarks/stage-times: run and parse over two labels, mgy (cross, Pfam against 500k MGnify) and pid (the profmark set at pid's parameters), each with a toy. nail runs once per unit with -s and stdout kept in results/nail.<unit>.stats. parse writes stages.tbl (unit, parent, stage, secs, share, wall) where a leaf's wall is its share of its branch's wall, per Jack's approximation, and counts.tbl. Both toys run end to end in the sandbox with hits. No plot yet; the figure is meant to put the two labels side by side. Real runs not yet done.",
+      "commit": "f56673a",
+      "branch": "claude-refactor"
+    }
+  ],
   "stamps": {
     "created": {
       "commit": "e080da4",
