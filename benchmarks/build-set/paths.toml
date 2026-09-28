@@ -126,11 +126,10 @@ seqs = 500000
 
 # ----------------------------------------------------------- thread-scaling
 
-# Two units, Pfam against MGnify and against Swissprot, each searched at every
-# thread count. The real set's `fams` is sized off one-core hmmsearch, which
-# ran 50 families against all of Swissprot in 111.5 s, about 0.0109 s per
-# family per million residues. At 1,000 families that is about 17 minutes
-# against MGnify's 96 million residues and 33 against Swissprot's 180.
+# One unit, all of Pfam against 500,000 MGnify sequences. At 1,000 families
+# nail ran 17.6 s at 48 threads, about 9 s of it serial, so the curve measured
+# that floor. One-core hmmsearch did 0.0109 s per family per million residues
+# against Swissprot, which puts its one-core point here at about 6 hours a rep.
 [thread-scaling-toy]
 shape = "cross"
 out   = "../../sets-toy/thread-scaling/inputs"
@@ -146,11 +145,6 @@ name = "mgnify"
 from = "../../data/mgnify"
 seqs = 20000
 
-[[thread-scaling-toy.targets]]
-name = "swissprot"
-from = "../../data/swissprot.fa"
-seqs = 20000
-
 [thread-scaling-real]
 shape = "cross"
 out   = "../../sets/thread-scaling/inputs"
@@ -159,16 +153,10 @@ out   = "../../sets/thread-scaling/inputs"
 name       = "pfam"
 hmm        = "../../data/pfam.hmm"
 alignments = "../../data/pfam.sto"
-fams       = 1000
 
 [[thread-scaling-real.targets]]
 name = "mgnify"
 from = "../../data/mgnify"
-seqs = 500000
-
-[[thread-scaling-real.targets]]
-name = "swissprot"
-from = "../../data/swissprot.fa"
 seqs = 500000
 
 # ------------------------------------------------------------------ cutoffs
