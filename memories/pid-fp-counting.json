@@ -1,0 +1,10 @@
+{
+  "slug": "pid-fp-counting",
+  "text": "pid parse counts a false positive once per true pair of the query that found it, so a profile query's decoy hit fills up to 10 slots. The 1% threshold is the 114th slot, so in profile mode about a dozen strong decoys set it. This is the pre-refactor design (util/rust/bm/src/bin/pid-parse.rs at f7f6056^), kept on purpose.",
+  "created_at": "2026-09-28T19:03:58.019726754Z",
+  "updated_at": "2026-09-28T19:03:58.019726754Z",
+  "stamp": {
+    "commit": "e080da4",
+    "branch": "claude-refactor"
+  }
+}
