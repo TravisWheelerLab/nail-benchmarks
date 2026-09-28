@@ -1,0 +1,10 @@
+{
+  "slug": "pid-reversed-decoy-effect",
+  "text": "Reversed TrEMBL decoys with one hmmer judge lowered recall at 1% FPR for hmmer.prf (.702 to .600), blast.prf (.612 to .477) and hmmer.seq (.453 to .368). A few strong reversed decoys that only hmmsearch, phmmer and psiblast report set the profile runs' thresholds, each resting on about a dozen slots. The report is reports/pid-2026-09-24/: figures, decoys.tbl, singles.tbl, and a pairs/ directory per decoy.",
+  "created_at": "2026-09-28T19:03:57.992636512Z",
+  "updated_at": "2026-09-28T19:03:57.992636512Z",
+  "stamp": {
+    "commit": "e080da4",
+    "branch": "claude-refactor"
+  }
+}
