@@ -1,0 +1,10 @@
+{
+  "slug": "nail-build",
+  "text": "The installed nail is a dev build, 0.7.1 5cb74e013f58, from /home/jack/nail at 837ba60 (tools/installed.tbl). The binary the pinned tarball installed on 17 September is preserved at tmp-claude/nail-0.7.1-asinstalled (52324a24dcdb); it was not a clean build of the tag the Makefile names and cannot be rebuilt from it.",
+  "created_at": "2026-09-28T19:03:20.127296786Z",
+  "updated_at": "2026-09-28T19:03:20.127296786Z",
+  "stamp": {
+    "commit": "e080da4",
+    "branch": "claude-refactor"
+  }
+}
