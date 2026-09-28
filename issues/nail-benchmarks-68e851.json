@@ -13,11 +13,19 @@
   "lease_expires": null,
   "defer_until": null,
   "created_at": "2026-09-28T19:02:29.824997759Z",
-  "updated_at": "2026-09-28T19:02:29.824997759Z",
+  "updated_at": "2026-09-28T19:02:29.849352858Z",
   "closed_at": null,
   "close_reason": null,
   "resolution": null,
-  "notes": [],
+  "notes": [
+    {
+      "at": "2026-09-28T19:02:29.84935172Z",
+      "author": "jackroddy/01dd6c44",
+      "text": "Real results, twelve arms over two corpora, 130 minutes, 103 steps, 0 failed. Five of the twelve (seed / align / cutoff / sens): MGnify 472,845 truth: static-ms200 169,510 / 7 / 7,987 / 0.6246; static-ms2000 30,688 / 27 / 23,366 / 0.8856; static-ms20000 16,713 / 33 / 25,689 / 0.9103; prog-n800-f.001 17,257 / 32 / 25,615 / 0.9093; prog-n50-f0.1 25,949 / 23 / 23,725 / 0.8949. Swissprot 1,001,825 truth: 514,136 / 10 / 11,200 / 0.4756; 92,645 / 80 / 44,867 / 0.8627; 45,314 / 100 / 53,493 / 0.9013; 45,046 / 107 / 53,675 / 0.9014; 59,735 / 76 / 49,055 / 0.8913. The cutoff loss grows as the seeding opens up and ends up the larger of the two in 9 of MGnify's 12 arms and 7 of Swissprot's. lost_align is 7 to 107 in every arm, so cloud search and alignment lose nothing worth drawing. The corpora differ most where seeding is tightest: 14.9 points at ms200, 0.9 by ms20000.",
+      "commit": "e080da4",
+      "branch": "claude-refactor"
+    }
+  ],
   "stamps": {
     "created": {
       "commit": "e080da4",
