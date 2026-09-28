@@ -1,0 +1,10 @@
+{
+  "slug": "hmmer-pool-numbers",
+  "text": "A --cpu 2 hmmsearch keeps about 2.7 cpus busy (a master and two workers). On michi 0.1.0's private 2-core leases a batch ran 1.5-1.6x slower than the same batch sharing one pool: a job's threads leave its private cpus idle when one stalls, and on 48 cpus with 24 jobs only 34 did work. That is why util::search::hmmer gives its batch one pool and its parts no cores. The isolated probe is in tmp-claude/hmmprobe/.",
+  "created_at": "2026-09-28T19:03:57.71042778Z",
+  "updated_at": "2026-09-28T19:03:57.71042778Z",
+  "stamp": {
+    "commit": "e080da4",
+    "branch": "claude-refactor"
+  }
+}
