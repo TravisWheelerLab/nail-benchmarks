@@ -1,0 +1,28 @@
+{
+  "id": "nail-benchmarks-a762cd",
+  "title": "fix cutoffs rejection comparing E-values across databases of different sizes",
+  "body": "cutoffs rejects a recruit when the same tool's search of its original reports E <= 1e-3 (cutoffs/src/main.rs, the reject stage). No search in cutoffs or util::search fixes a database size, and an E-value scales with the size of the file searched, so the bar a pair has to clear depends on how many sequences were searched beside it. Under fanout each family searches its own recruits, so its bar moves with its recruit count (MGnify mean 5,427, max 221,046). union searches the whole pool, so switching strategy moves every family's bar and one pair can be rejected under one and kept under the other. Searching a small file makes rejection easy; over-rejecting removes genuine high-scoring decoys from a family's null and lowers its cutoff. Nobody has measured how far this moved anything. Until it is fixed and re-run, data/mgy-cutoffs.tbl and the SwissProt sweep are suspect. pid does not have this problem: its one judge searches at -Z equal to target.fa's size. The candidate fix is the same, -Z fixed to the size the cutoff will be applied at, for every tool that takes one.",
+  "type": "bug",
+  "status": "open",
+  "priority": 1,
+  "labels": [],
+  "parent": null,
+  "blocked_by": [],
+  "related": [],
+  "assignee": null,
+  "lease_expires": null,
+  "defer_until": null,
+  "created_at": "2026-09-28T19:01:13.39603822Z",
+  "updated_at": "2026-09-28T19:01:13.39603822Z",
+  "closed_at": null,
+  "close_reason": null,
+  "resolution": null,
+  "notes": [],
+  "stamps": {
+    "created": {
+      "commit": "e080da4",
+      "branch": "claude-refactor"
+    },
+    "closed": null
+  }
+}
