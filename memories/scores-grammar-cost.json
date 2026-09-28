@@ -1,0 +1,10 @@
+{
+  "slug": "scores-grammar-cost",
+  "text": "recall's scores.tbl has one score column per tool plus a pass string because an earlier grammar with a column per run wrote 700 GB: six runs over a thousand shards is four billion rows. A cloud-search figure scattering every cell in wall time against sensitivity was deleted as unreadable.",
+  "created_at": "2026-09-28T19:04:03.330525163Z",
+  "updated_at": "2026-09-28T19:04:03.330525163Z",
+  "stamp": {
+    "commit": "e080da4",
+    "branch": "claude-refactor"
+  }
+}
