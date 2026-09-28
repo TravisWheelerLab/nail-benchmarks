@@ -1,0 +1,28 @@
+{
+  "id": "nail-benchmarks-d898cf",
+  "title": "reversal-recruit as a build-set shape",
+  "body": "The pure fix for the cutoffs decoy pool being produced rather than built. Blocked on build-set having to run searches before it could place, which the cross work does not change. A sampling proposal for libsail sits in tmp-claude/libsail-sampling-proposal.md.",
+  "type": "feature",
+  "status": "open",
+  "priority": 4,
+  "labels": [],
+  "parent": null,
+  "blocked_by": [],
+  "related": [],
+  "assignee": null,
+  "lease_expires": null,
+  "defer_until": null,
+  "created_at": "2026-09-28T19:02:30.205108596Z",
+  "updated_at": "2026-09-28T19:02:30.205108596Z",
+  "closed_at": null,
+  "close_reason": null,
+  "resolution": null,
+  "notes": [],
+  "stamps": {
+    "created": {
+      "commit": "e080da4",
+      "branch": "claude-refactor"
+    },
+    "closed": null
+  }
+}
