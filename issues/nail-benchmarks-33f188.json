@@ -13,11 +13,19 @@
   "lease_expires": null,
   "defer_until": null,
   "created_at": "2026-09-28T19:02:29.983848262Z",
-  "updated_at": "2026-09-28T19:02:29.983848262Z",
+  "updated_at": "2026-09-28T19:02:30.014228161Z",
   "closed_at": null,
   "close_reason": null,
   "resolution": null,
-  "notes": [],
+  "notes": [
+    {
+      "at": "2026-09-28T19:02:30.014226197Z",
+      "author": "jackroddy/01dd6c44",
+      "text": "The SwissProt sweep, four pool sizes under --strategy union, 54.5 minutes for all four (families / nail / mmseqs / hmmer / median cutoff nail,mmseqs,hmmer): sp-10k 1715 / 1292 / 1071 / 620 / 11.3,24.0,13.6; sp-100k 5567 / 4431 / 3124 / 3212 / 13.2,26.0,14.1; sp-250k 7662 / 6419 / 4098 / 5306 / 14.0,27.0,14.5; sp-all 9409 / 8184 / 4811 / 7544 / 14.8,28.0,14.9. Wall clock after the hmmer batching fix: 315, 624, 937, 1395 s. Before it 100k and 250k took 1955 and 3066 s and sp-all never finished.",
+      "commit": "e080da4",
+      "branch": "claude-refactor"
+    }
+  ],
   "stamps": {
     "created": {
       "commit": "e080da4",
