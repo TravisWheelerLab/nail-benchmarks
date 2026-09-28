@@ -1,0 +1,10 @@
+{
+  "slug": "mmseqs-bare-accession",
+  "text": "mmseqs reports a bare accession where the fasta and nail report the piped name. cutoffs' recruit-map filter keys both spellings; before that, union mode silently dropped every mmseqs hit. union agrees with fanout byte for byte on the toy.",
+  "created_at": "2026-09-28T19:03:57.854689383Z",
+  "updated_at": "2026-09-28T19:03:57.854689383Z",
+  "stamp": {
+    "commit": "e080da4",
+    "branch": "claude-refactor"
+  }
+}
