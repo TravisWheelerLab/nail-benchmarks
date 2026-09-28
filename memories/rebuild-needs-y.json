@@ -1,0 +1,10 @@
+{
+  "slug": "rebuild-needs-y",
+  "text": "build-set --rebuild prints what is about to go and waits for a y before removing the old set. Launched detached without one it blocks forever; that cost 41 minutes once. Pipe echo y into any unattended rebuild.",
+  "created_at": "2026-09-28T19:03:20.208716725Z",
+  "updated_at": "2026-09-28T19:03:20.208716725Z",
+  "stamp": {
+    "commit": "e080da4",
+    "branch": "claude-refactor"
+  }
+}
