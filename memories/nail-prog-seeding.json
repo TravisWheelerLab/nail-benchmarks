@@ -1,0 +1,10 @@
+{
+  "slug": "nail-prog-seeding",
+  "text": "nail --seed-mode prog (seed_stage.rs seed_progressive): one mmseqs prefilter at -s, then a loop of mmseqs align calls, one per round, each over a sliced prefilter db holding the next n_take hits of every still-active query; n_take starts at --prog-n and doubles; a query stops at max_seeds hits or when hits/n_take < --prog-f. Then nail merges the round align dbs and runs one convertalis. Every mmseqs call is a child process with --threads = nail's -t. static is prefilter, align, convertalis once each.",
+  "created_at": "2026-09-28T22:31:06.547049901Z",
+  "updated_at": "2026-09-28T22:31:06.547049901Z",
+  "stamp": {
+    "commit": "401f26d",
+    "branch": "claude-refactor"
+  }
+}
