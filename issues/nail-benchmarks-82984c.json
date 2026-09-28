@@ -1,0 +1,30 @@
+{
+  "id": "nail-benchmarks-82984c",
+  "title": "finish the MGnify cutoffs run: gather, reject and learn have never run",
+  "body": "The MGnify reversed set was drawn (501 G, 1000 shards, 2,455,940 sequences a shard, 62.5 minutes) and recruit ran over 100 of the 1000 shards before it was stopped deliberately. Those 200 tables are in sets/cutoffs/outputs/recruit/results/. gather, reject and learn have not run on MGnify at all. data/mgy-cutoffs.tbl is from an earlier harness.",
+  "type": "task",
+  "status": "open",
+  "priority": 2,
+  "labels": [],
+  "parent": null,
+  "blocked_by": [
+    "nail-benchmarks-a762cd"
+  ],
+  "related": [],
+  "assignee": null,
+  "lease_expires": null,
+  "defer_until": null,
+  "created_at": "2026-09-28T19:02:29.649550227Z",
+  "updated_at": "2026-09-28T19:02:29.649550227Z",
+  "closed_at": null,
+  "close_reason": null,
+  "resolution": null,
+  "notes": [],
+  "stamps": {
+    "created": {
+      "commit": "e080da4",
+      "branch": "claude-refactor"
+    },
+    "closed": null
+  }
+}
