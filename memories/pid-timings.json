@@ -1,0 +1,10 @@
+{
+  "slug": "pid-timings",
+  "text": "pid's judge is one search: 152 s over 1.1 million originals at 96 cores. Drawing the profmark split costs about a minute with create-profmark --onlysplit. The toy's assembly after it takes about 22 s, most of it drawing 80,000 of TrEMBL's 149.4 million sequences to thin to 20,000 length-matched decoys.",
+  "created_at": "2026-09-28T19:03:57.942255242Z",
+  "updated_at": "2026-09-28T19:03:57.942255242Z",
+  "stamp": {
+    "commit": "e080da4",
+    "branch": "claude-refactor"
+  }
+}
