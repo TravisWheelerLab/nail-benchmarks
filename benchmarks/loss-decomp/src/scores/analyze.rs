@@ -88,8 +88,8 @@ pub fn stages(path: &Path, out: &Path) -> anyhow::Result<()> {
     let runs = scores.meta().runs.len();
 
     ensure!(
-        !scores.meta().seeds.is_empty(),
-        "this pipeline kept no seeds, so there is no seeding checkpoint to split on"
+        scores.meta().runs.iter().any(|run| run.seeds.is_some()),
+        "no run kept its seed list, so there is no seeding checkpoint to split on"
     );
 
     // per unit as well as per run. A `cross` set searches one query against

@@ -1,9 +1,9 @@
 //! Which stage of the nail pipeline drops the hits hmmer finds.
 //!
-//! Seeds once, runs hmmer, then runs nail once at its defaults.
-//! There is no grid here the way there is in cloud-search: this isn't asking
-//! how a knob trades off, it's asking where a single default run loses hits
-//! hmmer would have found. One nail invocation is the whole point.
+//! Runs hmmer once, then one nail per sensitivity, each seeded static with no
+//! cap so it aligns everything its prefilter returned. There is no grid here
+//! the way there is in cloud-search: an arm is the most nail could get at that
+//! sensitivity, and the question is where the hits hmmer found fall out of it.
 //!
 //! nail's own -E is set far above its default (10.0) rather than left alone.
 //! `parse` tells "seeded but unreported" apart from "reported" by whether a
@@ -143,34 +143,6 @@ pub fn main(args: Args, paths: &crate::Paths) -> anyhow::Result<()> {
         );
         pl = pl.step(split.step("split", &[(manifest::SHARD, shard.clone())]));
 
-        for arm in &arms {
-            pl = pl.step(
-                Step::serial([Cmd::new(&bins.nail)
-                    .sub("search")
-                    .arg("--mmseqs-path", &bins.mmseqs)
-                    .arg("-t", threads)
-                    // nail leaves mmseqs' databases in its tmp dir, and the
-                    // prefilter database is what depth is read from
-                    .arg(
-                        "--tmp-dir",
-                        crate::scores::depth::prefilter_dir(&dirs.root, &arm.name, &shard),
-                    )
-                    .arg("--mmseqs-s", &arm.s)
-                    .arg("--seed-mode", "static")
-                    .arg("--mmseqs-max-seqs", UNBOUNDED)
-                    .arg("--seeds-out", dirs.seeds(&arm.name, &shard))
-                    .flag("--only-seed")
-                    .flag("--allow-overwrite")
-                    .path(&query_hmm)
-                    .path(&target)
-                    .field(manifest::SHARD, &shard)
-                    .field(manifest::STAGE, util::search::SEED)
-                    .field(manifest::SEEDS, &arm.name)])
-                .name(format!("seeds.{}.{shard}", arm.name))
-                .cores(threads),
-            );
-        }
-
         let hmmer = util::search::hmmer(
             &bins.hmmsearch,
             &split,
@@ -185,26 +157,36 @@ pub fn main(args: Args, paths: &crate::Paths) -> anyhow::Result<()> {
         );
         pl = pl.step(hmmer.search).step(hmmer.cat);
 
+        // one nail per arm: static seeding with no cap aligns everything
+        // the prefilter returned, so there is no list to replay. the seed
+        // list is written beside the table for parse to read which pairs
+        // the seeding offered, and mmseqs' databases stay in the tmp dir
+        // for depth to read a pair's rank
         for arm in &arms {
             pl = pl.step(
                 Step::serial([Cmd::new(&bins.nail)
                     .sub("search")
-                    // nail looks for mmseqs at startup even when it is replaying
-                    // seeds and will never call it, and nothing here is on PATH
                     .arg("--mmseqs-path", &bins.mmseqs)
                     .arg("-t", threads)
-                    .arg("--seeds", dirs.seeds(&arm.name, &shard))
+                    .arg(
+                        "--tmp-dir",
+                        crate::scores::depth::prefilter_dir(&dirs.root, &arm.name, &shard),
+                    )
+                    .arg("--mmseqs-s", &arm.s)
+                    .arg("--seed-mode", "static")
+                    .arg("--mmseqs-max-seqs", UNBOUNDED)
+                    .arg("--seeds-out", dirs.seeds(&arm.name, &shard))
                     .arg("-E", args.nail_evalue)
-                    .arg("--tmp-dir", dirs.tmp.join("align").join(&arm.name))
                     .arg("--tbl-out", dirs.table(&arm.name, &shard))
                     .flag("--allow-overwrite")
                     .path(&query_hmm)
                     .path(&target)
                     .field(manifest::NAME, &arm.name)
                     .field(manifest::TOOL, "nail")
-                    // the arm is the seeding, so each replays its own list
+                    // the list this run wrote, which is what it aligned
                     .field(manifest::SEEDS, &arm.name)
                     .field(manifest::SHARD, &shard)
+                    .field("s", &arm.s)
                     .field("E", args.nail_evalue)])
                 .name(format!("{}.{shard}", arm.name))
                 .cores(threads),

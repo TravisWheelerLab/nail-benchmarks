@@ -525,9 +525,11 @@ and how far down the prefilter list the hits it does find sit. Its arms are
 sensitivities, `--s 12.0,10.0,7.5`, each seeded static with
 `--mmseqs-max-seqs` unbounded, so an arm aligns everything the prefilter
 returned and its seed list is the most nail could get at that sensitivity.
-Every arm is a seed list of its own and a nail that replays it; hmmer runs once
-outside the sweep, because the truth set is the same for all of them and is
-most of the wall clock. An arm's seeding leaves mmseqs' databases under
+An arm is one `nail search`, seeding and alignment together, with the seed
+list written beside its table so `parse` can tell a pair the seeding never
+offered from one it offered and nail dropped; hmmer runs once outside the
+sweep, because the truth set is the same for all of them and is most of the
+wall clock. An arm leaves mmseqs' databases under
 `results/prefilter.<arm>.<unit>/`, which is part of the record: `parse depth`
 reads a pair's rank in its query's prefilter list out of it.
 
