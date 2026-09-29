@@ -1,12 +1,11 @@
 //! Reads each unit's stage tree into `stages.tbl`, and its counts into
 //! `counts.tbl`.
 //!
-//! nail prints the two branches of the tree as wall clock, and each leaf as the
-//! sum of that stage's time over every pair, across every thread. So a leaf's
-//! percentage is its share of the thread-seconds its branch spent, and that
-//! share of the branch's wall is the wall the leaf gets here. It is exact when
-//! every thread is busy for the whole branch; idle time at the tail of a
-//! branch is spread over the leaves in proportion rather than shown.
+//! nail prints every line of the tree as wall clock. Under `alignment`, which
+//! runs on every thread, it also prints each stage's cpu seconds, the sum of
+//! that stage's time over every pair across every thread; the wall there is
+//! nail's own share-of-cpu times branch wall. Under `align` in prog mode it
+//! prints one line per round.
 
 use std::path::PathBuf;
 
@@ -26,13 +25,16 @@ pub struct Args {
 }
 
 /// One line of the runtime tree.
+#[derive(Debug, PartialEq)]
 struct Timed {
-    /// The stage this line is nested under; empty for the total.
+    /// The line this one is nested under; empty for the total.
     parent: String,
     stage: String,
-    secs: f64,
-    /// Its share of what its parent printed, in [0, 1].
+    wall: f64,
+    /// Its share of its parent's wall, in [0, 1].
     share: f64,
+    /// Seconds on cpu, where nail prints them.
+    cpu: Option<f64>,
 }
 
 /// One line of the counts block.
@@ -52,9 +54,9 @@ pub fn main(_: Args, paths: &crate::Paths) -> anyhow::Result<()> {
         toil::Column::new("unit"),
         toil::Column::new("parent"),
         toil::Column::new("stage"),
-        toil::Column::new("secs").fixed(2),
-        toil::Column::new("share").fixed(4),
         toil::Column::new("wall").fixed(2),
+        toil::Column::new("share").fixed(4),
+        toil::Column::new("cpu").fixed(2),
     ]));
     let mut counts = toil::Table::new(toil::Schema::new([
         toil::Column::new("unit"),
@@ -72,22 +74,14 @@ pub fn main(_: Args, paths: &crate::Paths) -> anyhow::Result<()> {
         // printed for itself
         stages.meta("michi", [unit.clone(), format!("{wall_s:.2}")]);
 
-        // the total and the branches are wall as nail printed them;
-        // a leaf is its share of its branch's
-        let mut wall_of = std::collections::HashMap::new();
         for t in &timed {
-            let wall = match wall_of.get(&t.parent) {
-                Some(branch) if t.parent != "total" => t.share * branch,
-                _ => t.secs,
-            };
-            wall_of.insert(t.stage.clone(), wall);
             stages.row([
                 toil::Cell::from(&unit),
                 t.parent.as_str().into(),
                 t.stage.as_str().into(),
-                t.secs.into(),
+                t.wall.into(),
                 t.share.into(),
-                wall.into(),
+                t.cpu.map(toil::Cell::from).unwrap_or(toil::Cell::from("")),
             ]);
         }
 
@@ -141,9 +135,7 @@ fn units(dirs: &Dirs) -> anyhow::Result<Vec<(String, f64, PathBuf)>> {
 /// The runtime tree and the counts block out of what nail printed.
 //
 // everything above "summary statistics:" is progress output, some of
-// it overwritten in place with cursor escapes, and is skipped. the
-// tree is read by indent: the total sits flush left, a branch is
-// indented under it, a leaf under a branch
+// it overwritten in place with cursor escapes, and is skipped
 fn read(text: &str) -> anyhow::Result<(Vec<Timed>, Vec<Counted>)> {
     let body = text
         .split_once("summary statistics:")
@@ -165,55 +157,142 @@ fn read(text: &str) -> anyhow::Result<(Vec<Timed>, Vec<Counted>)> {
         })
         .collect::<anyhow::Result<Vec<_>>>()?;
 
-    let mut timed = Vec::new();
-    let mut branch = String::new();
-    for (i, line) in format!("runtime:{runtime}").lines().enumerate() {
-        let Some((label, value)) = line.rsplit_once(':') else {
-            continue;
-        };
-        let indent = line.len() - line.trim_start().len();
-        let stage = snake(label);
-        let parent = match (i, indent) {
-            (0, _) => String::new(),
-            (_, i) if i < 4 => {
-                branch = stage.clone();
-                "total".to_string()
-            }
-            _ => branch.clone(),
-        };
-
-        let (secs, pct) = value.trim().split_once('s').context("no seconds")?;
-        let pct = pct
-            .trim()
-            .trim_matches(|c| c == '(' || c == ')' || c == '%')
-            .trim();
-
-        timed.push(Timed {
-            parent,
-            stage,
-            secs: secs
-                .parse()
-                .with_context(|| format!("bad seconds {secs:?}"))?,
-            share: pct
-                .parse::<f64>()
-                .with_context(|| format!("bad percent {pct:?}"))?
-                / 100.0,
-        });
-    }
-
+    let timed = tree(&format!("runtime:{runtime}"))?;
     ensure!(!timed.is_empty(), "empty runtime block");
     Ok((timed, counted))
 }
 
-/// A tree label as a cell: the tree glyphs and punctuation gone, words joined
-/// by underscores, and the parenthetical dropped where it only says which tool.
+/// The runtime tree, read by indent.
+//
+// the total sits flush left, a branch is indented under it, a leaf
+// under a branch, and a round under the align leaf. what the line is
+// nested under is the last line seen one level up. the alignment
+// block's column header carries no number and is skipped with the
+// blank lines
+fn tree(runtime: &str) -> anyhow::Result<Vec<Timed>> {
+    // the stage name at each depth, so a line's parent is the name
+    // one level up
+    let mut above: Vec<String> = Vec::new();
+    // the wall at each depth, for a line's share of its parent
+    let mut walls: Vec<f64> = Vec::new();
+    let mut timed = Vec::new();
+
+    for line in runtime.lines() {
+        let Some(row) = parse_line(line)? else {
+            continue;
+        };
+
+        let depth = row.depth;
+        above.truncate(depth);
+        walls.truncate(depth);
+
+        let parent = above.last().cloned().unwrap_or_default();
+        let share = match (row.share, walls.last()) {
+            (Some(share), _) => share,
+            (None, Some(parent_wall)) if *parent_wall > 0.0 => row.wall / parent_wall,
+            (None, _) => 1.0,
+        };
+
+        above.push(row.stage.clone());
+        walls.push(row.wall);
+
+        timed.push(Timed {
+            parent,
+            stage: row.stage,
+            wall: row.wall,
+            share,
+            cpu: row.cpu,
+        });
+    }
+
+    Ok(timed)
+}
+
+/// One line of the tree with its numbers read, before it knows its parent.
+struct Line {
+    depth: usize,
+    stage: String,
+    wall: f64,
+    share: Option<f64>,
+    cpu: Option<f64>,
+}
+
+/// Read one line, or `None` for a line that is not a stage.
+//
+// the label ends at the first word that is a number of seconds. after
+// it come an optional percentage, in parentheses or bare, an optional
+// second number of seconds which is cpu, and an optional [note]
+fn parse_line(line: &str) -> anyhow::Result<Option<Line>> {
+    let glyphs: &[char] = &[' ', '│', '├', '└', '─'];
+    let text = line.trim_start_matches(glyphs);
+    if text.is_empty() {
+        return Ok(None);
+    }
+
+    // four columns of indent per level of the tree; the glyphs are
+    // several bytes each, so this counts chars
+    let depth = (line.chars().count() - text.chars().count()) / 4;
+
+    let words: Vec<&str> = text.split_whitespace().collect();
+    let Some(at) = words.iter().position(|w| seconds(w).is_some()) else {
+        return Ok(None);
+    };
+    if at == 0 {
+        return Ok(None);
+    }
+
+    let label = words[..at].join(" ");
+    let wall = seconds(words[at]).unwrap();
+
+    // the note after a branch: "[6 iterations]", or "[4 threads, cpu
+    // 147.31s, 99.5% busy]", where the cpu is worth keeping. it comes
+    // after the seconds, so "[misc.]" as a label is not one
+    let rest = &words[at + 1..];
+    let note_at = rest
+        .iter()
+        .position(|w| w.starts_with('['))
+        .unwrap_or(rest.len());
+    let (rest, note) = rest.split_at(note_at);
+
+    let mut share = None;
+    let mut cpu = note
+        .iter()
+        .map(|w| w.trim_matches(|c| c == '[' || c == ']' || c == ','))
+        // "cpu 7,842.90s," keeps its inner comma and loses the last
+        .skip_while(|w| *w != "cpu")
+        .nth(1)
+        .and_then(seconds);
+    for w in rest {
+        let w = w.trim_matches(|c| c == '(' || c == ')');
+        if let Some(pct) = w.strip_suffix('%') {
+            share = Some(
+                pct.parse::<f64>()
+                    .with_context(|| format!("bad percent {w:?}"))?
+                    / 100.0,
+            );
+        } else if let Some(s) = seconds(w) {
+            cpu = Some(s);
+        }
+    }
+
+    Ok(Some(Line {
+        depth,
+        stage: snake(label.trim_end_matches(':')),
+        wall,
+        share,
+        cpu,
+    }))
+}
+
+/// A word like `12.34s` or `7,842.90s` as seconds.
+fn seconds(word: &str) -> Option<f64> {
+    word.strip_suffix('s')?.replace(',', "").parse().ok()
+}
+
+/// A tree label as a cell: punctuation gone, words joined by underscores.
 fn snake(label: &str) -> String {
-    let label = label
-        .trim_start_matches(|c: char| c.is_whitespace() || "├└─".contains(c))
-        .trim();
-    let label = match label {
+    let label = match label.trim() {
         "runtime" => "total",
-        "seeding (mmseqs)" => "seeding",
         "[misc.]" => "misc",
         other => other,
     };
@@ -236,44 +315,68 @@ summary statistics:
  ├─ targets:                                20,000
  └─ backward DP cells computed:         38,674,118
 
-runtime: 4.00s (100.00%)
- └─ seeding (mmseqs):   1.89s (47.13%)
-     ├─ prefilter:     1.21s (63.95%)
-     └─ [misc.]:       0.23s (12.33%)
- └─ alignment:          1.96s (49.02%)
-     ├─ cloud search:       7.71s (55.32%)
-     ├─ output (mutex):     0.00s ( 0.00%)
-     └─ [misc.]:            0.23s ( 1.62%)
+runtime: 566.03s (100.00%)
+ └─ setup:       3.91s ( 0.69%)
+     ├─ query index:      0.79s (20.13%)
+     └─ [misc.]:          0.00s ( 0.02%)
+ └─ seeding:   525.11s (92.77%)
+     ├─ prefilter:   392.68s (74.78%)
+     ├─ align:       128.71s (24.51%)   [2 iterations]
+     │   ├─ 1:        64.85s
+     │   └─ 2:        63.86s
+     └─ [misc.]:       0.02s ( 0.00%)
+ └─ alignment:  37.01s ( 6.54%)   [4 threads, cpu 1,147.31s, 99.5% busy]
+     │                       wall        %      cpu
+     │                     ------   ------   ------
+     ├─ memory init         0.18s    0.48%    0.71s
+     ├─ cloud search       16.65s   44.98%   1,066.26s
+     └─ [misc.]             0.49s    1.32%    1.95s
+ └─ [misc.]:     0.00s ( 0.00%)
 ";
+
+    fn row(parent: &str, stage: &str, wall: f64, share: f64, cpu: Option<f64>) -> Timed {
+        Timed {
+            parent: parent.into(),
+            stage: stage.into(),
+            wall,
+            share,
+            cpu,
+        }
+    }
 
     #[test]
     fn reads_the_tree_by_indent() {
         let (timed, counted) = read(OUT).unwrap();
 
-        // shares back to the two places nail printed, so the
-        // comparison is on text rather than on floats
-        let rows: Vec<(&str, &str, f64, String)> = timed
-            .iter()
-            .map(|t| {
-                (
-                    t.parent.as_str(),
-                    t.stage.as_str(),
-                    t.secs,
-                    format!("{:.2}", t.share * 100.0),
-                )
+        // shares back to the two places nail printed, and the rounds'
+        // shares to four, so the comparison is on text rather than on
+        // floats
+        let rounded: Vec<Timed> = timed
+            .into_iter()
+            .map(|t| Timed {
+                share: (t.share * 10000.0).round() / 10000.0,
+                ..t
             })
             .collect();
+
         assert_eq!(
-            rows,
+            rounded,
             [
-                ("", "total", 4.00, "100.00".into()),
-                ("total", "seeding", 1.89, "47.13".into()),
-                ("seeding", "prefilter", 1.21, "63.95".into()),
-                ("seeding", "misc", 0.23, "12.33".into()),
-                ("total", "alignment", 1.96, "49.02".into()),
-                ("alignment", "cloud_search", 7.71, "55.32".into()),
-                ("alignment", "output_mutex", 0.00, "0.00".into()),
-                ("alignment", "misc", 0.23, "1.62".into()),
+                row("", "total", 566.03, 1.0, None),
+                row("total", "setup", 3.91, 0.0069, None),
+                row("setup", "query_index", 0.79, 0.2013, None),
+                row("setup", "misc", 0.00, 0.0002, None),
+                row("total", "seeding", 525.11, 0.9277, None),
+                row("seeding", "prefilter", 392.68, 0.7478, None),
+                row("seeding", "align", 128.71, 0.2451, None),
+                row("align", "1", 64.85, 0.5038, None),
+                row("align", "2", 63.86, 0.4962, None),
+                row("seeding", "misc", 0.02, 0.0, None),
+                row("total", "alignment", 37.01, 0.0654, Some(1147.31)),
+                row("alignment", "memory_init", 0.18, 0.0048, Some(0.71)),
+                row("alignment", "cloud_search", 16.65, 0.4498, Some(1066.26)),
+                row("alignment", "misc", 0.49, 0.0132, Some(1.95)),
+                row("total", "misc", 0.00, 0.0, None),
             ]
         );
 

@@ -783,20 +783,23 @@ one recall shard's worth of MGnify, 2,455,940 sequences, and `pid` is the profma
 the same split with the same parameters, each a set of its own under
 `sets/stage-times-<label>/`. Both run at 48 threads.
 
-`-s` makes nail print a stage tree to stdout when it finishes: two branches,
-seeding and alignment, each in wall clock, and under each the stages as leaves.
-michi discards stdout unless told where to put it, so `run` sends it to a
-`.stats` file beside the unit's hit table.
+`-s` makes nail print a stage tree to stdout when it finishes: `setup`,
+`seeding` and `alignment`, each in wall clock, and under each the stages as
+leaves. Under `align` in prog mode it prints one line per round. michi
+discards stdout unless told where to put it, so `run` sends it to a `.stats`
+file beside the unit's hit table.
 
-The seeding leaves are wall, since each is one mmseqs invocation. The alignment
-leaves are each stage's time summed over every pair across every thread, and
-a leaf's percentage is its share of that sum. `parse` writes `stages.tbl`, one
-row per unit per stage with nail's seconds, that share, and the share times
-the branch's wall, which is the wall estimate the benchmark is for. It is
-exact when every thread is busy for the whole branch; idle time at a branch's
-tail is spread over the leaves in proportion rather than shown. `counts.tbl`
-carries the counts nail prints above the tree, and a `#= michi` line per unit
-carries what michi timed for the whole command.
+The seeding and setup leaves are wall, since each is one serial step or one
+mmseqs invocation. The alignment leaves run on every thread, so nail prints
+each one's cpu seconds, the sum over every pair across every thread, beside a
+wall that is its share of that sum times the branch's wall. That share-times-
+wall is exact when every thread is busy for the whole branch, and the branch
+line says how busy they were. `parse` writes `stages.tbl`, one row per unit
+per line of the tree: its parent, its wall, its share of its parent, and its
+cpu where nail printed one. `counts.tbl` carries the counts nail prints above
+the tree, and a `#= michi` line per unit carries what michi timed for the
+whole command. A `.stats` file from a nail before the three-branch tree reads
+wrong, since its alignment leaves were cpu seconds; rerun rather than reparse.
 
 ## Formatting
 
