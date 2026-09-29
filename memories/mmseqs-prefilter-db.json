@@ -1,0 +1,10 @@
+{
+  "slug": "mmseqs-prefilter-db",
+  "text": "An mmseqs prefilter db written with N threads is pdb.0..pdb.N-1 plus one pdb.index of key, offset, length; the offsets run across the files joined in numeric order. Each entry is lines of targetKey, prefilter score, diagonal, sorted by score descending, so line index is rank. nail's qdb_h and tdb_h header dbs give key to name in write order; there is no .lookup.",
+  "created_at": "2026-09-29T04:53:45.858811186Z",
+  "updated_at": "2026-09-29T04:53:45.858811186Z",
+  "stamp": {
+    "commit": "e4ab502",
+    "branch": "claude-refactor"
+  }
+}
