@@ -171,6 +171,20 @@ pub mod shape {
         needs: &[Rep::QueryHmm, Rep::QuerySto, Rep::QueryFa, Rep::Target],
         attrs: &["truth", "originals"],
     };
+
+    /// Other sets, each under its own directory, as one.
+    ///
+    /// A part keeps its own `set.tbl` and everything it wrote; the union's
+    /// rows are the parts' rows with their paths under the part's directory
+    /// and their units under the part's name. Only the query profile and the
+    /// target survive the join, since a part's other columns mean what its
+    /// own shape says and the union does not say it. `part` names which one
+    /// a unit came from.
+    pub const UNION: Shape = Shape {
+        name: "union",
+        needs: &[Rep::QueryHmm, Rep::Target],
+        attrs: &["part"],
+    };
 }
 
 // ---
@@ -469,6 +483,11 @@ impl Set {
 
     pub fn root(&self) -> &Path {
         &self.root
+    }
+
+    /// The rows as the table holds them, paths relative to the set root.
+    pub fn into_rows(self) -> Vec<Row> {
+        self.rows
     }
 
     pub fn len(&self) -> usize {
