@@ -7,10 +7,6 @@ mod run;
 
 use clap::{Parser, Subcommand};
 
-/// The representations a unit must carry: a profile query and a target file,
-/// whatever shape the set is.
-pub const NEEDS: &[util::set::Rep] = &[util::set::Rep::QueryHmm, util::set::Rep::Target];
-
 #[derive(Parser)]
 #[command(
     name = "stage-times",

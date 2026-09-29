@@ -161,12 +161,29 @@ seqs = 500000
 
 # -------------------------------------------------------------- stage-times
 
-# Two sets, one per kind of input, searched once each so the relative cost of
-# nail's stages can be read across them. The pid labels draw from the same
-# split, with the same parameters, as pid's own.
+# One set of two parts, each its own recipe, searched once each so the
+# relative cost of nail's stages can be read across two kinds of input. The
+# pid parts draw from the same split, with the same parameters, as pid's own.
+[stage-times-toy]
+shape = "union"
+out   = "../../sets-toy/stage-times/inputs"
+parts = [
+  { name = "mgy", label = "stage-times-mgy-toy" },
+  { name = "pid", label = "stage-times-pid-toy" },
+]
+
+[stage-times-real]
+shape = "union"
+out   = "../../sets/stage-times/inputs"
+parts = [
+  { name = "mgy", label = "stage-times-mgy" },
+  { name = "pid", label = "stage-times-pid" },
+]
+
+# the parts; a union builds each under its own directory whatever `out` says
 [stage-times-mgy-toy]
 shape = "cross"
-out   = "../../sets-toy/stage-times-mgy/inputs"
+out   = "../../sets-toy/stage-times/inputs/mgy"
 
 [[stage-times-mgy-toy.queries]]
 name       = "pfam"
@@ -181,7 +198,7 @@ seqs = 20000
 
 [stage-times-mgy]
 shape = "cross"
-out   = "../../sets/stage-times-mgy/inputs"
+out   = "../../sets/stage-times/inputs/mgy"
 
 [[stage-times-mgy.queries]]
 name       = "pfam"
@@ -199,7 +216,7 @@ shape      = "profmark"
 alignments = "../../data/pfam.sto"
 decoys     = "../../data/trembl.fa"
 split      = "../pid/profmark"
-out        = "../../sets-toy/stage-times-pid/inputs"
+out        = "../../sets-toy/stage-times/inputs/pid"
 pairs      = 200
 
 [stage-times-pid]
@@ -207,7 +224,7 @@ shape      = "profmark"
 alignments = "../../data/pfam.sto"
 decoys     = "../../data/trembl.fa"
 split      = "../pid/profmark"
-out        = "../../sets/stage-times-pid/inputs"
+out        = "../../sets/stage-times/inputs/pid"
 
 # ------------------------------------------------------------------ cutoffs
 

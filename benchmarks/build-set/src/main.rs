@@ -162,6 +162,13 @@ enum Recipe {
         #[serde(default = "default_max_test")]
         max_test: usize,
     },
+    /// Other labels, each built under its own directory, as one set.
+    ///
+    /// For a benchmark whose units are of different shapes: each part is a
+    /// whole recipe of its own, and the union's `set.tbl` holds every part's
+    /// units with only the query profile and the target, since the rest of a
+    /// part's columns mean what its own shape says.
+    Union { out: PathBuf, parts: Vec<Part> },
     /// Nested rungs on both axes, each a prefix of the one above.
     Ladder {
         queries: PathBuf,
@@ -173,6 +180,17 @@ enum Recipe {
         #[serde(default = "default_seed")]
         seed: u64,
     },
+}
+
+/// One part of a union: what to call it, and which label builds it.
+#[derive(Deserialize, Debug, Clone)]
+#[serde(rename_all = "kebab-case", deny_unknown_fields)]
+struct Part {
+    /// What this part is called. It becomes `part`, the prefix of each of its
+    /// units, and the directory it is built under.
+    name: String,
+    /// The label of this file that builds it.
+    label: String,
 }
 
 fn default_train_test_id() -> f64 {
@@ -199,8 +217,22 @@ impl Recipe {
             | Recipe::Cross { out, .. }
             | Recipe::Pairs { out, .. }
             | Recipe::Ladder { out, .. }
+            | Recipe::Union { out, .. }
             | Recipe::Profmark { out, .. } => out,
         }
+    }
+
+    /// The same recipe writing somewhere else, for a part built under a union.
+    fn at(mut self, at: PathBuf) -> Recipe {
+        match &mut self {
+            Recipe::Fixed { out, .. }
+            | Recipe::Cross { out, .. }
+            | Recipe::Pairs { out, .. }
+            | Recipe::Ladder { out, .. }
+            | Recipe::Union { out, .. }
+            | Recipe::Profmark { out, .. } => *out = at,
+        }
+        self
     }
 
     fn shape(&self) -> &'static str {
@@ -210,6 +242,7 @@ impl Recipe {
             Recipe::Cross { .. } => "cross",
             Recipe::Pairs { .. } => "pairs",
             Recipe::Ladder { .. } => "ladder",
+            Recipe::Union { .. } => "union",
             Recipe::Profmark { .. } => "profmark",
         }
     }
@@ -261,6 +294,11 @@ fn main() -> anyhow::Result<()> {
         take_back(paths.at(recipe.out()))?;
     }
 
+    build(recipe, &paths, threads)
+}
+
+/// Run one recipe. A union runs each of its parts through here.
+fn build(recipe: Recipe, paths: &paths::File, threads: usize) -> anyhow::Result<()> {
     match recipe {
         Recipe::Fixed {
             queries,
@@ -273,7 +311,7 @@ fn main() -> anyhow::Result<()> {
             reversed,
             seed,
         } => fixed(
-            Sources::new(&paths, queries, alignments, targets)?,
+            Sources::new(paths, queries, alignments, targets)?,
             paths.at(out),
             shards,
             seqs,
@@ -287,7 +325,7 @@ fn main() -> anyhow::Result<()> {
             queries,
             targets,
             seed,
-        } => cross(&paths, paths.at(out), queries, targets, seed, threads),
+        } => cross(paths, paths.at(out), queries, targets, seed, threads),
         Recipe::Pairs {
             queries,
             targets,
@@ -325,14 +363,71 @@ fn main() -> anyhow::Result<()> {
             target_rungs,
             seed,
         } => ladder(
-            Sources::new(&paths, queries, alignments, targets)?,
+            Sources::new(paths, queries, alignments, targets)?,
             paths.at(out),
             &query_rungs,
             &target_rungs,
             seed,
             threads,
         ),
+        Recipe::Union { out, parts } => union(paths, paths.at(out), parts, threads),
     }
+}
+
+/// Build each part under the union's directory, then join their tables.
+fn union(
+    paths: &paths::File,
+    root: PathBuf,
+    parts: Vec<Part>,
+    threads: usize,
+) -> anyhow::Result<()> {
+    ensure!(!parts.is_empty(), "a union needs a part");
+    unique(parts.iter().map(|p| &p.name), "part")?;
+
+    claim(&root)?;
+
+    let mut rows = Vec::new();
+    let mut said = Vec::with_capacity(parts.len());
+
+    for part in &parts {
+        let recipe: Recipe = paths.get(&part.label)?;
+        ensure!(
+            !matches!(recipe, Recipe::Union { .. }),
+            "part {:?} is a union itself; nest the labels instead",
+            part.label
+        );
+
+        let dir = root.join(&part.name);
+        build(recipe.at(dir.clone()), paths, threads)?;
+
+        // the part's own set.tbl stays where it is; the union carries the
+        // profile and the target under the part's directory and nothing
+        // else, since a truth file or a residue count means what the part's
+        // shape says
+        for row in Set::load(&dir)?.into_rows() {
+            let under = |path: &str| format!("{}/{path}", part.name);
+            rows.push(
+                set::Row::new(format!("{}.{}", part.name, row.unit), under(&row.target))
+                    .query_hmm(under(&row.query_hmm))
+                    .attr("part", &part.name),
+            );
+        }
+
+        said.push(format!("{}={}", part.name, part.label));
+    }
+
+    Set::new(&root, rows)
+        .says("shape", set::shape::UNION.name)
+        .says("recipe", "union")
+        .says("parts", said.join(","))
+        .save()?;
+
+    println!(
+        "
+built {}",
+        root.display()
+    );
+    Ok(())
 }
 
 /// The labels and what each would make, so the next command can be typed
@@ -400,6 +495,20 @@ fn listing(paths: &paths::File) -> anyhow::Result<String> {
                     Some(n) => format!("{n} {}", plural(*n, "pair")),
                     None => "every pair that survives".to_string(),
                 },
+                out,
+            ),
+            Recipe::Union { out, parts } => (
+                recipe.shape(),
+                format!(
+                    "{} {}: {}",
+                    parts.len(),
+                    plural(parts.len(), "part"),
+                    parts
+                        .iter()
+                        .map(|p| p.name.as_str())
+                        .collect::<Vec<_>>()
+                        .join(", ")
+                ),
                 out,
             ),
             Recipe::Ladder {

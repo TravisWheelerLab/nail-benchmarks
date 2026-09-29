@@ -1,29 +1,17 @@
 # Where stage-times reads and writes. Paths only, relative to this file.
 #
-# Two inputs rather than two arms, because they are different shapes: `mgy` is
-# a cross of Pfam against MGnify, `pid` is the profmark set pid searches. Each
-# is a set of its own, built by `build-set --in stage-times-<label>`.
+# Its set is a union of two parts, built by `build-set --in
+# stage-times-toy|stage-times-real`: `mgy` is a cross of Pfam against MGnify,
+# `pid` is the profmark set pid searches.
 
-[mgy-toy]
-set      = "../../sets-toy/stage-times-mgy/inputs"
-run      = "../../sets-toy/stage-times-mgy/outputs"
-analysis = "../../sets-toy/stage-times-mgy/analysis"
-tmp      = "../../sets-toy/stage-times-mgy/tmp"
+[toy]
+set      = "../../sets-toy/stage-times/inputs"
+run      = "../../sets-toy/stage-times/outputs"
+analysis = "../../sets-toy/stage-times/analysis"
+tmp      = "../../sets-toy/stage-times/tmp"
 
-[pid-toy]
-set      = "../../sets-toy/stage-times-pid/inputs"
-run      = "../../sets-toy/stage-times-pid/outputs"
-analysis = "../../sets-toy/stage-times-pid/analysis"
-tmp      = "../../sets-toy/stage-times-pid/tmp"
-
-[mgy]
-set      = "../../sets/stage-times-mgy/inputs"
-run      = "../../sets/stage-times-mgy/outputs"
-analysis = "../../sets/stage-times-mgy/analysis"
-tmp      = "../../sets/stage-times-mgy/tmp"
-
-[pid]
-set      = "../../sets/stage-times-pid/inputs"
-run      = "../../sets/stage-times-pid/outputs"
-analysis = "../../sets/stage-times-pid/analysis"
-tmp      = "../../sets/stage-times-pid/tmp"
+[real]
+set      = "../../sets/stage-times/inputs"
+run      = "../../sets/stage-times/outputs"
+analysis = "../../sets/stage-times/analysis"
+tmp      = "../../sets/stage-times/tmp"

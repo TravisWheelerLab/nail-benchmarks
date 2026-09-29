@@ -79,13 +79,12 @@ benchmarks/cutoffs/       per-family score cutoffs from decoys    [reversed]
 benchmarks/long-seqs/     how the tools scale with length         [pairs]
 benchmarks/pid/           recall against percent identity          [profmark]
 benchmarks/thread-scaling/ wall clock against thread count      [cross]
-benchmarks/stage-times/   where nail's wall clock goes, by stage  [any]
+benchmarks/stage-times/   where nail's wall clock goes, by stage  [union]
 ```
 
 One binary per benchmark, and the shape in brackets is the set it reads.
-`cloud-search`, `loss-decomp` and `stage-times` name no shape and would read
-any set with a query and a target; `cross` is what the first two build, and
-`stage-times` builds a `cross` and a `profmark`. One library sits under
+`cloud-search` and `loss-decomp` name no shape and would read any set with a
+query and a target; `cross` is what their labels build. One library sits under
 them all, and one binary that belongs to no benchmark: `build-set` makes the
 sets.
 
@@ -341,6 +340,7 @@ builder stamps `#= shape` and the benchmark names the one it reads, and
 | `cross` | the same as `fixed` | `query_src`, `target_src`, `seqs`, `residues`, `bytes` | cloud-search, loss-decomp |
 | `pairs` | `query_fa`, `target` | `pair`, `query_residues`, `residues` | long-seqs |
 | `profmark` | `query_hmm`, `query_sto`, `query_fa`, `target` | `truth`, `originals` | pid |
+| `union` | `query_hmm`, `target` | `part` | stage-times |
 
 `reversed` is `fixed` written backwards: the same sources, the same seed and
 the same sharding, with each sequence reversed as it is dealt. Reversing keeps
@@ -355,6 +355,12 @@ is per pair rather than per unit, so it cannot be a column. `truth` names the
 file that carries it, relative to the set root, the way the representation
 columns name theirs. `originals` names the decoys unreversed, the same way.
 The shape check sees that each file is named, not what is in it.
+
+`union` is other sets as one. Each part is a whole recipe of its own, built
+under its own directory with its own `set.tbl`, and the union's rows are the
+parts' units under the part's name with only the query profile and the target,
+since a part's other columns mean what its own shape says. It is for a
+benchmark whose units are of different shapes.
 
 `cross` is the only shape where both sides are lists of independent sources
 rather than cuts of one. `fixed` grids a query over a partition of a single
@@ -778,10 +784,10 @@ cores.
 
 Where nail's wall clock goes, stage by stage, and how that changes with the
 input. One nail search per unit at the shared settings, with `-s` on, and no
-sweep: the labels are the inputs. `mgy` is a `cross` of all of Pfam against
-one recall shard's worth of MGnify, 2,455,940 sequences, and `pid` is the profmark set pid searches, drawn from
-the same split with the same parameters, each a set of its own under
-`sets/stage-times-<label>/`. Both run at 48 threads.
+sweep: the units are the inputs. Its set is a `union` of two parts: `mgy`, a
+`cross` of all of Pfam against one recall shard's worth of MGnify, 2,455,940
+sequences, and `pid`, the profmark set pid searches, drawn from the same split
+with the same parameters. Both run at 48 threads.
 
 `-s` makes nail print a stage tree to stdout when it finishes: `setup`,
 `seeding` and `alignment`, each in wall clock, and under each the stages as

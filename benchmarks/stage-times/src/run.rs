@@ -50,7 +50,7 @@ pub fn main(args: Args, paths: &crate::Paths) -> anyhow::Result<()> {
         dirs.tmp = tmp;
     }
 
-    let set = Set::load_needing(&paths.set, crate::NEEDS)?;
+    let set = Set::load_as(&paths.set, &util::set::shape::UNION)?;
     ensure!(set.units().count() > 0, "{} is empty", paths.set.display());
 
     let nail = tools::nail()?;
