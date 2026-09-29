@@ -13,7 +13,7 @@
   "lease_expires": "2026-09-29T04:58:12.327652569Z",
   "defer_until": null,
   "created_at": "2026-09-28T19:02:29.799446418Z",
-  "updated_at": "2026-09-29T05:20:17.241470542Z",
+  "updated_at": "2026-09-29T17:34:36.509919369Z",
   "closed_at": null,
   "close_reason": null,
   "resolution": null,
@@ -36,6 +36,13 @@
       "at": "2026-09-29T05:20:17.241469636Z",
       "author": "jackroddy/01dd6c44",
       "text": "Corrected 28 Sep late: the seeding pass plus replay was wrong; an arm is now one nail search (static, unbounded, --seeds-out beside the table). Commit a3a6c9c. Real run restarted; log tmp-claude/2026-09-28-loss-decomp/run-real2.log, watcher parses into sets/loss-decomp/analysis/ and logs to after-run2.log.",
+      "commit": "a3a6c9c",
+      "branch": "claude-refactor"
+    },
+    {
+      "at": "2026-09-29T17:34:36.509918569Z",
+      "author": "jackroddy/01dd6c44",
+      "text": "Real run done 28 Sep 23:30, 69 min. depth.tbl and stages.tbl in sets/loss-decomp/analysis/. s12 unbounded: sens 0.912 mgnify, 0.904 swissprot. Cumulative by rank ceiling on mgnify: 200 0.625, 800 0.828, 1600 0.877, 3200 0.897, 6400 0.907. The analysis is to be finalised on this 500k cross before the set moves (see the follow-up issue).",
       "commit": "a3a6c9c",
       "branch": "claude-refactor"
     }
