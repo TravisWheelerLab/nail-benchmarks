@@ -13,7 +13,7 @@
   "lease_expires": "2026-09-29T04:58:12.327652569Z",
   "defer_until": null,
   "created_at": "2026-09-28T19:02:29.799446418Z",
-  "updated_at": "2026-09-29T04:53:45.832389Z",
+  "updated_at": "2026-09-29T05:20:17.241470542Z",
   "closed_at": null,
   "close_reason": null,
   "resolution": null,
@@ -30,6 +30,13 @@
       "author": "jackroddy/01dd6c44",
       "text": "Built and committed. run: arms s12, s10, s7.5, static, --mmseqs-max-seqs 2147483647, each seeding into results/prefilter.<arm>.<unit>/ (kept, ~30 GB per unit at s12). parse depth: reads runs.tbl, ranks every kept or truth pair in its prefilter entry (pdb.N files joined under pdb.index in numeric order; qdb_h/tdb_h give names), bins doubling from --bin 200, writes depth.tbl with prefilter/seeds/kept/truth/hits/frac per bin and a last row of truth pairs the prefilter never returned. Toy verified in the sandbox. Real run started 28 Sep evening at 48 threads in the real tree; a watcher parses runs, stages and depth when it finishes. Tables land in sets/loss-decomp/analysis/.",
       "commit": "e4ab502",
+      "branch": "claude-refactor"
+    },
+    {
+      "at": "2026-09-29T05:20:17.241469636Z",
+      "author": "jackroddy/01dd6c44",
+      "text": "Corrected 28 Sep late: the seeding pass plus replay was wrong; an arm is now one nail search (static, unbounded, --seeds-out beside the table). Commit a3a6c9c. Real run restarted; log tmp-claude/2026-09-28-loss-decomp/run-real2.log, watcher parses into sets/loss-decomp/analysis/ and logs to after-run2.log.",
+      "commit": "a3a6c9c",
       "branch": "claude-refactor"
     }
   ],
