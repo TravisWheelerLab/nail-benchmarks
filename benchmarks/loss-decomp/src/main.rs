@@ -51,6 +51,9 @@ enum Parse {
     Runs(crate::scores::parse::ScoresArgs),
     /// Where the hits hmmer found were lost, one row per run per checkpoint.
     Stages(crate::scores::parse::TableArgs),
+    /// How far down the prefilter list the hits sit, one row per run per
+    /// depth bin.
+    Depth(crate::scores::parse::DepthArgs),
 }
 
 /// Where this benchmark reads and writes, as one label of `paths.toml` names
@@ -101,6 +104,7 @@ impl Command {
             Command::Run(a) => a.label.as_deref(),
             Command::Parse(Parse::Runs(a)) => a.label.as_deref(),
             Command::Parse(Parse::Stages(a)) => a.label.as_deref(),
+            Command::Parse(Parse::Depth(a)) => a.label.as_deref(),
             Command::Plot(a) => a.label.as_deref(),
         }
     }
@@ -118,6 +122,11 @@ impl Command {
             Command::Parse(Parse::Stages(mut a)) => {
                 a.analysis = paths.analysis.clone();
                 crate::scores::parse::main(crate::scores::parse::Cmd::Stages(a))
+            }
+            Command::Parse(Parse::Depth(mut a)) => {
+                a.run = paths.run.clone();
+                a.analysis = paths.analysis.clone();
+                crate::scores::parse::main(crate::scores::parse::Cmd::Depth(a))
             }
         }
     }

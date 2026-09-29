@@ -521,11 +521,15 @@ MMseqs2's prefilter sensitivity. `cloud-search` seeds once, then searches every
 only thing moving. The grid is run twice, at `-a 5` and at `-a 1`, because a
 surface at one `-a` cannot say whether a hard-pruning cell found its hits or
 recovered them. `loss-decomp` asks where nail loses the hits HMMER finds,
-and decomposes that across the seeding knobs: `static` against
-`--mmseqs-max-seqs`, and `prog` against `--prog-n` and `--prog-f`. Every arm is
-a seed list of its own and a nail that replays it; hmmer runs once outside the
-sweep, because the truth set is the same for all of them and is most of the
-wall clock.
+and how far down the prefilter list the hits it does find sit. Its arms are
+sensitivities, `--s 12.0,10.0,7.5`, each seeded static with
+`--mmseqs-max-seqs` unbounded, so an arm aligns everything the prefilter
+returned and its seed list is the most nail could get at that sensitivity.
+Every arm is a seed list of its own and a nail that replays it; hmmer runs once
+outside the sweep, because the truth set is the same for all of them and is
+most of the wall clock. An arm's seeding leaves mmseqs' databases under
+`results/prefilter.<arm>.<unit>/`, which is part of the record: `parse depth`
+reads a pair's rank in its query's prefilter list out of it.
 
 There are two table grammars, and which one a pipeline gets is settled by
 whether it moves one tool's parameters in a way that changes what that tool
@@ -571,6 +575,7 @@ run reported; whether it should follow is an open issue.
     cloud-search  parse runs   → parse summary → plot
                                → parse stages
     loss-decomp   parse runs   → parse stages  → plot
+                               → parse depth
 
 `plot` draws one figure off cloud-search's summary: the `(A, B)` heatmaps of
 sensitivity and wall clock, with the `full` run in the far corner. `--full-dp`
@@ -582,6 +587,13 @@ Each field is drawn at each `-a` and then as the difference between them, six
 panels. The difference is what the second arm is run for: it says where on the
 grid the sensitivity credited to `-A` and `-B` was recovered by retrying
 disjoint clouds instead. A summary with one `-a` in it draws two panels.
+
+`depth` bins each pair's rank in its query's prefilter list in ranges that
+double from `--bin`, the way prog's `n_take` does, and writes `depth.tbl`: per
+unit, run and bin, the prefilter pairs at that depth, the seeds, the pairs
+nail kept over the cutoff, the pairs hmmer found, and the hits, kept and found
+both. Hits over prefilter pairs is what a stopping rule is betting on. A last
+row per run counts hmmer's pairs the prefilter never returned.
 
 `stages` writes one row per (unit, run) with a column per checkpoint, which
 is the shape a figure reads. loss-decomp's figure shows where in nail's

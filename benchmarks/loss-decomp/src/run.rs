@@ -24,50 +24,35 @@ use michi::{Cmd, PipelineBuilder, Progress, Step, Table};
 
 use util::ledger;
 use util::manifest;
-use util::search::{Bins, Dirs, SEED_S, Split};
+use util::search::{Bins, Dirs, Split};
 use util::set::Set;
 use util::split::Kind;
 
 /// The column hmmer's run becomes, which every arm is measured against.
 const HMMER: &str = "hmmer";
 
-/// One arm of the sweep: a seeding, and the run name its column takes.
+/// One arm of the sweep: a sensitivity, and the run name its column takes.
 //
-// the knobs are all seeding knobs, so an arm is a seed list of its own and a
-// nail that replays it. hmmer and the query split sit outside: the truth set
-// is the same for every arm, and it is most of the wall clock
+// static seeding with no cap, so the arm aligns everything the prefilter
+// returned at that sensitivity and the seed list is the most nail could get
+// from it. hmmer and the query split sit outside: the truth set is the same
+// for every arm, and it is most of the wall clock
 struct Arm {
     name: String,
-    seeding: util::search::Seeding<'static>,
+    s: String,
 }
 
 impl Arm {
-    fn static_(max_seqs: usize) -> Arm {
+    fn at(s: f64) -> Arm {
         Arm {
-            name: format!("static-ms{max_seqs}"),
-            seeding: util::search::Seeding {
-                mmseqs_s: SEED_S,
-                mode: "static",
-                max_seqs: Some(max_seqs),
-                prog_n: None,
-                prog_f: None,
-            },
-        }
-    }
-
-    fn prog(n: usize, f: f64) -> Arm {
-        Arm {
-            name: format!("prog-n{n}-f{f}"),
-            seeding: util::search::Seeding {
-                mmseqs_s: SEED_S,
-                mode: "prog",
-                max_seqs: None,
-                prog_n: Some(n),
-                prog_f: Some(f),
-            },
+            name: format!("s{s}"),
+            s: format!("{s}"),
         }
     }
 }
+
+/// nail's own unbounded `--mmseqs-max-seqs`, the default it uses in prog mode.
+const UNBOUNDED: u32 = i32::MAX as u32;
 
 #[derive(Parser, Debug)]
 pub struct Args {
@@ -81,32 +66,14 @@ pub struct Args {
     #[arg(long, default_value_t = 1e6, value_name = "X")]
     nail_evalue: f64,
 
-    /// `--mmseqs-max-seqs` values to sweep in static mode
+    /// `--mmseqs-s` values to sweep, each seeded static and unbounded
     #[arg(
-        long,
+        long = "s",
         value_delimiter = ',',
-        default_value = "200,2000,20000",
-        value_name = "N,N,..."
-    )]
-    max_seqs: Vec<usize>,
-
-    /// `--prog-n` values to sweep in prog mode
-    #[arg(
-        long,
-        value_delimiter = ',',
-        default_value = "50,200,800",
-        value_name = "N,N,..."
-    )]
-    prog_n: Vec<usize>,
-
-    /// `--prog-f` values to sweep in prog mode
-    #[arg(
-        long,
-        value_delimiter = ',',
-        default_value = "0.001,0.01,0.1",
+        default_value = "12.0,10.0,7.5",
         value_name = "X,X,..."
     )]
-    prog_f: Vec<f64>,
+    sensitivities: Vec<f64>,
 
     /// Threads per search, and the cores each search is pinned to
     #[arg(short, long)]
@@ -144,18 +111,7 @@ pub fn main(args: Args, paths: &crate::Paths) -> anyhow::Result<()> {
         .pool(threads)
         .step(dirs.mkdir().path(dirs.tmp.join("align")));
 
-    // static aligns the whole prefilter, so max-seqs bounds it; prog aligns
-    // from prog-n upward while the hit fraction holds. one arm, one seed list
-    let arms: Vec<Arm> = args
-        .max_seqs
-        .iter()
-        .map(|&n| Arm::static_(n))
-        .chain(
-            args.prog_n
-                .iter()
-                .flat_map(|&n| args.prog_f.iter().map(move |&f| Arm::prog(n, f))),
-        )
-        .collect();
+    let arms: Vec<Arm> = args.sensitivities.iter().map(|&s| Arm::at(s)).collect();
 
     ensure!(!arms.is_empty(), "the sweep has no arms");
     println!(
@@ -189,22 +145,29 @@ pub fn main(args: Args, paths: &crate::Paths) -> anyhow::Result<()> {
 
         for arm in &arms {
             pl = pl.step(
-                util::search::seed(
-                    &bins.nail,
-                    &bins.mmseqs,
-                    &query_hmm,
-                    &target,
-                    &shard,
-                    &dirs.seeds(&arm.name, &shard),
-                    &dirs,
-                    threads,
-                    &arm.seeding,
-                    &[
-                        (manifest::STAGE, util::search::SEED.to_string()),
-                        (manifest::SEEDS, arm.name.clone()),
-                    ],
-                )
-                .name(format!("seeds.{}.{shard}", arm.name)),
+                Step::serial([Cmd::new(&bins.nail)
+                    .sub("search")
+                    .arg("--mmseqs-path", &bins.mmseqs)
+                    .arg("-t", threads)
+                    // nail leaves mmseqs' databases in its tmp dir, and the
+                    // prefilter database is what depth is read from
+                    .arg(
+                        "--tmp-dir",
+                        crate::scores::depth::prefilter_dir(&dirs.root, &arm.name, &shard),
+                    )
+                    .arg("--mmseqs-s", &arm.s)
+                    .arg("--seed-mode", "static")
+                    .arg("--mmseqs-max-seqs", UNBOUNDED)
+                    .arg("--seeds-out", dirs.seeds(&arm.name, &shard))
+                    .flag("--only-seed")
+                    .flag("--allow-overwrite")
+                    .path(&query_hmm)
+                    .path(&target)
+                    .field(manifest::SHARD, &shard)
+                    .field(manifest::STAGE, util::search::SEED)
+                    .field(manifest::SEEDS, &arm.name)])
+                .name(format!("seeds.{}.{shard}", arm.name))
+                .cores(threads),
             );
         }
 

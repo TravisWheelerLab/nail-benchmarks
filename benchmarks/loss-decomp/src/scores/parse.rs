@@ -22,12 +22,16 @@ pub enum Cmd {
     /// Where the hits hmmer found were lost, one row per run per
     /// checkpoint.
     Stages(TableArgs),
+    /// How far down the prefilter list the hits sit, one row per run per
+    /// depth bin.
+    Depth(DepthArgs),
 }
 
 pub fn main(cmd: Cmd) -> anyhow::Result<()> {
     match cmd {
         Cmd::Runs(args) => runs(args),
         Cmd::Stages(args) => stages(args),
+        Cmd::Depth(args) => depth(args),
     }
 }
 
@@ -202,8 +206,45 @@ pub struct TableArgs {
     out: Option<PathBuf>,
 }
 
+#[derive(Parser, Debug)]
+pub struct DepthArgs {
+    /// Which label of paths.toml to read. Omit to list them
+    #[arg(long = "in", value_name = "label")]
+    pub label: Option<String>,
+
+    /// The run directory holding results/, filled in from the label.
+    #[clap(skip)]
+    pub run: PathBuf,
+
+    /// The analysis directory holding runs.tbl, filled in from the label.
+    #[clap(skip)]
+    pub analysis: PathBuf,
+
+    /// Ranks in the first bin; each bin after it doubles the ceiling
+    #[arg(long, default_value_t = 200, value_name = "N")]
+    bin: u64,
+
+    #[arg(short, long, value_name = "out.tbl")]
+    out: Option<PathBuf>,
+}
+
+fn depth(args: DepthArgs) -> anyhow::Result<()> {
+    let table = TableArgs {
+        label: args.label,
+        analysis: args.analysis,
+        out: None,
+    };
+    let path = table_at(&table, &["runs.tbl"])?;
+    let out = beside(&path, args.out, "depth.tbl")?;
+
+    crate::scores::depth::depth(&path, &args.run, args.bin, &out)?;
+
+    println!("wrote {}", out.display());
+    Ok(())
+}
+
 fn stages(args: TableArgs) -> anyhow::Result<()> {
-    let path = table(&args, &["runs.tbl"])?;
+    let path = table_at(&args, &["runs.tbl"])?;
     let out = beside(&path, args.out, "stages.tbl")?;
 
     analyze::stages(&path, &out)?;
@@ -218,7 +259,7 @@ fn stages(args: TableArgs) -> anyhow::Result<()> {
 /// `names` are the tables this analysis can read, in the order it prefers
 /// them. A path is taken as given; a pipeline is searched for the first of
 /// them it holds.
-fn table(args: &TableArgs, names: &[&str]) -> anyhow::Result<PathBuf> {
+fn table_at(args: &TableArgs, names: &[&str]) -> anyhow::Result<PathBuf> {
     if args.analysis.is_file() {
         return Ok(args.analysis.clone());
     }

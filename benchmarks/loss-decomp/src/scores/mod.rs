@@ -62,6 +62,7 @@
 
 pub mod analyze;
 pub mod collect;
+pub mod depth;
 pub mod frame;
 pub mod parse;
 pub mod runs;
