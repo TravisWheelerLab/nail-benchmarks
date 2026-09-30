@@ -279,8 +279,15 @@ struct Pair {
     truth: bool,
 }
 
-/// Where the hits sit in the prefilter list, per unit and per run.
-pub fn depth(table: &Path, root: &Path, width: u64, out: &Path) -> anyhow::Result<()> {
+/// Where the hits sit in the prefilter list, per unit and per run, and every
+/// hit's own rank in `hits`.
+pub fn depth(
+    table: &Path,
+    root: &Path,
+    width: u64,
+    out: &Path,
+    hits_out: &Path,
+) -> anyhow::Result<()> {
     ensure!(width > 0, "--bin must be at least 1");
 
     let mut scores = Runs::open(table)?;
@@ -290,9 +297,14 @@ pub fn depth(table: &Path, root: &Path, width: u64, out: &Path) -> anyhow::Resul
     // every pair that hmmer found or a run kept, grouped by the arm and the
     // shard whose prefilter list says where it sat
     let mut pairs: HashMap<(usize, String), Vec<Pair>> = HashMap::new();
+    // what hmmer found per unit, the denominator a sensitivity is read over
+    let mut truth_of: indexmap::IndexMap<String, u64> = indexmap::IndexMap::new();
 
     scores.each(|row| {
         let truth = row.row().passed(hmmer);
+        if truth {
+            *truth_of.entry(row.row().shard().to_string()).or_default() += 1;
+        }
         let query = String::from_utf8_lossy(row.row().field(0)).into_owned();
         let target = String::from_utf8_lossy(row.row().field(1)).into_owned();
 
@@ -330,6 +342,17 @@ pub fn depth(table: &Path, root: &Path, width: u64, out: &Path) -> anyhow::Resul
         toil::Column::new("frac").fixed(4),
     ]));
     table.meta("bin", [width.to_string()]);
+    let mut hits_table = toil::Table::new(toil::Schema::new([
+        toil::Column::new("unit"),
+        toil::Column::new("run"),
+        toil::Column::new("query"),
+        toil::Column::new("target"),
+        toil::Column::new("rank"),
+    ]));
+    for (unit, n) in &truth_of {
+        table.meta("truth", [unit.clone(), n.to_string()]);
+        hits_table.meta("truth", [unit.clone(), n.to_string()]);
+    }
 
     let mut groups: Vec<_> = pairs.into_iter().collect();
     groups.sort_by(|a, b| (a.0.1.as_str(), a.0.0).cmp(&(b.0.1.as_str(), b.0.0)));
@@ -417,6 +440,13 @@ pub fn depth(table: &Path, root: &Path, width: u64, out: &Path) -> anyhow::Resul
                         }
                         if p.kept && p.truth {
                             Tally::bump(&mut tally.hits, bin);
+                            hits_table.row([
+                                toil::Cell::from(shard.as_str()),
+                                runs[run].name.as_str().into(),
+                                p.query.as_str().into(),
+                                p.target.as_str().into(),
+                                r.into(),
+                            ]);
                         }
                     }
                     None if p.kept => {
@@ -470,7 +500,10 @@ pub fn depth(table: &Path, root: &Path, width: u64, out: &Path) -> anyhow::Resul
 
     table
         .write(out)
-        .with_context(|| format!("failed to write {}", out.display()))
+        .with_context(|| format!("failed to write {}", out.display()))?;
+    hits_table
+        .write(hits_out)
+        .with_context(|| format!("failed to write {}", hits_out.display()))
 }
 
 fn frac(n: u64, of: u64) -> f64 {

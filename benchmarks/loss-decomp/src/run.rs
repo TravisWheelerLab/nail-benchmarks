@@ -24,7 +24,7 @@ use michi::{Cmd, PipelineBuilder, Progress, Step, Table};
 
 use util::ledger;
 use util::manifest;
-use util::search::{Bins, Dirs, Split};
+use util::search::{Bins, Dirs, SEED_S, Split};
 use util::set::Set;
 use util::split::Kind;
 
@@ -40,6 +40,9 @@ const HMMER: &str = "hmmer";
 struct Arm {
     name: String,
     s: String,
+    /// `--prog-n` and `--prog-f` for a prog arm, which seeds at the shared
+    /// sensitivity and stops per query; none for a static arm.
+    prog: Option<(usize, f64)>,
 }
 
 impl Arm {
@@ -47,6 +50,17 @@ impl Arm {
         Arm {
             name: format!("s{s}"),
             s: format!("{s}"),
+            prog: None,
+        }
+    }
+
+    /// The point the static ceiling is read against: what nail does by
+    /// default, at the sensitivity every benchmark here seeds at.
+    fn prog(n: usize, f: f64) -> Arm {
+        Arm {
+            name: format!("prog-n{n}-f{f}"),
+            s: SEED_S.to_string(),
+            prog: Some((n, f)),
         }
     }
 }
@@ -74,6 +88,10 @@ pub struct Args {
         value_name = "X,X,..."
     )]
     sensitivities: Vec<f64>,
+
+    /// A prog arm to add, as `n:f`, seeding at the shared sensitivity
+    #[arg(long, value_delimiter = ',', value_name = "N:F,...")]
+    prog: Vec<String>,
 
     /// Threads per search, and the cores each search is pinned to
     #[arg(short, long)]
@@ -111,7 +129,13 @@ pub fn main(args: Args, paths: &crate::Paths) -> anyhow::Result<()> {
         .pool(threads)
         .step(dirs.mkdir().path(dirs.tmp.join("align")));
 
-    let arms: Vec<Arm> = args.sensitivities.iter().map(|&s| Arm::at(s)).collect();
+    let mut arms: Vec<Arm> = args.sensitivities.iter().map(|&s| Arm::at(s)).collect();
+    for spec in &args.prog {
+        let (n, f) = spec
+            .split_once(':')
+            .with_context(|| format!("--prog wants n:f, got {spec:?}"))?;
+        arms.push(Arm::prog(n.parse()?, f.parse()?));
+    }
 
     ensure!(!arms.is_empty(), "the sweep has no arms");
     println!(
@@ -163,33 +187,44 @@ pub fn main(args: Args, paths: &crate::Paths) -> anyhow::Result<()> {
         // the seeding offered, and mmseqs' databases stay in the tmp dir
         // for depth to read a pair's rank
         for arm in &arms {
+            let mut cmd = Cmd::new(&bins.nail)
+                .sub("search")
+                .arg("--mmseqs-path", &bins.mmseqs)
+                .arg("-t", threads)
+                .arg(
+                    "--tmp-dir",
+                    crate::scores::depth::prefilter_dir(&dirs.root, &arm.name, &shard),
+                )
+                .arg("--mmseqs-s", &arm.s)
+                .arg("--mmseqs-max-seqs", UNBOUNDED);
+
+            cmd = match arm.prog {
+                Some((n, f)) => cmd
+                    .arg("--seed-mode", "prog")
+                    .arg("--prog-n", n)
+                    .arg("--prog-f", f),
+                None => cmd.arg("--seed-mode", "static"),
+            };
+
+            let cmd = cmd
+                .arg("--seeds-out", dirs.seeds(&arm.name, &shard))
+                .arg("-E", args.nail_evalue)
+                .arg("--tbl-out", dirs.table(&arm.name, &shard))
+                .flag("--allow-overwrite")
+                .path(&query_hmm)
+                .path(&target)
+                .field(manifest::NAME, &arm.name)
+                .field(manifest::TOOL, "nail")
+                // the list this run wrote, which is what it aligned
+                .field(manifest::SEEDS, &arm.name)
+                .field(manifest::SHARD, &shard)
+                .field("s", &arm.s)
+                .field("E", args.nail_evalue);
+
             pl = pl.step(
-                Step::serial([Cmd::new(&bins.nail)
-                    .sub("search")
-                    .arg("--mmseqs-path", &bins.mmseqs)
-                    .arg("-t", threads)
-                    .arg(
-                        "--tmp-dir",
-                        crate::scores::depth::prefilter_dir(&dirs.root, &arm.name, &shard),
-                    )
-                    .arg("--mmseqs-s", &arm.s)
-                    .arg("--seed-mode", "static")
-                    .arg("--mmseqs-max-seqs", UNBOUNDED)
-                    .arg("--seeds-out", dirs.seeds(&arm.name, &shard))
-                    .arg("-E", args.nail_evalue)
-                    .arg("--tbl-out", dirs.table(&arm.name, &shard))
-                    .flag("--allow-overwrite")
-                    .path(&query_hmm)
-                    .path(&target)
-                    .field(manifest::NAME, &arm.name)
-                    .field(manifest::TOOL, "nail")
-                    // the list this run wrote, which is what it aligned
-                    .field(manifest::SEEDS, &arm.name)
-                    .field(manifest::SHARD, &shard)
-                    .field("s", &arm.s)
-                    .field("E", args.nail_evalue)])
-                .name(format!("{}.{shard}", arm.name))
-                .cores(threads),
+                Step::serial([cmd])
+                    .name(format!("{}.{shard}", arm.name))
+                    .cores(threads),
             );
         }
     }

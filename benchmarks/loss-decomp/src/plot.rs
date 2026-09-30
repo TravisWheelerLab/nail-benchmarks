@@ -1,5 +1,6 @@
 //! Draws what each seeding arm missed against what it cost, by handing
-//! stages.tbl and the ledger to matplotlib.
+//! stages.tbl and the ledger to matplotlib, and where the hits sit in the
+//! prefilter list from depth.tbl and hits.tbl.
 //!
 //! The ledger comes too because the cost is not in stages.tbl: an arm is a
 //! seeding plus the alignment replaying it, and only the ledger has both, per
@@ -19,6 +20,7 @@ use clap::Parser;
 use michi::{Cmd, PipelineBuilder, Progress, Step};
 
 const SCRIPT: &str = "scripts/plot.py";
+const DEPTH_SCRIPT: &str = "scripts/plot_depth.py";
 
 #[derive(Parser, Debug)]
 pub struct Args {
@@ -74,8 +76,25 @@ pub fn main(args: Args, paths: &crate::Paths) -> anyhow::Result<()> {
         .path(&stages)
         .path(&ledger);
 
-    let pipeline = PipelineBuilder::new()
-        .step(Step::serial([cmd]))
+    let mut pl = PipelineBuilder::new().step(Step::serial([cmd]));
+
+    // the depth figure needs what parse depth wrote, and a run parsed
+    // before depth existed still gets its stages figure
+    let depth = paths.analysis.join("depth.tbl");
+    let hits = paths.analysis.join("hits.tbl");
+    if depth.is_file() && hits.is_file() {
+        let script = crate::dir().join(DEPTH_SCRIPT);
+        pl = pl.step(Step::serial([Cmd::new(&args.python)
+            .name("plot depth")
+            .sub(script.to_string_lossy())
+            .arg("--out", &out)
+            .path(&depth)
+            .path(&hits)]));
+    } else {
+        println!("no depth.tbl and hits.tbl; run `loss-decomp parse depth` for the depth figure");
+    }
+
+    let pipeline = pl
         .stderr_dir(paths.tmp.join("plot-stderr"))
         .sink(Progress::new())
         .build()?;
