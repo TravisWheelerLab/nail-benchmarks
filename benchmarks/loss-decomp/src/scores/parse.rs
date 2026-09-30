@@ -237,11 +237,13 @@ fn depth(args: DepthArgs) -> anyhow::Result<()> {
     let path = table_at(&table, &["runs.tbl"])?;
     let out = beside(&path, args.out, "depth.tbl")?;
     let hits = beside(&out, None, "hits.tbl")?;
+    let lists = beside(&out, None, "lists.tbl")?;
 
-    crate::scores::depth::depth(&path, &args.run, args.bin, &out, &hits)?;
+    crate::scores::depth::depth(&path, &args.run, args.bin, &out, &hits, &lists)?;
 
     println!("wrote {}", out.display());
     println!("wrote {}", hits.display());
+    println!("wrote {}", lists.display());
     Ok(())
 }
 

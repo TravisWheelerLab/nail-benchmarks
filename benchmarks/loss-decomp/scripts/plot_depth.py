@@ -1,24 +1,26 @@
 #!/usr/bin/env python3
-"""How far down the prefilter list the hits sit, per query, and what a static
-cap pays to reach them.
+"""How good the seeds are at each depth of the prefilter list, family by
+family.
 
-    plot_depth.py depth.tbl hits.tbl --out figures/
+    plot_depth.py hits.tbl lists.tbl --out figures/
 
-One row per target corpus, two panels.
+One panel per target corpus. The x axis is depth in a query's prefilter list,
+in bins that double from the first; the y axis is a family's yield in that
+bin: of its prefilter pairs at those ranks, the fraction that became hits, kept
+over the cutoff and found by hmmer. Every family whose list reaches the bin is
+one sample, so the column over a bin is the distribution of yield across
+families, drawn as a density on a log axis with the median and the 10th and
+90th percentiles over it.
 
-Left: one curve per query, the fraction of that query's hits reached by rank,
-at the unbounded static seeding at the shared sensitivity. The curves flatten
-at different ranks, and that spread is the case for prog seeding: a static
---mmseqs-max-seqs is one vertical line through all of them, paying for every
-rank left of it under a curve that has already flattened and giving up
-everything right of it under a curve still rising. The 10th, 50th and 90th
-percentile curves are drawn over the web so the spread reads where the web is
-solid.
+The yield means the same thing for a family with 3 hits and one with 3,000,
+which is what lets the families be pooled. At rank 1 it is 0 or 1 per family
+and says nothing; by rank 200 it is a band, and how that band falls with depth,
+and how wide it is at each depth, is what a stopping rule is up against: a
+static cap stops every family at one depth, prog stops each where its own
+yield gives out.
 
-Right: what a static cap costs against what it reaches. Each point is a cap at
-a bin edge: the seeds nail would align, which are the seeds at or under that
-rank, against the hits reached as a fraction of what hmmer found. The prog arm
-is one point, at the seeds it aligned and the hits it kept.
+Families with a yield of exactly zero in a bin sit off a log axis, so their
+share is written under each column instead.
 """
 
 import argparse
@@ -31,20 +33,22 @@ import numpy as np
 mpl.use("Agg")
 
 import matplotlib.pyplot as plt
-from matplotlib.collections import LineCollection
+from matplotlib.colors import LogNorm
 
 SCALE = 1.5
 mpl.rcParams.update({"font.size": mpl.rcParams["font.size"] * SCALE})
 
 # the palette the other benchmarks use, so figures from all of them sit together
 TOL_RED = "#CC3311"
-TOL_TEAL = "#009988"
 TOL_BLUE = "#0077BB"
-TOL_ORANGE = "#EE7733"
-GREY = "#BBBBBB"
 
 # nail's own --mmseqs-max-seqs in static mode
 STATIC_DEFAULT = 300
+
+# yields below this are drawn at the axis floor; the strip under it holds
+# the share of families at exactly zero
+FLOOR = 1e-5
+STRIP = FLOOR / 5
 
 
 def table(path):
@@ -67,109 +71,119 @@ def table(path):
     return meta, rows
 
 
-def per_query(hits, unit, run):
-    """Each query's hit ranks, sorted, for one unit and run."""
-    ranks = defaultdict(list)
+def edges(width, top):
+    """The bins: (lo, hi) doubling from `width` until `top` is covered."""
+    out, lo, hi = [], 1, width
+    while lo <= top:
+        out.append((lo, hi))
+        lo, hi = hi + 1, hi * 2
+    return out
+
+
+def yields(hits, lists, unit, run, bins):
+    """Per bin, each family's yield there: hits over prefilter pairs, for
+    every family whose list reaches the bin."""
+    length = {r["query"]: int(r["length"]) for r in lists if r["unit"] == unit and r["run"] == run}
+    hit = defaultdict(lambda: np.zeros(len(bins), dtype=int))
     for r in hits:
-        if r["unit"] == unit and r["run"] == run:
-            ranks[r["query"]].append(int(r["rank"]))
-    return {q: np.array(sorted(v)) for q, v in ranks.items()}
+        if r["unit"] != unit or r["run"] != run:
+            continue
+        rank = int(r["rank"])
+        for b, (lo, hi) in enumerate(bins):
+            if lo <= rank <= hi:
+                hit[r["query"]][b] += 1
+                break
+
+    out = []
+    for b, (lo, hi) in enumerate(bins):
+        ys = []
+        for q, n in length.items():
+            if n < lo:
+                continue
+            pairs = min(n, hi) - lo + 1
+            ys.append(hit[q][b] / pairs)
+        out.append(np.array(ys))
+    return out
 
 
-def web(ax, curves, unit):
-    """One step curve per query, and the percentiles over them."""
-    top = max(int(v[-1]) for v in curves.values())
-    segments = []
-    for ranks in curves.values():
-        n = len(ranks)
-        # a step at each hit, held flat to the next, and out to the edge
-        x = np.concatenate([[1], np.repeat(ranks, 2), [top]])
-        y = np.concatenate([[0, 0], np.repeat(np.arange(1, n + 1) / n, 2)[:-1], [1]])
-        segments.append(np.column_stack([x, y]))
-    ax.add_collection(
-        LineCollection(segments, colors=TOL_BLUE, linewidths=0.4, alpha=0.04)
-    )
+def panel(ax, per_bin, bins, unit):
+    """One column of density per bin, the percentiles over it, and the share
+    of families at zero under it."""
+    ybins = np.logspace(np.log10(FLOOR), 0, 26)
+    grid = np.zeros((len(ybins) - 1, len(bins)))
+    for b, ys in enumerate(per_bin):
+        nonzero = ys[ys > 0]
+        if len(nonzero):
+            grid[:, b], _ = np.histogram(np.clip(nonzero, FLOOR, 1), bins=ybins)
 
-    grid = np.logspace(0, np.log10(top), 300)
-    reached = np.array(
-        [np.searchsorted(v, grid, side="right") / len(v) for v in curves.values()]
-    )
-    # a low percentile of the fraction reached is a query that reaches
-    # its hits late, so the 10th sits to the right of the median
+    x = np.arange(len(bins) + 1)
+    mesh = ax.pcolormesh(x, ybins, np.where(grid > 0, grid, np.nan),
+                         cmap="Blues", norm=LogNorm(vmin=1, vmax=max(grid.max(), 2)))
+
+    # percentiles over the families with a hit in the bin, which is what
+    # the density above draws; the rest are the share written under it
+    centers = x[:-1] + 0.5
     for q, style, label in [
-        (10, ":", "slowest tenth of queries"),
-        (50, "-", "median query"),
-        (90, "--", "fastest tenth of queries"),
+        (90, "--", "90th percentile family with a hit"),
+        (50, "-", "median family with a hit"),
+        (10, ":", "10th percentile family with a hit"),
     ]:
-        ax.plot(grid, np.percentile(reached, q, axis=0), style, color="black",
-                linewidth=2, label=label)
+        v = np.array([
+            np.percentile(ys[ys > 0], q) if np.any(ys > 0) else np.nan for ys in per_bin
+        ])
+        ax.plot(centers, v, style, color="black", linewidth=2, label=label)
 
-    ax.axvline(STATIC_DEFAULT, color=TOL_RED, linewidth=1.5)
-    ax.text(STATIC_DEFAULT * 1.15, 0.5, f"static default\n{STATIC_DEFAULT}",
-            color=TOL_RED, fontsize=mpl.rcParams["font.size"] * 0.75)
-
-    ax.set_xscale("log")
-    ax.set_xlim(1, top)
-    ax.set_ylim(0, 1.02)
-    ax.set_xlabel("rank in the query's prefilter list")
-    ax.set_ylabel("fraction of the query's hits reached")
-    ax.set_title(f"{unit}: {len(curves):,} queries with a hit", loc="left")
-    ax.legend(loc="lower right", frameon=False)
-
-
-def cost(ax, depth, truth, unit, ceiling, arms):
-    """Seeds aligned against sensitivity: the static caps as a curve, every
-    other arm as a point."""
-    caps = [r for r in depth if r["unit"] == unit and r["run"] == ceiling and r["lo"] != "-"]
-    seeds = np.cumsum([int(r["seeds"]) for r in caps])
-    hits = np.cumsum([int(r["hits"]) for r in caps]) / truth
-    ax.plot(seeds, hits, "-o", color=TOL_RED, markersize=6, linewidth=2,
-            label=f"static cap at {ceiling}")
-    # a cap's rank beside its point, skipped where the points crowd
-    last_x = 0
-    for r, x, y in zip(caps, seeds, hits):
-        if x < last_x * 1.04:
+    # the share of families with no hit at all in the bin, in the strip
+    # under the axis floor
+    ax.axhline(FLOOR, color="black", linewidth=0.8)
+    for b, ys in enumerate(per_bin):
+        if len(ys) == 0:
             continue
-        last_x = x
-        ax.annotate(r["hi"], (x, y), textcoords="offset points", xytext=(6, -12),
-                    fontsize=mpl.rcParams["font.size"] * 0.6, color=TOL_RED)
+        zero = np.mean(ys == 0)
+        ax.text(centers[b], STRIP * 1.15, f"{zero:.0%}\nat 0\nof {len(ys):,}",
+                ha="center", va="bottom", fontsize=mpl.rcParams["font.size"] * 0.6)
 
-    for run, color, marker in arms:
-        rows = [r for r in depth if r["unit"] == unit and r["run"] == run and r["lo"] != "-"]
-        if not rows:
-            continue
-        x = sum(int(r["seeds"]) for r in rows)
-        y = sum(int(r["hits"]) for r in rows) / truth
-        ax.scatter([x], [y], s=110, color=color, marker=marker, zorder=3, label=run)
+    # where nail's static default would stop every family
+    for b, (lo, hi) in enumerate(bins):
+        if lo <= STATIC_DEFAULT <= hi:
+            at = b + (np.log2(STATIC_DEFAULT / lo + 1) if b else STATIC_DEFAULT / hi)
+            ax.axvline(at, color=TOL_RED, linewidth=1.5)
+            ax.text(at + 0.1, 0.5, f"static default {STATIC_DEFAULT}", color=TOL_RED,
+                    fontsize=mpl.rcParams["font.size"] * 0.7)
+            break
 
-    ax.set_xscale("log")
-    ax.set_xlabel("seeds nail aligns")
-    ax.set_ylabel("hits reached / hmmer's hits")
-    ax.set_title(f"{unit}: what a cap pays", loc="left")
-    ax.legend(loc="lower right", frameon=False)
+    ax.set_yscale("log")
+    ax.set_ylim(STRIP, 1.05)
+    ax.set_xlim(0, len(bins))
+    ax.set_xticks(centers)
+    ax.set_xticklabels([f"{lo:,}\n{hi:,}" for lo, hi in bins], fontsize=mpl.rcParams["font.size"] * 0.6)
+    ax.set_xlabel("depth in the query's prefilter list")
+    ax.set_ylabel("yield: hits / prefilter pairs at that depth, per family")
+    ax.set_title(unit, loc="left")
+    ax.legend(loc="upper right", frameon=False, fontsize=mpl.rcParams["font.size"] * 0.8)
+    return mesh
 
 
-def draw(depth_path, hits_path, out):
-    meta, depth = table(depth_path)
-    _, hits = table(hits_path)
+def draw(hits_path, lists_path, out):
+    meta, hits = table(hits_path)
+    _, lists = table(lists_path)
 
-    truth = {words[0]: int(words[1]) for key, words in meta if key == "truth"}
-    units = list(dict.fromkeys(r["unit"] for r in depth))
-    runs = list(dict.fromkeys(r["run"] for r in depth))
+    units = list(dict.fromkeys(r["unit"] for r in lists))
+    runs = list(dict.fromkeys(r["run"] for r in lists))
+    # the unbounded static arm at the shared sensitivity, the first arm
+    ceiling = runs[0]
+    width = 200
+    top = max(int(r["length"]) for r in lists if r["run"] == ceiling)
+    bins = edges(width, top)
 
-    # the ceiling is the unbounded static arm at the shared sensitivity; the
-    # rest are drawn as points against it
-    static = [r for r in runs if r.startswith("s")]
-    ceiling = static[0]
-    others = [(r, TOL_ORANGE, "s") for r in static[1:]]
-    others += [(r, TOL_TEAL, "D") for r in runs if r.startswith("prog")]
+    fig, axes = plt.subplots(1, len(units), figsize=(9.5 * len(units), 8), squeeze=False,
+                             layout="constrained")
+    mesh = None
+    for ax, unit in zip(axes[0], units):
+        mesh = panel(ax, yields(hits, lists, unit, ceiling, bins), bins, unit)
+    fig.colorbar(mesh, ax=list(axes[0]), label="families", pad=0.01, shrink=0.8)
 
-    fig, axes = plt.subplots(len(units), 2, figsize=(16, 6.5 * len(units)), squeeze=False)
-    for (left, right), unit in zip(axes, units):
-        web(left, per_query(hits, unit, ceiling), unit)
-        cost(right, depth, truth[unit], unit, ceiling, others)
-
-    fig.tight_layout()
+    fig.suptitle(f"{ceiling}, static, unbounded: how good the seeds are by depth", x=0.01, ha="left")
     path = Path(out) / "loss-decomp-depth.pdf"
     fig.savefig(path)
     print(f"wrote {path}")
@@ -177,12 +191,12 @@ def draw(depth_path, hits_path, out):
 
 def main():
     p = argparse.ArgumentParser(description=__doc__.splitlines()[0])
-    p.add_argument("depth")
     p.add_argument("hits")
+    p.add_argument("lists")
     p.add_argument("--out", required=True)
     a = p.parse_args()
     Path(a.out).mkdir(parents=True, exist_ok=True)
-    draw(a.depth, a.hits, a.out)
+    draw(a.hits, a.lists, a.out)
 
 
 if __name__ == "__main__":

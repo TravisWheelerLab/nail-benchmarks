@@ -80,18 +80,18 @@ pub fn main(args: Args, paths: &crate::Paths) -> anyhow::Result<()> {
 
     // the depth figure needs what parse depth wrote, and a run parsed
     // before depth existed still gets its stages figure
-    let depth = paths.analysis.join("depth.tbl");
     let hits = paths.analysis.join("hits.tbl");
-    if depth.is_file() && hits.is_file() {
+    let lists = paths.analysis.join("lists.tbl");
+    if hits.is_file() && lists.is_file() {
         let script = crate::dir().join(DEPTH_SCRIPT);
         pl = pl.step(Step::serial([Cmd::new(&args.python)
             .name("plot depth")
             .sub(script.to_string_lossy())
             .arg("--out", &out)
-            .path(&depth)
-            .path(&hits)]));
+            .path(&hits)
+            .path(&lists)]));
     } else {
-        println!("no depth.tbl and hits.tbl; run `loss-decomp parse depth` for the depth figure");
+        println!("no hits.tbl and lists.tbl; run `loss-decomp parse depth` for the depth figure");
     }
 
     let pipeline = pl

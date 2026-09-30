@@ -129,10 +129,14 @@ impl Prefilter {
         Ok(ranks)
     }
 
-    /// How many targets each query's list holds, by reading the data once
-    /// through.
-    fn lengths(&self) -> anyhow::Result<Vec<u64>> {
-        let mut spans: Vec<(u64, u64)> = self.entries.values().copied().collect();
+    /// How many targets each query's list holds, by key, by reading the
+    /// data once through.
+    fn lengths(&self) -> anyhow::Result<Vec<(u32, u64)>> {
+        let mut spans: Vec<(u64, u64, u32)> = self
+            .entries
+            .iter()
+            .map(|(&key, &(off, len))| (off, len, key))
+            .collect();
         spans.sort_unstable();
 
         let mut lengths = Vec::with_capacity(spans.len());
@@ -151,9 +155,9 @@ impl Prefilter {
                 let chunk = &buf[..n];
 
                 // count the newlines of every span this chunk touches
-                let mut i = spans.partition_point(|&(off, len)| off + len <= at);
+                let mut i = spans.partition_point(|&(off, len, _)| off + len <= at);
                 while i < spans.len() && spans[i].0 < at + n as u64 {
-                    let (off, len) = spans[i];
+                    let (off, len, _) = spans[i];
                     let lo = off.max(at) - at;
                     let hi = (off + len).min(at + n as u64) - at;
                     let count = chunk[lo as usize..hi as usize]
@@ -172,7 +176,11 @@ impl Prefilter {
         }
 
         lengths.resize(spans.len(), 0);
-        Ok(lengths)
+        Ok(spans
+            .iter()
+            .zip(lengths)
+            .map(|(&(_, _, key), len)| (key, len))
+            .collect())
     }
 }
 
@@ -287,6 +295,7 @@ pub fn depth(
     width: u64,
     out: &Path,
     hits_out: &Path,
+    lists_out: &Path,
 ) -> anyhow::Result<()> {
     ensure!(width > 0, "--bin must be at least 1");
 
@@ -349,6 +358,12 @@ pub fn depth(
         toil::Column::new("target"),
         toil::Column::new("rank"),
     ]));
+    let mut lists_table = toil::Table::new(toil::Schema::new([
+        toil::Column::new("unit"),
+        toil::Column::new("run"),
+        toil::Column::new("query"),
+        toil::Column::new("length"),
+    ]));
     for (unit, n) in &truth_of {
         table.meta("truth", [unit.clone(), n.to_string()]);
         hits_table.meta("truth", [unit.clone(), n.to_string()]);
@@ -368,7 +383,20 @@ pub fn depth(
 
         // the prefilter pairs per bin come from the length of every
         // query's list: a list of L holds min(L, hi) - lo + 1 of each bin
-        for len in pf.lengths()? {
+        // the name each key was given, for the per-query list
+        let name_of: HashMap<u32, &str> = pf
+            .query_key
+            .iter()
+            .map(|(name, &key)| (key, name.as_str()))
+            .collect();
+
+        for (key, len) in pf.lengths()? {
+            lists_table.row([
+                toil::Cell::from(shard.as_str()),
+                runs[run].name.as_str().into(),
+                (*name_of.get(&key).unwrap_or(&"?")).into(),
+                len.into(),
+            ]);
             let mut bin = 0;
             loop {
                 let (lo, hi) = range(bin, width);
@@ -503,7 +531,10 @@ pub fn depth(
         .with_context(|| format!("failed to write {}", out.display()))?;
     hits_table
         .write(hits_out)
-        .with_context(|| format!("failed to write {}", hits_out.display()))
+        .with_context(|| format!("failed to write {}", hits_out.display()))?;
+    lists_table
+        .write(lists_out)
+        .with_context(|| format!("failed to write {}", lists_out.display()))
 }
 
 fn frac(n: u64, of: u64) -> f64 {
