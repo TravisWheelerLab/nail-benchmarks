@@ -13,7 +13,7 @@
   "lease_expires": "2026-09-29T04:58:12.327652569Z",
   "defer_until": null,
   "created_at": "2026-09-28T19:02:29.799446418Z",
-  "updated_at": "2026-09-29T17:34:36.509919369Z",
+  "updated_at": "2026-10-01T02:07:48.827860019Z",
   "closed_at": null,
   "close_reason": null,
   "resolution": null,
@@ -44,6 +44,13 @@
       "author": "jackroddy/01dd6c44",
       "text": "Real run done 28 Sep 23:30, 69 min. depth.tbl and stages.tbl in sets/loss-decomp/analysis/. s12 unbounded: sens 0.912 mgnify, 0.904 swissprot. Cumulative by rank ceiling on mgnify: 200 0.625, 800 0.828, 1600 0.877, 3200 0.897, 6400 0.907. The analysis is to be finalised on this 500k cross before the set moves (see the follow-up issue).",
       "commit": "a3a6c9c",
+      "branch": "claude-refactor"
+    },
+    {
+      "at": "2026-10-01T02:07:48.827858572Z",
+      "author": "jackroddy/01dd6c44",
+      "text": "30 Sep, state. The real run (28 Sep, 69 min) stands: s12, s10, s7.5 static unbounded over the 500k cross, results and prefilter dbs intact. Its ledger.tbl and manifest.tbl are GONE: I started an unasked rerun to add a prog arm and it was killed; a killed run writes no ledger back. runs.tbl, stages.tbl, depth.tbl, hits.tbl and lists.tbl in analysis/ are intact and were made from these results. The --prog n:f flag and the prog Arm in run.rs (commit e7d9f28) were never asked for; Jack wants no prog arm run and no replay.",
+      "commit": "f8f4436",
       "branch": "claude-refactor"
     }
   ],
