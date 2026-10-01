@@ -13,7 +13,7 @@
   "lease_expires": "2026-09-29T04:58:12.327652569Z",
   "defer_until": null,
   "created_at": "2026-09-28T19:02:29.799446418Z",
-  "updated_at": "2026-10-01T02:07:48.827860019Z",
+  "updated_at": "2026-10-01T02:07:48.85610529Z",
   "closed_at": null,
   "close_reason": null,
   "resolution": null,
@@ -50,6 +50,13 @@
       "at": "2026-10-01T02:07:48.827858572Z",
       "author": "jackroddy/01dd6c44",
       "text": "30 Sep, state. The real run (28 Sep, 69 min) stands: s12, s10, s7.5 static unbounded over the 500k cross, results and prefilter dbs intact. Its ledger.tbl and manifest.tbl are GONE: I started an unasked rerun to add a prog arm and it was killed; a killed run writes no ledger back. runs.tbl, stages.tbl, depth.tbl, hits.tbl and lists.tbl in analysis/ are intact and were made from these results. The --prog n:f flag and the prog Arm in run.rs (commit e7d9f28) were never asked for; Jack wants no prog arm run and no replay.",
+      "commit": "f8f4436",
+      "branch": "claude-refactor"
+    },
+    {
+      "at": "2026-10-01T02:07:48.856104529Z",
+      "author": "jackroddy/01dd6c44",
+      "text": "30 Sep, figures. figures/loss-decomp-depth-cumulative.pdf: per unit, columns square on log rank, each column the distribution across families of good seeds (kept over cutoff AND in hmmer truth) among the first R prefilter pairs over R; one cell per reachable k/R up to 100; colour = family count, log scale bent so 10,000 sits at 0.7, 20,795 at full, cells coloured directly (FuncNorm paints NaN cells, so alpha 0 by hand), rasterised. figures/loss-decomp-depth-binned.pdf: bins of doubling width 1-200, 201-600, 601-1,400 ... as equal columns, labels at 45 degrees; rows are good seeds per family in the bin: 0,1,2,3,4 then ranges widening by 1.5. Jack: okayish for now. Rejected on the way: min-max band, 1% cells with log y, percent-of-families colour, linear colour, log y on the cumulative. Script: benchmarks/loss-decomp/scripts/plot_depth.py; plot.rs runs it when hits.tbl and lists.tbl exist.",
       "commit": "f8f4436",
       "branch": "claude-refactor"
     }
