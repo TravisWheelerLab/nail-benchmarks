@@ -13,7 +13,7 @@
   "lease_expires": null,
   "defer_until": null,
   "created_at": "2026-09-28T19:02:29.799446418Z",
-  "updated_at": "2026-10-01T18:46:13.696231256Z",
+  "updated_at": "2026-10-01T19:41:50.22838838Z",
   "closed_at": null,
   "close_reason": null,
   "resolution": null,
@@ -135,6 +135,13 @@
       "author": "jackroddy/924b3ec0",
       "text": "1 Oct: stages split four ways (commit 6aa4d43), real parse 3.5 min. s12 of 2,325,460 hmmer hits: pre-filtered 19,416 / not seeded 59,441 / nail filtered 147 / under cutoff 127,054 / kept 2,119,402 (0.9114). s10: 92,677 / 49,433 / 123 / 117,405 (0.8883). s7.5: 470,519 / 27,508 / 57 / 79,586 (0.7516). Jack: no full-dp replay and no nail change to split the 147; four categories are the analysis. The 0.91 vs recall's 0.96 is sens vs sens_sd (single-domain); same rule, same cutoffs; by recall's rule this shard gives sens 0.913 and sens_sd 0.971 at s12.",
       "commit": "6aa4d43",
+      "branch": "claude-refactor"
+    },
+    {
+      "at": "2026-10-01T19:41:50.228387229Z",
+      "author": "jackroddy/924b3ec0",
+      "text": "1 Oct: stages split by hmmer domain count (commit 16e677b): stages.tbl, stages-single.tbl, stages-multi.tbl. Single (2,009,039 hits) s12: pre-filtered 8,335 / not seeded 28,236 / nail 20 / cutoff 26,544 / sens 0.9686. Multi (316,421): 11,081 / 31,205 / 127 / 100,510 / sens 0.5483. Multi-domain hits are 14% of hmmer's and 49% of what s12 loses; 79% of the cutoff loss is multi-domain. Single-domain sens 0.9686 sits beside recall's sens_sd 0.9604 on all of MGnify.",
+      "commit": "16e677b",
       "branch": "claude-refactor"
     }
   ],
