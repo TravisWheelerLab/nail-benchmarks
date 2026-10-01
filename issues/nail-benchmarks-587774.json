@@ -13,7 +13,7 @@
   "lease_expires": null,
   "defer_until": null,
   "created_at": "2026-09-28T19:02:29.799446418Z",
-  "updated_at": "2026-10-01T20:54:54.082729319Z",
+  "updated_at": "2026-10-01T21:19:08.661706608Z",
   "closed_at": null,
   "close_reason": null,
   "resolution": null,
@@ -148,6 +148,13 @@
       "at": "2026-10-01T20:54:54.082728495Z",
       "author": "jackroddy/924b3ec0",
       "text": "1 Oct: s12-full arm added (run --full-dp 12.0 --only s12-full, commit after 16e677b): replays s12's seeds with --full-dp, joins the existing ledger via ledger::add. Real run started ~13:10 at 48 threads, log tmp-claude/2026-09-30-loss-decomp-stages/run-real-full.log. Then parse runs, stages, depth. Cutoff-miss analysis so far: single-domain at s12, 57% identical coordinates scored lower, 40 bad anchors, the rest a continuum of end differences; per-pair table tmp-claude/2026-09-30-loss-decomp-stages/cutoff-misses.s12.tsv (script cutoff-misses.py).",
+      "commit": "167ac35",
+      "branch": "claude-refactor"
+    },
+    {
+      "at": "2026-10-01T21:19:08.661705754Z",
+      "author": "jackroddy/924b3ec0",
+      "text": "s12-full finished 1 Oct 14:19: 1,433 s at 48 threads, 7.7 GiB peak, 4,661,144 rows against s12's 4,625,764. In the ledger via ledger::add. Parse of the five-run table started.",
       "commit": "167ac35",
       "branch": "claude-refactor"
     }
