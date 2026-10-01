@@ -1,8 +1,8 @@
-//! Where nail's pipeline loses the hits its most sensitive seeding reaches.
+//! Where the hits hmmer finds get lost.
 //!
-//! One nail per sensitivity, each seeded static and unbounded. The most
-//! sensitive is the ceiling, and a pair it kept is followed through every
-//! checkpoint the other arms could drop it at.
+//! Reads a [`shape::FIXED`] set and searches one unit of it: seed once, run
+//! hmmer, then run nail at its defaults, and follow a pair through every
+//! checkpoint it could be dropped at.
 
 mod plot;
 mod run;
@@ -27,7 +27,7 @@ use clap::{Parser, Subcommand};
 pub const NEEDS: &[util::set::Rep] = &[util::set::Rep::QueryHmm, util::set::Rep::Target];
 
 #[derive(Parser)]
-#[command(name = "loss-decomp", about = "where nail loses the ceiling's hits")]
+#[command(name = "loss-decomp", about = "where hmmer's hits get lost")]
 struct Cli {
     #[command(subcommand)]
     command: Command,
@@ -35,13 +35,12 @@ struct Cli {
 
 #[derive(Subcommand)]
 enum Command {
-    /// One nail per sensitivity, each seeded static and unbounded.
+    /// Seed once, run hmmer, then run nail once at its defaults.
     Run(run::Args),
     /// Turn the results into a table, and that into numbers.
     #[command(subcommand)]
     Parse(Parse),
-    /// Draw where each arm lost the ceiling's hits, and where the hits sit in
-    /// the prefilter list.
+    /// Draw what each arm missed against what it cost.
     Plot(plot::Args),
 }
 
@@ -50,7 +49,7 @@ enum Parse {
     /// Read the results into runs.tbl, one row per pair, one score column per
     /// run, and whether seeding found the pair.
     Runs(crate::scores::parse::ScoresArgs),
-    /// Where the ceiling's hits were lost, one row per run per checkpoint.
+    /// Where the hits hmmer found were lost, one row per run per checkpoint.
     Stages(crate::scores::parse::TableArgs),
     /// How far down the prefilter list the hits sit, one row per run per
     /// depth bin.

@@ -16,16 +16,18 @@
 //! #= seed <seeding> <wall_s>
 //! #= cutoffs <path> c=<n>
 //! #= run <name> <tool> <wall_s> [k=v ...]
-//! # query target           s12    s10    s7.5
-//! # ----- ---------------- ------ ------ ------
+//! #                       A2.0
+//! #                       B4.0
+//! # query target           a5   ... full   hmmer  inc dom
+//! # ----- ---------------- ---- --- ------ ------ --- ---
 //! #= shard 1
-//! 2-Hacid_dh_C MGYP000522683479 98.8   98.8   -
+//! 2-Hacid_dh_C MGYP000522683479 98.8 ... 98.8   98.7   1   98.1
 //! #= end <rows>
 //! ```
 //!
 //! A run's name is stacked over its column on the dashes it is built from, so
-//! that a run named for several settings is named in full without ruling
-//! fourteen columns of padding across every row.
+//! that a cell of the sweep is named in full without ruling fourteen columns
+//! of padding across every row.
 //!
 //! A cell is a score, or one of two sentinels: `-` where the run's seeding
 //! offered the pair and the run did not report it, and `.` where that run's
@@ -35,10 +37,11 @@
 //!
 //! There is no `pass` column. Whether a run cleared its family's cutoff is its
 //! score against the cutoff `#= cutoffs` names, so a character per run saying
-//! so again would be the answer written twice. recall's `scores.tbl` keeps
-//! one, because there a score is per tool and no column can say which run
-//! reported the pair.
+//! so again would be the answer written twice -- and at 164 runs, 164 bytes a
+//! row of it. recall's `scores.tbl` keeps one, because there a score is per
+//! tool and no column can say which run reported the pair.
 
+use std::fmt::Write as _;
 use std::io::{BufWriter, Read, Write};
 use std::path::Path;
 
@@ -136,9 +139,10 @@ pub fn collect(args: Args<'_>) -> anyhow::Result<Count> {
         tools: ran.tools().to_vec(),
     };
 
-    // every run here is measured against the ceiling, so which run that is
-    // has to be a single answer before anything is written
-    meta.ceiling()?;
+    // every run here is measured against what hmmer found, and the domain
+    // breakdown is hmmer's alone, so which run is hmmer's has to be a single
+    // answer
+    let hmmer = meta.hmmer()?;
 
     // one entry per run, naming the seeding it replayed, and the distinct
     // seedings behind them
@@ -182,6 +186,7 @@ pub fn collect(args: Args<'_>) -> anyhow::Result<Count> {
         runs: &columns,
         queries: &queries,
         cutoffs: &cutoffs,
+        hmmer: Some(hmmer),
         seeds: &seed_of,
         lists: &lists,
     };
@@ -216,6 +221,8 @@ fn block(
     let mut out = Stream::continued(schema.clone(), widths.clone(), Vec::new());
     out.meta("shard", [shard])?;
 
+    let mut doms = String::new();
+
     let count = work.collect(shard, scratch, &mut |pair: &Pair<'_>| {
         let mut line = out.line()?;
 
@@ -232,6 +239,27 @@ fn block(
                 None => line.missing()?,
             };
         }
+
+        match pair.inc {
+            Some(inc) => line.num(inc as f64)?,
+            None => line.missing()?,
+        };
+
+        match pair.doms {
+            [] => line.missing()?,
+            scores => {
+                doms.clear();
+                for (i, score) in scores.iter().enumerate() {
+                    let separator = match i {
+                        0 => "",
+                        _ => ",",
+                    };
+                    write!(doms, "{separator}{score:.1}").expect("a String takes what it is given");
+                }
+
+                line.text(&doms)?
+            }
+        };
 
         line.end()?;
         Ok(())
@@ -262,15 +290,20 @@ fn schema(meta: &Meta) -> Schema {
             .min_width(SCORE)
     }));
 
+    columns.push(Column::new("inc").min_width(3));
+    columns.push(Column::new("dom").ragged());
+
     Schema::new(columns)
 }
 
 // -------------------------------------------------------------------- read
 
-/// Where this table's columns sit: query, target, one per run.
+/// Where this table's columns sit: query, target, one per run, inc, dom.
 pub fn layout(meta: &Meta) -> Layout {
+    let runs = meta.runs.len();
+
     Layout {
-        fields: SCORES_AT + meta.runs.len(),
+        fields: SCORES_AT + runs + 2,
     }
 }
 
@@ -398,28 +431,27 @@ mod tests {
         })
     }
 
-    /// Two arms and the ceiling, each with its own seed list: one pair the
-    /// arms found and scored differently, one seeded pair only the ceiling
-    /// reported, and one pair the arms' seeding never offered at all.
+    /// Two cells and hmmer, over a pipeline that seeded: one pair both cells
+    /// found and scored differently, one seeded pair only hmmer reported, and
+    /// one pair seeding never offered the cells at all.
     fn file() -> String {
         format!(
             "\
 #= format runs 1
 #= query 3 18 120
 #= target 1 3 12 40
-#= seed s12 4.0000
-#= seed s10 2.0000
+#= seed once 4.0000
 #= cutoffs {} c=0
-#= run s10-A2.0 nail 3.0000 seeds=s10 s=10.0 A=2.0
-#= run s10 nail 9.0000 seeds=s10 s=10.0
-#= run s12 nail 2.0000 seeds=s12 s=12.0
-#                       s10
-# query target           A2.0 s10    s12
-# ----- ---------------- ---- ------ ------
+#= run A2.0-B4.0 nail 3.0000 seeds=once A=2.0 B=4.0
+#= run full nail 9.0000 seeds=once
+#= run hmmer hmmer 2.0000
+#                       A2.0
+# query target           B4.0 full   hmmer  inc dom
+# ----- ---------------- ---- ------ ------ --- ---
 #= shard 1
-alpha MGYP000000000001 24.0 25.0   24.0
-beta MGYP000000000002 -    -      30.0
-gamma MGYP000000000003 .    .      28.0
+alpha MGYP000000000001 24.0 25.0   24.0   1   24.0
+beta MGYP000000000002 -    -      30.0   1   30.0
+gamma MGYP000000000003 .    .      28.0   1   28.0
 #= end 3
 ",
             cutoffs().display()
@@ -455,8 +487,8 @@ gamma MGYP000000000003 .    .      28.0
         // seeded, and then lost between there and the table
         assert!(rows[1].0 && !rows[1].1);
 
-        // never seeded at all, which is a different loss. the ceiling's
-        // own list held the pair
+        // never seeded at all, which is a different loss. hmmer replayed no
+        // seed list, so its own character is untouched
         assert!(!rows[2].0 && !rows[2].1 && rows[2].2);
     }
 
@@ -466,8 +498,9 @@ gamma MGYP000000000003 .    .      28.0
             (r.row().passed(0), r.row().passed(1), r.row().passed(2))
         });
 
-        // alpha's cutoff is 24.5, so the pruned arm's 24.0 is under it,
-        // the plain arm's 25.0 is over, and the ceiling's 24.0 is under
+        // alpha's cutoff is 24.5, so the cell's 24.0 is under it and the
+        // full run's 25.0 is over. hmmer is held to nail's cutoff and its
+        // 24.0 is under it too
         assert_eq!(rows[0], (false, true, false));
 
         // a cell that reported nothing cleared nothing, whatever beta's
@@ -486,8 +519,8 @@ gamma MGYP000000000003 .    .      28.0
         // nothing was withheld from it, which is not the same answer as a
         // seeding that looked and did not find the pair
         let text = file()
-            .replace("#= seed s10 2.0000\n", "")
-            .replace(" seeds=s10", "")
+            .replace("#= seed once 4.0000\n", "")
+            .replace(" seeds=once", "")
             .replace(
                 "gamma MGYP000000000003 .    .",
                 "gamma MGYP000000000003 -    -",

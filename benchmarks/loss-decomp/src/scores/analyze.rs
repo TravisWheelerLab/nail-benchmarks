@@ -1,10 +1,10 @@
 //! The analyses, which are groupings over a table of pairs.
 //!
-//! Nothing in here reads a results file. `stages` counts per checkpoint
-//! within a run, held to one denominator: what the ceiling kept over its
-//! family's cutoff.
+//! Nothing in here reads a results file. A summary counts per run, and stages
+//! counts per checkpoint within a run; both are held to the same denominator,
+//! which is what hmmer found and scored over its family's cutoff.
 //!
-//! It is separate from `parse` because reading every results table is the
+//! They are separate from `parse` because reading every results table is the
 //! expensive half and the half least likely to change: a different statistic
 //! is a re-run of this, not of the benchmark.
 
@@ -12,17 +12,12 @@ use std::path::Path;
 
 use anyhow::{Context, ensure};
 
-use crate::scores::Run;
+use crate::scores::Tool;
 use crate::scores::runs::Reader as Runs;
 
-/// What was searched, and what the fractions are fractions of.
-fn preamble(
-    table: &mut toil::Table,
-    meta: &crate::scores::Meta,
-    ceiling: &Run,
-    hits: usize,
-    rows: u64,
-) {
+/// What was searched, what the fractions are fractions of, and the two times
+/// the figures use as reference lines.
+fn preamble(table: &mut toil::Table, meta: &crate::scores::Meta, truth: usize, rows: u64) {
     let (mut count, mut residues, mut bytes) = (0usize, 0u64, 0u64);
     for (_, size) in &meta.targets {
         count += size.count;
@@ -30,30 +25,41 @@ fn preamble(
         bytes += size.bytes;
     }
 
+    let hmmer = meta
+        .runs
+        .iter()
+        .find(|run| run.tool == Tool::Hmmer)
+        .map(|run| run.wall_s)
+        .unwrap_or_default();
+
+    // a dash rather than a zero for a pipeline that never seeded: seeding
+    // taking no time and there being no seeding are different things
+    let seed = match meta.seeds.is_empty() {
+        true => "-".to_string(),
+        false => format!("{:.4}", meta.seeds.iter().map(|(_, w)| w).sum::<f64>()),
+    };
+
     table
         .comment(format!(
-            "query   {:>9} families  {:>12} residues  {:>12} bytes",
+            "query  {:>9} families  {:>12} residues  {:>12} bytes",
             meta.query.count, meta.query.residues, meta.query.bytes,
         ))
         .comment(format!(
-            "target  {count:>9} seqs      {residues:>12} residues  {bytes:>12} bytes"
+            "target {count:>9} seqs      {residues:>12} residues  {bytes:>12} bytes"
         ))
         .comment(format!(
-            "pairs   {rows:>9} rows      {:>12} runs",
+            "pairs  {rows:>9} rows      {:>12} runs",
             meta.runs.len()
         ))
-        .comment(format!(
-            "ceiling {hits:>9} hits      {:>12.4} wall_s  {}",
-            ceiling.wall_s, ceiling.name
-        ))
+        .comment(format!("hmmer  {truth:>9} hits      {hmmer:>12.4} wall_s"))
+        .comment(format!("seed   {:>9}           {seed:>12} wall_s", ""))
         .comment("");
 }
 
 /// What one unit's pairs came to, per run.
 struct Tally {
-    /// Pairs the ceiling kept at or above their family's cutoff, for this
-    /// unit.
-    ceiling: usize,
+    /// Pairs hmmer reported at or above their family's cutoff, for this unit.
+    truth: usize,
     lost_seed: Vec<usize>,
     lost_cloud_align: Vec<usize>,
     /// Scored, and below the family's cutoff. nail found the pair and would
@@ -65,7 +71,7 @@ struct Tally {
 impl Tally {
     fn new(runs: usize) -> Tally {
         Tally {
-            ceiling: 0,
+            truth: 0,
             lost_seed: vec![0; runs],
             lost_cloud_align: vec![0; runs],
             lost_cutoff: vec![0; runs],
@@ -74,21 +80,21 @@ impl Tally {
     }
 }
 
-/// Where the hits the ceiling kept are lost, per unit and per run.
+/// Where the hits hmmer found are lost, per unit and per run.
 pub fn stages(path: &Path, out: &Path) -> anyhow::Result<()> {
     let mut scores = Runs::open(path)?;
 
-    let ceiling = scores.meta().ceiling()?;
+    let hmmer = scores.meta().hmmer()?;
     let runs = scores.meta().runs.len();
 
     ensure!(
-        scores.meta().runs.iter().all(|run| run.seeds.is_some()),
-        "a run kept no seed list, so there is no seeding checkpoint to split on"
+        scores.meta().runs.iter().any(|run| run.seeds.is_some()),
+        "no run kept its seed list, so there is no seeding checkpoint to split on"
     );
 
     // per unit as well as per run. A `cross` set searches one query against
-    // several kinds of target, and what the ceiling kept in one is not the
-    // denominator for another: summed, two corpora make a sensitivity that
+    // several kinds of target, and what hmmer found in one is not the truth
+    // set for another: summed, the two corpora make a sensitivity that
     // describes neither
     let mut at: indexmap::IndexMap<String, Tally> = indexmap::IndexMap::new();
     let mut rows = 0u64;
@@ -96,21 +102,22 @@ pub fn stages(path: &Path, out: &Path) -> anyhow::Result<()> {
     scores.each(|row| {
         rows += 1;
 
-        if !row.row().passed(ceiling) {
+        if !row.row().passed(hmmer) {
             return Ok(());
         }
 
         let unit = row.row().shard().to_string();
         let tally = at.entry(unit).or_insert_with(|| Tally::new(runs));
-        tally.ceiling += 1;
+        tally.truth += 1;
 
         for run in 0..runs {
-            if run == ceiling {
+            if run == hmmer {
                 continue;
             }
 
-            // per run rather than per pair: every arm has its own seed list,
-            // so whether the pair was ever offered is the arm's answer
+            // per run rather than per pair: a seeding sweep gives every arm
+            // its own seed list, so whether the pair was ever offered is the
+            // arm's answer and not the pipeline's
             match (row.seeded(run), row.present(run), row.row().passed(run)) {
                 (false, _, _) => tally.lost_seed[run] += 1,
                 (_, false, _) => tally.lost_cloud_align[run] += 1,
@@ -123,17 +130,18 @@ pub fn stages(path: &Path, out: &Path) -> anyhow::Result<()> {
     })?;
 
     ensure!(
-        at.values().any(|t| t.ceiling > 0),
-        "the ceiling kept nothing over a cutoff; there is nothing to measure against"
+        at.values().any(|t| t.truth > 0),
+        "hmmer found nothing that clears a cutoff; there is nothing to measure against"
     );
 
-    // one row per (unit, run), a column per checkpoint. the ceiling has no
-    // row: it loses nothing of its own by definition, and its count is on
-    // every row of its unit
+    // one row per (unit, run), a column per checkpoint. Written long it was
+    // four rows apiece, where `n` meant a population on two of them and a loss
+    // on the other two, and the last row's fraction only ever repeated the one
+    // above it
     let headers = [
         "unit",
         "run",
-        "ceiling",
+        "truth",
         "lost_seed",
         "lost_align",
         "lost_cutoff",
@@ -146,37 +154,32 @@ pub fn stages(path: &Path, out: &Path) -> anyhow::Result<()> {
 
     for (unit, tally) in &at {
         for (run, column) in scores.meta().runs.iter().enumerate() {
-            if run == ceiling {
+            if run == hmmer {
                 continue;
             }
 
             cells.push(vec![
                 unit.clone(),
                 column.name.clone(),
-                tally.ceiling.to_string(),
+                tally.truth.to_string(),
                 tally.lost_seed[run].to_string(),
                 tally.lost_cloud_align[run].to_string(),
                 tally.lost_cutoff[run].to_string(),
                 tally.kept[run].to_string(),
-                format!("{:.4}", frac(tally.kept[run], tally.ceiling)),
+                format!("{:.4}", frac(tally.kept[run], tally.truth)),
             ]);
         }
     }
 
     ensure!(
         !cells.is_empty(),
-        "nothing but the ceiling ran, so there is no arm to measure"
+        "nothing but hmmer ran, so there is no pipeline to trace"
     );
 
-    let hits: usize = at.values().map(|tally| tally.ceiling).sum();
-    let top = &scores.meta().runs[ceiling];
+    let truth: usize = at.values().map(|tally| tally.truth).sum();
 
     let mut table = toil::Table::new(toil::Schema::new(headers));
-    preamble(&mut table, scores.meta(), top, hits, rows);
-    table.meta("ceiling", [top.name.as_str()]);
-    for (unit, tally) in &at {
-        table.meta("hits", [unit.as_str(), &tally.ceiling.to_string()]);
-    }
+    preamble(&mut table, scores.meta(), truth, rows);
     for row in cells {
         table.row(row);
     }

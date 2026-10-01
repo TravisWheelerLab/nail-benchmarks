@@ -4,9 +4,9 @@
 //! returned, so every pair nail reported has a depth: its rank in its query's
 //! prefilter list, which mmseqs writes in score order. Depth is binned in
 //! ranges that double, the way prog's `n_take` does, and each bin counts the
-//! prefilter pairs at that depth against the seeds, the pairs the arm kept
-//! over the cutoff, the pairs the ceiling kept, and the hits: kept by both.
-//! The hits over the prefilter pairs is what a stopping rule is betting on.
+//! prefilter pairs at that depth against the seeds, the pairs nail kept over
+//! the cutoff, the pairs hmmer found, and the hits: kept and found both. The
+//! hits over the prefilter pairs is what a stopping rule is betting on.
 //!
 //! The prefilter list is read out of the databases nail left under
 //! `results/prefilter.<arm>.<shard>/`: mmseqs' index gives each query's
@@ -249,13 +249,11 @@ struct Tally {
     prefilter: Vec<u64>,
     seeds: Vec<u64>,
     kept: Vec<u64>,
-    ceiling: Vec<u64>,
-    /// Kept by this arm and by the ceiling: the pairs a stopping rule is
-    /// betting on.
+    truth: Vec<u64>,
+    /// Kept, and in hmmer's truth: the pairs a stopping rule is betting on.
     hits: Vec<u64>,
-    /// The ceiling's hits this arm's prefilter never returned, so they have
-    /// no depth in it.
-    ceiling_beyond: u64,
+    /// hmmer's pairs the prefilter never returned, so they have no depth.
+    truth_beyond: u64,
 }
 
 impl Tally {
@@ -271,7 +269,7 @@ impl Tally {
             &self.prefilter,
             &self.seeds,
             &self.kept,
-            &self.ceiling,
+            &self.truth,
             &self.hits,
         ]
         .iter()
@@ -281,12 +279,12 @@ impl Tally {
     }
 }
 
-/// A pair one run kept, or the ceiling kept, waiting on its rank.
+/// A pair one run kept, or hmmer found, waiting on its rank.
 struct Pair {
     query: String,
     target: String,
     kept: bool,
-    ceiling: bool,
+    truth: bool,
 }
 
 /// Where the hits sit in the prefilter list, per unit and per run, and every
@@ -302,30 +300,29 @@ pub fn depth(
     ensure!(width > 0, "--bin must be at least 1");
 
     let mut scores = Runs::open(table)?;
-    let top = scores.meta().ceiling()?;
+    let hmmer = scores.meta().hmmer()?;
     let runs = scores.meta().runs.clone();
 
-    // every pair the ceiling or a run kept, grouped by the arm and the shard
-    // whose prefilter list says where it sat
+    // every pair that hmmer found or a run kept, grouped by the arm and the
+    // shard whose prefilter list says where it sat
     let mut pairs: HashMap<(usize, String), Vec<Pair>> = HashMap::new();
-    // what the ceiling kept per unit, the denominator a sensitivity is read
-    // over
-    let mut hits_of: indexmap::IndexMap<String, u64> = indexmap::IndexMap::new();
+    // what hmmer found per unit, the denominator a sensitivity is read over
+    let mut truth_of: indexmap::IndexMap<String, u64> = indexmap::IndexMap::new();
 
     scores.each(|row| {
-        let ceiling = row.row().passed(top);
-        if ceiling {
-            *hits_of.entry(row.row().shard().to_string()).or_default() += 1;
+        let truth = row.row().passed(hmmer);
+        if truth {
+            *truth_of.entry(row.row().shard().to_string()).or_default() += 1;
         }
         let query = String::from_utf8_lossy(row.row().field(0)).into_owned();
         let target = String::from_utf8_lossy(row.row().field(1)).into_owned();
 
         for (run, column) in runs.iter().enumerate() {
-            if column.seeds.is_none() {
+            if run == hmmer || column.seeds.is_none() {
                 continue;
             }
             let kept = row.present(run) && row.row().passed(run);
-            if !kept && !ceiling {
+            if !kept && !truth {
                 continue;
             }
             pairs
@@ -335,7 +332,7 @@ pub fn depth(
                     query: query.clone(),
                     target: target.clone(),
                     kept,
-                    ceiling,
+                    truth,
                 });
         }
         Ok(())
@@ -349,12 +346,11 @@ pub fn depth(
         toil::Column::new("prefilter"),
         toil::Column::new("seeds"),
         toil::Column::new("kept"),
-        toil::Column::new("ceiling"),
+        toil::Column::new("truth"),
         toil::Column::new("hits"),
         toil::Column::new("frac").fixed(4),
     ]));
     table.meta("bin", [width.to_string()]);
-    table.meta("ceiling", [runs[top].name.as_str()]);
     let mut hits_table = toil::Table::new(toil::Schema::new([
         toil::Column::new("unit"),
         toil::Column::new("run"),
@@ -368,10 +364,9 @@ pub fn depth(
         toil::Column::new("query"),
         toil::Column::new("length"),
     ]));
-    hits_table.meta("ceiling", [runs[top].name.as_str()]);
-    for (unit, n) in &hits_of {
-        table.meta("hits", [unit.clone(), n.to_string()]);
-        hits_table.meta("hits", [unit.clone(), n.to_string()]);
+    for (unit, n) in &truth_of {
+        table.meta("truth", [unit.clone(), n.to_string()]);
+        hits_table.meta("truth", [unit.clone(), n.to_string()]);
     }
 
     let mut groups: Vec<_> = pairs.into_iter().collect();
@@ -468,10 +463,10 @@ pub fn depth(
                         if p.kept {
                             Tally::bump(&mut tally.kept, bin);
                         }
-                        if p.ceiling {
-                            Tally::bump(&mut tally.ceiling, bin);
+                        if p.truth {
+                            Tally::bump(&mut tally.truth, bin);
                         }
-                        if p.kept && p.ceiling {
+                        if p.kept && p.truth {
                             Tally::bump(&mut tally.hits, bin);
                             hits_table.row([
                                 toil::Cell::from(shard.as_str()),
@@ -489,7 +484,7 @@ pub fn depth(
                             p.target
                         )
                     }
-                    None => tally.ceiling_beyond += 1,
+                    None => tally.truth_beyond += 1,
                 }
             }
         }
@@ -497,11 +492,11 @@ pub fn depth(
         for bin in 0..tally.bins() {
             let (lo, hi) = range(bin, width);
             let get = |v: &Vec<u64>| v.get(bin).copied().unwrap_or(0);
-            let (prefilter, seeds, kept, ceiling, hits) = (
+            let (prefilter, seeds, kept, truth, hits) = (
                 get(&tally.prefilter),
                 get(&tally.seeds),
                 get(&tally.kept),
-                get(&tally.ceiling),
+                get(&tally.truth),
                 get(&tally.hits),
             );
             table.row([
@@ -512,7 +507,7 @@ pub fn depth(
                 prefilter.into(),
                 seeds.into(),
                 kept.into(),
-                ceiling.into(),
+                truth.into(),
                 hits.into(),
                 frac(hits, prefilter).into(),
             ]);
@@ -525,7 +520,7 @@ pub fn depth(
             0u64.into(),
             0u64.into(),
             0u64.into(),
-            tally.ceiling_beyond.into(),
+            tally.truth_beyond.into(),
             0u64.into(),
             "-".into(),
         ]);

@@ -1,14 +1,14 @@
 #!/usr/bin/env python3
-"""Where in nail's pipeline the ceiling's hits were lost.
+"""Where in nail's pipeline the hits hmmer found were lost.
 
     plot.py stages.tbl --out figures/
 
-One panel per target corpus, one bar per arm. A bar is the hits the ceiling
-kept that the arm did not, split by the stage that dropped them: never
-seeded, seeded but absent from nail's table, or scored under the family's
-cutoff. The bar is drawn to 100% of what was lost, so the arms compare by
-where the loss sits rather than by how much there was, and how much there was
-goes beside each bar with the arm's sensitivity.
+One panel per target corpus, one bar per arm. A bar is the hits hmmer found
+that the arm did not keep, split by the stage that dropped them: never seeded,
+seeded but absent from nail's table, or scored under the family's cutoff. The
+bar is drawn to 100% of what was lost, so the arms compare by where the loss
+sits rather than by how much there was, and how much there was goes beside
+each bar with the arm's sensitivity.
 
 The lost_ columns of stages.tbl are the stages, in the table's order, so a
 column added there becomes a segment here; a column with no colour below is
@@ -16,7 +16,6 @@ an error rather than a hue picked at random.
 """
 
 import argparse
-from collections import defaultdict
 from pathlib import Path
 
 import matplotlib as mpl
@@ -49,14 +48,11 @@ LABEL_FROM = 0.06
 
 
 def table(path):
-    """A `#`-headed table: its column names, its rows as dicts, and its `#=`
-    lines as a key to the words after it, the header being the last `#` line
+    """A `#`-headed table's rows as dicts, the header being the last `#` line
     whose first field is not a dash."""
-    names, rows, meta = None, [], defaultdict(list)
+    names, rows = None, []
     for line in Path(path).read_text().splitlines():
         if line.startswith("#="):
-            f = line[2:].split()
-            meta[f[0]].append(f[1:])
             continue
         if line.startswith("#"):
             f = line.lstrip("#").split()
@@ -65,13 +61,11 @@ def table(path):
             continue
         if line.split():
             rows.append(dict(zip(names, line.split())))
-    return names, rows, meta
+    return names, rows
 
 
 def draw(stages_path, out):
-    names, rows, meta = table(stages_path)
-    ceiling = meta["ceiling"][0][0]
-    hits = {unit: int(n) for unit, n in meta["hits"]}
+    names, rows = table(stages_path)
     stages = [n for n in names if n.startswith("lost_")]
     unknown = [n for n in stages if n not in STAGES]
     if unknown:
@@ -90,7 +84,7 @@ def draw(stages_path, out):
         arms = per_unit[unit]
         ys = range(len(arms))[::-1]
         for y, r in zip(ys, arms):
-            lost = int(r["ceiling"]) - int(r["kept"])
+            lost = int(r["truth"]) - int(r["kept"])
             left = 0.0
             for stage in stages:
                 n = int(r[stage])
@@ -110,8 +104,7 @@ def draw(stages_path, out):
         ax.set_yticks(list(ys))
         ax.set_yticklabels([r["run"] for r in arms])
         ax.set_ylim(-0.6, len(arms) - 0.4)
-        ax.set_title(f"{unit}    ceiling {ceiling}: {hits[unit]:,} hits",
-                     loc="left", fontsize=mpl.rcParams["font.size"])
+        ax.set_title(unit, loc="left", fontsize=mpl.rcParams["font.size"])
         for side in ("top", "right", "left"):
             ax.spines[side].set_visible(False)
         ax.tick_params(axis="y", length=0)
@@ -128,13 +121,13 @@ def draw(stages_path, out):
     bottom.set_xlim(0, 1.42)
     bottom.set_xticks([0, 0.25, 0.5, 0.75, 1.0])
     bottom.xaxis.set_major_formatter(plt.FuncFormatter(lambda v, _: f"{v:.0%}"))
-    bottom.set_xlabel("share of the ceiling's hits the arm lost, by stage")
+    bottom.set_xlabel("share of the hits hmmer found that nail lost, by stage")
 
     fig.legend(
         handles=[Patch(color=c, label=l) for l, c in (STAGES[s] for s in stages)],
         loc="outside lower center", ncol=len(stages), frameon=False,
     )
-    fig.suptitle("loss-decomp: where nail loses the ceiling's hits", x=0.0, ha="left")
+    fig.suptitle("loss-decomp: where nail loses the hits hmmer finds", x=0.0, ha="left")
 
     path = out / "loss-decomp-stages.pdf"
     fig.savefig(path)

@@ -1,10 +1,9 @@
-//! Which stage of the nail pipeline drops the hits the ceiling finds.
+//! Which stage of the nail pipeline drops the hits hmmer finds.
 //!
-//! One nail per sensitivity, each seeded static with no cap so it aligns
-//! everything its prefilter returned. There is no grid here the way there is
-//! in cloud-search: an arm is the most nail could get at that sensitivity,
-//! the most sensitive arm is the ceiling, and the question is where the hits
-//! the ceiling found fall out of the others.
+//! Runs hmmer once, then one nail per sensitivity, each seeded static with no
+//! cap so it aligns everything its prefilter returned. There is no grid here
+//! the way there is in cloud-search: an arm is the most nail could get at that
+//! sensitivity, and the question is where the hits hmmer found fall out of it.
 //!
 //! nail's own -E is set far above its default (10.0) rather than left alone.
 //! `parse` tells "seeded but unreported" apart from "reported" by whether a
@@ -25,8 +24,12 @@ use michi::{Cmd, PipelineBuilder, Progress, Step, Table};
 
 use util::ledger;
 use util::manifest;
-use util::search::{Bins, Dirs};
+use util::search::{Bins, Dirs, Split};
 use util::set::Set;
+use util::split::Kind;
+
+/// The column hmmer's run becomes, which every arm is measured against.
+const HMMER: &str = "hmmer";
 
 /// nail's own unbounded `--mmseqs-max-seqs`, the default it uses in prog mode.
 const UNBOUNDED: u32 = i32::MAX as u32;
@@ -65,6 +68,12 @@ pub struct Args {
 
 pub fn main(args: Args, paths: &crate::Paths) -> anyhow::Result<()> {
     let threads = args.threads.context("--threads is required")?;
+
+    ensure!(
+        threads.is_multiple_of(util::search::HMMER_CPU),
+        "--threads needs to be a multiple of {} (for hmmer)",
+        util::search::HMMER_CPU
+    );
 
     let bins = Bins::find()?;
 
@@ -106,6 +115,31 @@ pub fn main(args: Args, paths: &crate::Paths) -> anyhow::Result<()> {
         let shard = unit.name().to_string();
         let query_hmm = unit.query_hmm()?;
         let target = unit.target()?;
+
+        // per unit rather than per run: a cross can pair more than one query
+        // source, and two of them cut into the same directory would search each
+        // other's parts
+        let split = Split::new(
+            &query_hmm,
+            Kind::Hmm,
+            dirs.tmp.join("hmmer-query").join(&shard),
+            util::search::jobs(threads),
+        );
+        pl = pl.step(split.step("split", &[(manifest::SHARD, shard.clone())]));
+
+        let hmmer = util::search::hmmer(
+            &bins.hmmsearch,
+            &split,
+            &dirs,
+            HMMER,
+            "hmmer",
+            &shard,
+            &target,
+            util::search::EVALUE,
+            true,
+            &[],
+        );
+        pl = pl.step(hmmer.search).step(hmmer.cat);
 
         // one nail per arm: static seeding with no cap aligns everything
         // the prefilter returned, so there is no list to replay. the seed

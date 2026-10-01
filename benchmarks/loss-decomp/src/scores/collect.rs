@@ -198,8 +198,13 @@ fn estimate(work: &Shard<'_>, shard: &str) -> u64 {
         .filter(|column| column.shards.iter().any(|covered| covered == shard))
         .map(|column| {
             let table = manifest::table_path(work.results, &column.run.name, shard);
+            let dom = manifest::dom_path(work.results, &column.run.name, shard);
 
-            std::fs::metadata(table).map(|meta| meta.len()).unwrap_or(0)
+            [table, dom]
+                .iter()
+                .filter_map(|path| std::fs::metadata(path).ok())
+                .map(|meta| meta.len())
+                .sum::<u64>()
         })
         .sum();
 
