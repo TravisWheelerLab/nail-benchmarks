@@ -66,7 +66,7 @@ def fractions(hits, lists, unit, run, edges, cumulative):
     previous = 0
     for R in edges:
         lo = 0 if cumulative else previous
-        fs = []
+        fs, ks = [], []
         for q, n in length.items():
             if n <= lo:
                 continue
@@ -78,7 +78,8 @@ def fractions(hits, lists, unit, run, edges, cumulative):
             if h is not None:
                 good = np.searchsorted(h, R, side="right") - np.searchsorted(h, lo, side="right")
             fs.append(good / pairs)
-        out.append((np.array(fs), R - lo))
+            ks.append(good)
+        out.append((np.array(fs), np.array(ks), R - lo))
         previous = R
     return out
 
@@ -90,18 +91,32 @@ def draw(hits_path, lists_path, out, cumulative):
     run = next(iter(dict.fromkeys(r["run"] for r in lists)))
     top = max(int(r["length"]) for r in lists if r["run"] == run)
 
-    # columns square on the log axis: edges equally spaced in log rank,
-    # as many as there are 1% cells up the side
     cells = 100
-    per_decade = cells / np.log10(top)
-    edges = np.unique(np.round(np.logspace(0, np.log10(top), int(np.log10(top) * per_decade) + 1)).astype(int))
-    edges = edges[edges >= 1]
-    ybins = np.linspace(0, 1, cells + 1)
+    if cumulative:
+        # columns square on the log axis: edges equally spaced in log rank,
+        # as many as there are 1% cells up the side
+        per_decade = cells / np.log10(top)
+        edges = np.unique(
+            np.round(np.logspace(0, np.log10(top), int(np.log10(top) * per_decade) + 1)).astype(int)
+        )
+        edges = edges[edges >= 1]
+    else:
+        # bin widths doubling from 200, the way prog's n_take does: 1-200,
+        # 201-600, 601-1,400 and so on, drawn as equal columns
+        edges, width = [200], 200
+        while edges[-1] < top:
+            width *= 2
+            edges.append(edges[-1] + width)
+        edges = np.array(edges)
 
-    fig, axes = plt.subplots(1, len(units), figsize=(8 * len(units), 6), squeeze=False)
+    fig, axes = plt.subplots(1, len(units), figsize=(8 * len(units), 6), squeeze=False,
+                             layout="constrained")
     mesh = None
-    # a column spans from halfway to the previous edge to halfway to the next
-    xedges = np.concatenate([[edges[0]], np.sqrt(edges[:-1] * edges[1:]), [edges[-1]]])
+    if cumulative:
+        # a column spans from halfway to the previous edge to halfway to the next
+        xedges = np.concatenate([[edges[0]], np.sqrt(edges[:-1] * edges[1:]), [edges[-1]]])
+    else:
+        xedges = np.arange(len(edges) + 1)
     for ax, unit in zip(axes[0], units):
         families = len({r["query"] for r in lists if r["unit"] == unit and r["run"] == run})
         # a power scale rather than a log: a log put 50% and 100% in the
@@ -117,15 +132,28 @@ def draw(hits_path, lists_path, out, cumulative):
             vmin=1, vmax=families,
         )
         columns = fractions(hits, lists, unit, run, edges, cumulative)
-        for c, (fs, width) in enumerate(columns):
+        if not cumulative:
+            # rows are good seeds per family in the bin: 0, 1, 2, 3, then
+            # ranges widening by half, up to the most any family has
+            most = max((ks.max() for _, ks, _ in columns if len(ks)), default=1)
+            rows = [0, 1, 2, 3, 4]
+            while rows[-1] <= most:
+                rows.append(int(np.ceil(rows[-1] * 1.5)))
+            rows = np.array(rows)
+        for c, (fs, ks, width) in enumerate(columns):
             if not len(fs):
                 continue
             # over W pairs the fraction is k/W for k in 0..W, so a column
             # under 100 wide gets one cell per reachable value, centred on
             # it, rather than 1% cells most of which nothing can land in
             n = min(int(width), cells)
-            ybins = np.clip((np.arange(n + 2) - 0.5) / n, 0, 1)
-            counts, _ = np.histogram(fs, bins=ybins)
+            if cumulative:
+                ybins = np.clip((np.arange(n + 2) - 0.5) / n, 0, 1)
+                counts, _ = np.histogram(fs, bins=ybins)
+            else:
+                counts, _ = np.histogram(ks, bins=np.append(rows, rows[-1] + 1) - 0.5)
+                # equal rows, however wide the count range each one holds
+                ybins = np.arange(len(rows) + 1)
             # coloured here rather than by the mesh: FuncNorm paints an
             # empty cell as if it held families, where a cell with none
             # must be nothing at all
@@ -134,11 +162,24 @@ def draw(hits_path, lists_path, out, cumulative):
             mesh = ax.pcolormesh(xedges[c : c + 2], ybins, rgba[:, None, :],
                                  edgecolors="none", antialiased=False)
             mesh.set_rasterized(True)
-        ax.set_xscale("log")
-        ax.set_xlim(1, top)
-        ax.set_ylim(0, 1)
+        if cumulative:
+            ax.set_xscale("log")
+            ax.set_xlim(1, top)
+        else:
+            ax.set_xlim(0, len(edges))
+            ax.set_yticks(np.arange(len(rows)) + 0.5)
+            labels = []
+            for i, lo in enumerate(rows):
+                hi = rows[i + 1] - 1 if i + 1 < len(rows) else None
+                labels.append(f"{lo:,}" if hi is None or hi == lo else f"{lo:,}-{hi:,}")
+            ax.set_yticklabels(labels, fontsize=mpl.rcParams["font.size"] * 0.8)
+            ax.set_xticks(np.arange(len(edges)) + 0.5)
+            lows = np.concatenate([[1], edges[:-1] + 1])
+            ax.set_xticklabels([f"{lo:,}-{hi:,}" for lo, hi in zip(lows, edges)],
+                               rotation=45, ha="right")
+        ax.set_ylim(0, 1 if cumulative else len(rows))
         ax.set_xlabel("rank")
-        ax.set_ylabel("good seeds / pairs, cumulative" if cumulative else "good seeds / pairs in the bin")
+        ax.set_ylabel("good seeds / pairs, cumulative" if cumulative else "good seeds in the bin, per family")
         ax.set_title(unit, loc="left")
     # plain counts on the bar, with all of Pfam at the top
     ticks = [t for t in (1, 10, 100, 1000, 10000) if t < families] + [families]
