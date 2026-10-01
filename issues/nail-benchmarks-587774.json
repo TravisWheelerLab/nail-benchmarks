@@ -13,7 +13,7 @@
   "lease_expires": "2026-09-29T04:58:12.327652569Z",
   "defer_until": null,
   "created_at": "2026-09-28T19:02:29.799446418Z",
-  "updated_at": "2026-10-01T02:07:48.88561402Z",
+  "updated_at": "2026-10-01T02:07:48.916867597Z",
   "closed_at": null,
   "close_reason": null,
   "resolution": null,
@@ -64,6 +64,13 @@
       "at": "2026-10-01T02:07:48.885613193Z",
       "author": "jackroddy/01dd6c44",
       "text": "30 Sep, decided next. (1) Top-level figure first: per unit and arm, hmmer's lost hits split by stage (seeding / cloud+align / cutoff) as a stacked 100% bar, from stages.tbl, with count lost and sensitivity beside. (2) No synthetic result tables. Instead one toil table per -s arm and unit: nail's tblout rows plus rank (prefilter rank) and gate_f (prefix MIN over the rounds before the row's own of seeds-in-round / round width, prog-n fixed at 200; first round 1). Static cap M = rows with rank <= M; prog at f = rows with gate_f >= f. Prefix-min, not the row's own round fraction, or a late round with a high fraction would pull hits prog never reached. Before building: check in nail seed_stage.rs whether the per-round count is seeds in the round or seeds so far, and that rounds are 200, 400, 800 from rank 1. Seeded-not-reported pairs are not in a tblout and stay with the seed lists. (3) Then the set moves to mgy one recall shard + swissprot + pid (issue 31b742).",
+      "commit": "f8f4436",
+      "branch": "claude-refactor"
+    },
+    {
+      "at": "2026-10-01T02:07:48.916866914Z",
+      "author": "jackroddy/01dd6c44",
+      "text": "30 Sep, facts from the real run. s12 unbounded sens 0.912 mgnify / 0.904 swissprot; cumulative by rank ceiling on mgnify 200 0.625, 800 0.828, 1600 0.877, 3200 0.897, 6400 0.907. ABC_tran has 9,596 hmmer hits in 500k MGnify and its first 5,000 prefilter pairs are all hits; AAA_21, HATPase_c, Response_reg similar at 2,000+. 53% of mgnify families and 25% of swissprot families have no hit in ranks 1-200. The s12 prefilter returns ~23% of targets per query (lists ~115k); align keeps 1.2M seeds of 2.4G pairs on mgnify.",
       "commit": "f8f4436",
       "branch": "claude-refactor"
     }
