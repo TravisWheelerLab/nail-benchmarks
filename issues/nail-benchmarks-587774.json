@@ -13,7 +13,7 @@
   "lease_expires": null,
   "defer_until": null,
   "created_at": "2026-09-28T19:02:29.799446418Z",
-  "updated_at": "2026-10-01T05:01:22.039951532Z",
+  "updated_at": "2026-10-01T08:37:58.46753459Z",
   "closed_at": null,
   "close_reason": null,
   "resolution": null,
@@ -107,6 +107,13 @@
       "author": "jackroddy/924b3ec0",
       "text": "Parsed and plotted 30 Sep 22:01. Ceiling s12: 2,146,055 hits over 2.46M MGnify. s10 sens 0.9724 (59,187 lost), s7.5 0.8208 (384,481 lost); lost_align and lost_cutoff are 0 in both, so every loss between the arms is seeding. s12 depth: ranks 1-200 hold 703,732 hits of 4.16M prefilter pairs (17%), 801-1600 295k, 6401-12800 64k, past 100k rank still 8,226. Prefilter lists run to 1.6M per query. depth took 18 min, parse runs 7 s. Figures in figures/loss-decomp-*.pdf.",
       "commit": "a6abba0",
+      "branch": "claude-refactor"
+    },
+    {
+      "at": "2026-10-01T08:37:58.467533897Z",
+      "author": "jackroddy/924b3ec0",
+      "text": "1 Oct: Jack reversed the hmmer removal; a6abba0 reverted as 96a3954, hmmer is the baseline again. Real run restarted at 48 threads about 01:40, nail arms and hmmer together so there is one ledger; log tmp-claude/2026-09-30-loss-decomp-stages/run-real3.log. Expect about two hours. The ceiling-only tables and figures from 30 Sep are superseded.",
+      "commit": "96a3954",
       "branch": "claude-refactor"
     }
   ],
