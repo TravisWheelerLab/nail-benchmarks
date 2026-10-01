@@ -13,7 +13,7 @@
   "lease_expires": null,
   "defer_until": null,
   "created_at": "2026-09-28T19:02:29.799446418Z",
-  "updated_at": "2026-10-01T08:37:58.46753459Z",
+  "updated_at": "2026-10-01T10:16:49.927937874Z",
   "closed_at": null,
   "close_reason": null,
   "resolution": null,
@@ -113,6 +113,13 @@
       "at": "2026-10-01T08:37:58.467533897Z",
       "author": "jackroddy/924b3ec0",
       "text": "1 Oct: Jack reversed the hmmer removal; a6abba0 reverted as 96a3954, hmmer is the baseline again. Real run restarted at 48 threads about 01:40, nail arms and hmmer together so there is one ledger; log tmp-claude/2026-09-30-loss-decomp-stages/run-real3.log. Expect about two hours. The ceiling-only tables and figures from 30 Sep are superseded.",
+      "commit": "96a3954",
+      "branch": "claude-refactor"
+    },
+    {
+      "at": "2026-10-01T10:16:49.927937024Z",
+      "author": "jackroddy/924b3ec0",
+      "text": "Real run with hmmer finished 1 Oct 03:19: 99 min at 48 threads, 31 steps, 0 failed. hmmer 2,448 s; s12 2,526 s at 149 GiB; s10 745 s; s7.5 147 s. Parse and plot started, log tmp-claude/2026-09-30-loss-decomp-stages/parse-real3.log.",
       "commit": "96a3954",
       "branch": "claude-refactor"
     }
