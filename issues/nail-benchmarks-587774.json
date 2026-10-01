@@ -13,7 +13,7 @@
   "lease_expires": "2026-09-29T04:58:12.327652569Z",
   "defer_until": null,
   "created_at": "2026-09-28T19:02:29.799446418Z",
-  "updated_at": "2026-10-01T02:07:48.85610529Z",
+  "updated_at": "2026-10-01T02:07:48.88561402Z",
   "closed_at": null,
   "close_reason": null,
   "resolution": null,
@@ -57,6 +57,13 @@
       "at": "2026-10-01T02:07:48.856104529Z",
       "author": "jackroddy/01dd6c44",
       "text": "30 Sep, figures. figures/loss-decomp-depth-cumulative.pdf: per unit, columns square on log rank, each column the distribution across families of good seeds (kept over cutoff AND in hmmer truth) among the first R prefilter pairs over R; one cell per reachable k/R up to 100; colour = family count, log scale bent so 10,000 sits at 0.7, 20,795 at full, cells coloured directly (FuncNorm paints NaN cells, so alpha 0 by hand), rasterised. figures/loss-decomp-depth-binned.pdf: bins of doubling width 1-200, 201-600, 601-1,400 ... as equal columns, labels at 45 degrees; rows are good seeds per family in the bin: 0,1,2,3,4 then ranges widening by 1.5. Jack: okayish for now. Rejected on the way: min-max band, 1% cells with log y, percent-of-families colour, linear colour, log y on the cumulative. Script: benchmarks/loss-decomp/scripts/plot_depth.py; plot.rs runs it when hits.tbl and lists.tbl exist.",
+      "commit": "f8f4436",
+      "branch": "claude-refactor"
+    },
+    {
+      "at": "2026-10-01T02:07:48.885613193Z",
+      "author": "jackroddy/01dd6c44",
+      "text": "30 Sep, decided next. (1) Top-level figure first: per unit and arm, hmmer's lost hits split by stage (seeding / cloud+align / cutoff) as a stacked 100% bar, from stages.tbl, with count lost and sensitivity beside. (2) No synthetic result tables. Instead one toil table per -s arm and unit: nail's tblout rows plus rank (prefilter rank) and gate_f (prefix MIN over the rounds before the row's own of seeds-in-round / round width, prog-n fixed at 200; first round 1). Static cap M = rows with rank <= M; prog at f = rows with gate_f >= f. Prefix-min, not the row's own round fraction, or a late round with a high fraction would pull hits prog never reached. Before building: check in nail seed_stage.rs whether the per-round count is seeds in the round or seeds so far, and that rounds are 200, 400, 800 from rank 1. Seeded-not-reported pairs are not in a tblout and stay with the seed lists. (3) Then the set moves to mgy one recall shard + swissprot + pid (issue 31b742).",
       "commit": "f8f4436",
       "branch": "claude-refactor"
     }
