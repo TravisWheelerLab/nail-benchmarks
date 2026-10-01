@@ -258,7 +258,7 @@ fn stages(args: TableArgs) -> anyhow::Result<()> {
 
     analyze::stages(&path, &args.run, &out)?;
 
-    println!("wrote {}", out.display());
+    println!("wrote {} and its -single and -multi tables", out.display());
     Ok(())
 }
 

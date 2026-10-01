@@ -74,6 +74,13 @@ pub const SCORES_AT: usize = 2;
 /// The cell of a run whose seeding never offered the pair.
 const NEVER: &str = ".";
 
+/// How much of the best domain's score a domain needs to count as one of
+/// its own.
+//
+// recall's sens_sd column counts domains by this rule, and the
+// single-domain stages table has to read against it
+const SIGNIFICANT: f32 = 0.1;
+
 pub struct Args<'a> {
     /// The pipeline directory: `ledger.tbl` and `results/`.
     pub dir: &'a Path,
@@ -311,6 +318,8 @@ pub struct Reader<R: Read> {
     frame: Frame<R>,
     /// Where the first run's score column sits.
     scores: usize,
+    /// Where hmmer's domain scores sit.
+    dom: usize,
 }
 
 impl Reader<std::fs::File> {
@@ -340,9 +349,12 @@ impl<R: Read> Reader<R> {
             cutoffs,
         });
 
+        let dom = SCORES_AT + frame.meta.runs.len() + 1;
+
         Ok(Reader {
             frame,
             scores: SCORES_AT,
+            dom,
         })
     }
 
@@ -355,8 +367,8 @@ impl<R: Read> Reader<R> {
         &mut self,
         mut f: impl FnMut(&RunsRow) -> anyhow::Result<()>,
     ) -> anyhow::Result<()> {
-        let scores = self.scores;
-        self.frame.each(|row| f(&RunsRow { row, scores }))
+        let (scores, dom) = (self.scores, self.dom);
+        self.frame.each(|row| f(&RunsRow { row, scores, dom }))
     }
 }
 
@@ -365,6 +377,8 @@ pub struct RunsRow<'r, 'a> {
     row: &'r Row<'a>,
     /// Where the first run's score column sits.
     scores: usize,
+    /// Where hmmer's domain scores sit.
+    dom: usize,
 }
 
 impl RunsRow<'_, '_> {
@@ -388,6 +402,29 @@ impl RunsRow<'_, '_> {
         // scored badly was not dropped, which is the
         // distinction the stages is built on
         super::scan::score(self.row.field(self.scores + run)).is_some()
+    }
+
+    /// How many of the pair's domains carry enough of hmmer's hit to count
+    /// as their own: those scoring at least [`SIGNIFICANT`] of the best.
+    pub fn domain_count(&self) -> usize {
+        let scores = self
+            .row
+            .field(self.dom)
+            .split(|byte| *byte == b',')
+            .filter_map(super::scan::score);
+
+        let best = scores.clone().fold(f32::NEG_INFINITY, f32::max);
+        if best == f32::NEG_INFINITY {
+            return 0;
+        }
+
+        // against the best domain rather than an absolute score: the
+        // question is whether the hit is one region or several, and a
+        // weak family's several are still several
+        match best > 0.0 {
+            true => scores.filter(|score| score / best >= SIGNIFICANT).count(),
+            false => scores.count(),
+        }
     }
 
     /// What one run scored the pair.

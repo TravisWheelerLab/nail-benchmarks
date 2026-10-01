@@ -221,7 +221,7 @@ fn headers(path: &Path) -> anyhow::Result<HashMap<String, u32>> {
     Ok(map)
 }
 
-/// How many of `pairs` one arm's prefilter never returned for one shard.
+/// Which of `pairs` one arm's prefilter never returned for one shard.
 ///
 /// A pair not in the list could not have been seeded, so this is where the
 /// loss before the seed list splits: the prefilter against mmseqs' alignment.
@@ -230,7 +230,7 @@ pub fn beyond(
     arm: &str,
     shard: &str,
     pairs: &mut [(String, String)],
-) -> anyhow::Result<u64> {
+) -> anyhow::Result<Vec<(String, String)>> {
     let dir = prefilter_dir(root, arm, shard);
     let pf = Prefilter::open(&dir)
         .with_context(|| format!("failed to open the prefilter database in {}", dir.display()))?;
@@ -238,7 +238,7 @@ pub fn beyond(
     // by query, so each query's entry is read once for all of its pairs
     pairs.sort_unstable();
 
-    let mut missing = 0u64;
+    let mut missing = Vec::new();
     let mut at = 0;
     while at < pairs.len() {
         let query = pairs[at].0.as_str();
@@ -255,7 +255,7 @@ pub fn beyond(
                 .and_then(|k| ranks.get(k))
                 .is_none()
             {
-                missing += 1;
+                missing.push(pairs[at].clone());
             }
             at += 1;
         }

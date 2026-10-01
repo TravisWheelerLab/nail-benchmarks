@@ -9,8 +9,8 @@
 //! expensive half and the half least likely to change: a different statistic
 //! is a re-run of this, not of the benchmark.
 
-use std::collections::HashMap;
-use std::path::Path;
+use std::collections::{HashMap, HashSet};
+use std::path::{Path, PathBuf};
 
 use anyhow::{Context, ensure};
 
@@ -88,10 +88,58 @@ impl Tally {
     }
 }
 
-/// Where the hits hmmer found are lost, per unit and per run.
+/// Which of hmmer's hits a table is held to, by how many domains hmmer
+/// resolved each into.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Domains {
+    All,
+    Single,
+    Multi,
+}
+
+impl Domains {
+    const EACH: [Domains; 3] = [Domains::All, Domains::Single, Domains::Multi];
+
+    fn holds(self, single: bool) -> bool {
+        match self {
+            Domains::All => true,
+            Domains::Single => single,
+            Domains::Multi => !single,
+        }
+    }
+
+    fn name(self) -> &'static str {
+        match self {
+            Domains::All => "all",
+            Domains::Single => "single",
+            Domains::Multi => "multi",
+        }
+    }
+
+    /// Where this set's table goes, beside the one `out` names: `x.tbl`,
+    /// `x-single.tbl`, `x-multi.tbl`.
+    fn path(self, out: &Path) -> PathBuf {
+        match self {
+            Domains::All => out.to_path_buf(),
+            set => {
+                let stem = out.file_stem().unwrap_or_default().to_string_lossy();
+                let ext = out
+                    .extension()
+                    .map(|e| e.to_string_lossy())
+                    .unwrap_or_default();
+                out.with_file_name(format!("{stem}-{}.{ext}", set.name()))
+            }
+        }
+    }
+}
+
+/// Where the hits hmmer found are lost, per unit and per run, three times
+/// over: for every hit, for the hits hmmer resolved as one domain, and for
+/// the rest.
 ///
 /// `root` is the run directory, for the prefilter databases under its
-/// `results/`.
+/// `results/`. `out` names the table of every hit, and the other two go
+/// beside it.
 pub fn stages(path: &Path, root: &Path, out: &Path) -> anyhow::Result<()> {
     let mut scores = Runs::open(path)?;
 
@@ -107,12 +155,13 @@ pub fn stages(path: &Path, root: &Path, out: &Path) -> anyhow::Result<()> {
     // several kinds of target, and what hmmer found in one is not the truth
     // set for another: summed, the two corpora make a sensitivity that
     // describes neither
-    let mut at: indexmap::IndexMap<String, Tally> = indexmap::IndexMap::new();
+    let mut at: indexmap::IndexMap<String, [Tally; 3]> = indexmap::IndexMap::new();
     let mut rows = 0u64;
 
-    // the pairs no seed list held, per unit and run, to be looked up in
-    // the arm's prefilter list once the table has been read
-    let mut unseeded: HashMap<(String, usize), Vec<(String, String)>> = HashMap::new();
+    // the pairs no seed list held, per unit and run, with whether hmmer
+    // resolved each as one domain, to be looked up in the arm's prefilter
+    // list once the table has been read
+    let mut unseeded: HashMap<(String, usize), Vec<(String, String, bool)>> = HashMap::new();
 
     scores.each(|row| {
         rows += 1;
@@ -122,28 +171,41 @@ pub fn stages(path: &Path, root: &Path, out: &Path) -> anyhow::Result<()> {
         }
 
         let unit = row.row().shard().to_string();
-        let tally = at.entry(unit.clone()).or_insert_with(|| Tally::new(runs));
-        tally.truth += 1;
+        let single = row.domain_count() == 1;
+        let tallies = at
+            .entry(unit.clone())
+            .or_insert_with(|| std::array::from_fn(|_| Tally::new(runs)));
 
-        for run in 0..runs {
-            if run == hmmer {
+        for (set, tally) in Domains::EACH.iter().zip(tallies.iter_mut()) {
+            if !set.holds(single) {
                 continue;
             }
+            tally.truth += 1;
 
-            // per run rather than per pair: a seeding sweep gives every arm
-            // its own seed list, so whether the pair was ever offered is the
-            // arm's answer and not the pipeline's
-            match (row.seeded(run), row.present(run), row.row().passed(run)) {
-                (false, _, _) => {
-                    tally.lost_seed[run] += 1;
-                    unseeded.entry((unit.clone(), run)).or_default().push((
-                        String::from_utf8_lossy(row.row().field(0)).into_owned(),
-                        String::from_utf8_lossy(row.row().field(1)).into_owned(),
-                    ));
+            for run in 0..runs {
+                if run == hmmer {
+                    continue;
                 }
-                (_, false, _) => tally.lost_cloud_align[run] += 1,
-                (_, _, false) => tally.lost_cutoff[run] += 1,
-                (_, _, true) => tally.kept[run] += 1,
+
+                // per run rather than per pair: a seeding sweep gives every
+                // arm its own seed list, so whether the pair was ever offered
+                // is the arm's answer and not the pipeline's
+                match (row.seeded(run), row.present(run), row.row().passed(run)) {
+                    (false, _, _) => tally.lost_seed[run] += 1,
+                    (_, false, _) => tally.lost_cloud_align[run] += 1,
+                    (_, _, false) => tally.lost_cutoff[run] += 1,
+                    (_, _, true) => tally.kept[run] += 1,
+                }
+            }
+        }
+
+        for run in 0..runs {
+            if run != hmmer && !row.seeded(run) {
+                unseeded.entry((unit.clone(), run)).or_default().push((
+                    String::from_utf8_lossy(row.row().field(0)).into_owned(),
+                    String::from_utf8_lossy(row.row().field(1)).into_owned(),
+                    single,
+                ));
             }
         }
 
@@ -151,26 +213,42 @@ pub fn stages(path: &Path, root: &Path, out: &Path) -> anyhow::Result<()> {
     })?;
 
     ensure!(
-        at.values().any(|t| t.truth > 0),
+        at.values().any(|t| t[0].truth > 0),
         "hmmer found nothing that clears a cutoff; there is nothing to measure against"
     );
 
     // a pair the prefilter never returned could not have been seeded, so
     // the pairs no seed list held split on the prefilter list: not there at
     // all, or there and dropped by mmseqs' alignment
-    for ((unit, run), mut pairs) in unseeded {
+    for ((unit, run), pairs) in unseeded {
         let column = &scores.meta().runs[run];
         let arm = column
             .seeds
             .as_deref()
             .with_context(|| format!("run {:?} kept no seed list", column.name))?;
-        let missing = depth::beyond(root, arm, &unit, &mut pairs)? as usize;
 
-        let tally = at
+        let mut names: Vec<(String, String)> = pairs
+            .iter()
+            .map(|(q, t, _)| (q.clone(), t.clone()))
+            .collect();
+        let missing: HashSet<(String, String)> = depth::beyond(root, arm, &unit, &mut names)?
+            .into_iter()
+            .collect();
+
+        let tallies = at
             .get_mut(&unit)
             .expect("every unit with pairs was tallied");
-        tally.lost_prefilter[run] = missing;
-        tally.lost_seed[run] -= missing;
+        for (q, t, single) in pairs {
+            if !missing.contains(&(q, t)) {
+                continue;
+            }
+            for (set, tally) in Domains::EACH.iter().zip(tallies.iter_mut()) {
+                if set.holds(single) {
+                    tally.lost_prefilter[run] += 1;
+                    tally.lost_seed[run] -= 1;
+                }
+            }
+        }
     }
 
     // one row per (unit, run), a column per checkpoint. Written long it was
@@ -190,44 +268,52 @@ pub fn stages(path: &Path, root: &Path, out: &Path) -> anyhow::Result<()> {
     ]
     .map(str::to_string)
     .to_vec();
-    let mut cells: Vec<Vec<String>> = Vec::new();
 
-    for (unit, tally) in &at {
-        for (run, column) in scores.meta().runs.iter().enumerate() {
-            if run == hmmer {
-                continue;
+    for (i, set) in Domains::EACH.iter().enumerate() {
+        let mut cells: Vec<Vec<String>> = Vec::new();
+
+        for (unit, tallies) in &at {
+            let tally = &tallies[i];
+            for (run, column) in scores.meta().runs.iter().enumerate() {
+                if run == hmmer {
+                    continue;
+                }
+
+                cells.push(vec![
+                    unit.clone(),
+                    column.name.clone(),
+                    tally.truth.to_string(),
+                    tally.lost_prefilter[run].to_string(),
+                    tally.lost_seed[run].to_string(),
+                    tally.lost_cloud_align[run].to_string(),
+                    tally.lost_cutoff[run].to_string(),
+                    tally.kept[run].to_string(),
+                    format!("{:.4}", frac(tally.kept[run], tally.truth)),
+                ]);
             }
-
-            cells.push(vec![
-                unit.clone(),
-                column.name.clone(),
-                tally.truth.to_string(),
-                tally.lost_prefilter[run].to_string(),
-                tally.lost_seed[run].to_string(),
-                tally.lost_cloud_align[run].to_string(),
-                tally.lost_cutoff[run].to_string(),
-                tally.kept[run].to_string(),
-                format!("{:.4}", frac(tally.kept[run], tally.truth)),
-            ]);
         }
+
+        ensure!(
+            !cells.is_empty(),
+            "nothing but hmmer ran, so there is no pipeline to trace"
+        );
+
+        let truth: usize = at.values().map(|tallies| tallies[i].truth).sum();
+
+        let mut table = toil::Table::new(toil::Schema::new(headers.clone()));
+        preamble(&mut table, scores.meta(), truth, rows);
+        table.meta("domains", [set.name()]);
+        for row in cells {
+            table.row(row);
+        }
+
+        let path = set.path(out);
+        table
+            .write(&path)
+            .with_context(|| format!("failed to write {}", path.display()))?;
     }
 
-    ensure!(
-        !cells.is_empty(),
-        "nothing but hmmer ran, so there is no pipeline to trace"
-    );
-
-    let truth: usize = at.values().map(|tally| tally.truth).sum();
-
-    let mut table = toil::Table::new(toil::Schema::new(headers));
-    preamble(&mut table, scores.meta(), truth, rows);
-    for row in cells {
-        table.row(row);
-    }
-
-    table
-        .write(out)
-        .with_context(|| format!("failed to write {}", out.display()))
+    Ok(())
 }
 
 fn frac(n: usize, of: usize) -> f64 {

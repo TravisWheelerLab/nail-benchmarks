@@ -602,8 +602,11 @@ row per run counts hmmer's pairs the prefilter never returned.
 the mmseqs prefilter list, in it but dropped by mmseqs' alignment, seeded
 but dropped by nail's cloud search or forward filter, and scored under the
 family's cutoff. The first needs each arm's prefilter database, which is why
-`parse stages` takes the run directory as well as the table. That is the
-shape a figure reads. loss-decomp's figure shows where in nail's
+`parse stages` takes the run directory as well as the table. It writes the
+table three times: `stages.tbl` over every hmmer hit, `stages-single.tbl`
+over the hits hmmer resolved as one domain, and `stages-multi.tbl` over the
+rest, by the domain rule recall's `sens_sd` uses. The figure reads the first
+alone. That is the shape a figure reads. loss-decomp's figure shows where in nail's
 pipeline the hits were lost; a point per arm that gives the total without
 saying which stage took it is not that figure.
 
