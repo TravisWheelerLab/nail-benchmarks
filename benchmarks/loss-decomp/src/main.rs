@@ -120,6 +120,7 @@ impl Command {
                 crate::scores::parse::main(crate::scores::parse::Cmd::Runs(a))
             }
             Command::Parse(Parse::Stages(mut a)) => {
+                a.run = paths.run.clone();
                 a.analysis = paths.analysis.clone();
                 crate::scores::parse::main(crate::scores::parse::Cmd::Stages(a))
             }

@@ -198,6 +198,10 @@ pub struct TableArgs {
     #[arg(long = "in", value_name = "label")]
     pub label: Option<String>,
 
+    /// The run directory holding results/, filled in from the label.
+    #[clap(skip)]
+    pub run: PathBuf,
+
     /// The analysis directory holding the table, filled in from the label.
     #[clap(skip)]
     pub analysis: PathBuf,
@@ -231,6 +235,7 @@ pub struct DepthArgs {
 fn depth(args: DepthArgs) -> anyhow::Result<()> {
     let table = TableArgs {
         label: args.label,
+        run: args.run.clone(),
         analysis: args.analysis,
         out: None,
     };
@@ -251,7 +256,7 @@ fn stages(args: TableArgs) -> anyhow::Result<()> {
     let path = table_at(&args, &["runs.tbl"])?;
     let out = beside(&path, args.out, "stages.tbl")?;
 
-    analyze::stages(&path, &out)?;
+    analyze::stages(&path, &args.run, &out)?;
 
     println!("wrote {}", out.display());
     Ok(())

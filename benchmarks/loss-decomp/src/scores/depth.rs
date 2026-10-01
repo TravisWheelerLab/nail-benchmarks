@@ -221,6 +221,49 @@ fn headers(path: &Path) -> anyhow::Result<HashMap<String, u32>> {
     Ok(map)
 }
 
+/// How many of `pairs` one arm's prefilter never returned for one shard.
+///
+/// A pair not in the list could not have been seeded, so this is where the
+/// loss before the seed list splits: the prefilter against mmseqs' alignment.
+pub fn beyond(
+    root: &Path,
+    arm: &str,
+    shard: &str,
+    pairs: &mut [(String, String)],
+) -> anyhow::Result<u64> {
+    let dir = prefilter_dir(root, arm, shard);
+    let pf = Prefilter::open(&dir)
+        .with_context(|| format!("failed to open the prefilter database in {}", dir.display()))?;
+
+    // by query, so each query's entry is read once for all of its pairs
+    pairs.sort_unstable();
+
+    let mut missing = 0u64;
+    let mut at = 0;
+    while at < pairs.len() {
+        let query = pairs[at].0.as_str();
+        let ranks = match pf.query_key.get(query) {
+            Some(&key) => pf.ranks(key)?,
+            None => bail!("query {query:?} is not in {}", dir.display()),
+        };
+
+        while at < pairs.len() && pairs[at].0 == query {
+            let target = &pairs[at].1;
+            if pf
+                .target_key
+                .get(target)
+                .and_then(|k| ranks.get(k))
+                .is_none()
+            {
+                missing += 1;
+            }
+            at += 1;
+        }
+    }
+
+    Ok(missing)
+}
+
 // ---
 
 /// The bin a rank falls in: the first holds ranks up to `width`, and each

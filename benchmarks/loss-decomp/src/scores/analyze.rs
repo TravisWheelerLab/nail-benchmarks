@@ -1,18 +1,21 @@
 //! The analyses, which are groupings over a table of pairs.
 //!
-//! Nothing in here reads a results file. A summary counts per run, and stages
-//! counts per checkpoint within a run; both are held to the same denominator,
-//! which is what hmmer found and scored over its family's cutoff.
+//! `stages` counts per checkpoint within a run, held to one denominator:
+//! what hmmer found and scored over its family's cutoff. It reads no results
+//! table, and reads each arm's prefilter database for one thing: whether a
+//! pair the seeding never offered was in the prefilter list at all.
 //!
 //! They are separate from `parse` because reading every results table is the
 //! expensive half and the half least likely to change: a different statistic
 //! is a re-run of this, not of the benchmark.
 
+use std::collections::HashMap;
 use std::path::Path;
 
 use anyhow::{Context, ensure};
 
 use crate::scores::Tool;
+use crate::scores::depth;
 use crate::scores::runs::Reader as Runs;
 
 /// What was searched, what the fractions are fractions of, and the two times
@@ -60,6 +63,10 @@ fn preamble(table: &mut toil::Table, meta: &crate::scores::Meta, truth: usize, r
 struct Tally {
     /// Pairs hmmer reported at or above their family's cutoff, for this unit.
     truth: usize,
+    /// Not in the arm's prefilter list at any rank.
+    lost_prefilter: Vec<usize>,
+    /// In the prefilter list, and not in the seed list: mmseqs' alignment
+    /// dropped it.
     lost_seed: Vec<usize>,
     lost_cloud_align: Vec<usize>,
     /// Scored, and below the family's cutoff. nail found the pair and would
@@ -72,6 +79,7 @@ impl Tally {
     fn new(runs: usize) -> Tally {
         Tally {
             truth: 0,
+            lost_prefilter: vec![0; runs],
             lost_seed: vec![0; runs],
             lost_cloud_align: vec![0; runs],
             lost_cutoff: vec![0; runs],
@@ -81,7 +89,10 @@ impl Tally {
 }
 
 /// Where the hits hmmer found are lost, per unit and per run.
-pub fn stages(path: &Path, out: &Path) -> anyhow::Result<()> {
+///
+/// `root` is the run directory, for the prefilter databases under its
+/// `results/`.
+pub fn stages(path: &Path, root: &Path, out: &Path) -> anyhow::Result<()> {
     let mut scores = Runs::open(path)?;
 
     let hmmer = scores.meta().hmmer()?;
@@ -99,6 +110,10 @@ pub fn stages(path: &Path, out: &Path) -> anyhow::Result<()> {
     let mut at: indexmap::IndexMap<String, Tally> = indexmap::IndexMap::new();
     let mut rows = 0u64;
 
+    // the pairs no seed list held, per unit and run, to be looked up in
+    // the arm's prefilter list once the table has been read
+    let mut unseeded: HashMap<(String, usize), Vec<(String, String)>> = HashMap::new();
+
     scores.each(|row| {
         rows += 1;
 
@@ -107,7 +122,7 @@ pub fn stages(path: &Path, out: &Path) -> anyhow::Result<()> {
         }
 
         let unit = row.row().shard().to_string();
-        let tally = at.entry(unit).or_insert_with(|| Tally::new(runs));
+        let tally = at.entry(unit.clone()).or_insert_with(|| Tally::new(runs));
         tally.truth += 1;
 
         for run in 0..runs {
@@ -119,7 +134,13 @@ pub fn stages(path: &Path, out: &Path) -> anyhow::Result<()> {
             // its own seed list, so whether the pair was ever offered is the
             // arm's answer and not the pipeline's
             match (row.seeded(run), row.present(run), row.row().passed(run)) {
-                (false, _, _) => tally.lost_seed[run] += 1,
+                (false, _, _) => {
+                    tally.lost_seed[run] += 1;
+                    unseeded.entry((unit.clone(), run)).or_default().push((
+                        String::from_utf8_lossy(row.row().field(0)).into_owned(),
+                        String::from_utf8_lossy(row.row().field(1)).into_owned(),
+                    ));
+                }
                 (_, false, _) => tally.lost_cloud_align[run] += 1,
                 (_, _, false) => tally.lost_cutoff[run] += 1,
                 (_, _, true) => tally.kept[run] += 1,
@@ -134,6 +155,24 @@ pub fn stages(path: &Path, out: &Path) -> anyhow::Result<()> {
         "hmmer found nothing that clears a cutoff; there is nothing to measure against"
     );
 
+    // a pair the prefilter never returned could not have been seeded, so
+    // the pairs no seed list held split on the prefilter list: not there at
+    // all, or there and dropped by mmseqs' alignment
+    for ((unit, run), mut pairs) in unseeded {
+        let column = &scores.meta().runs[run];
+        let arm = column
+            .seeds
+            .as_deref()
+            .with_context(|| format!("run {:?} kept no seed list", column.name))?;
+        let missing = depth::beyond(root, arm, &unit, &mut pairs)? as usize;
+
+        let tally = at
+            .get_mut(&unit)
+            .expect("every unit with pairs was tallied");
+        tally.lost_prefilter[run] = missing;
+        tally.lost_seed[run] -= missing;
+    }
+
     // one row per (unit, run), a column per checkpoint. Written long it was
     // four rows apiece, where `n` meant a population on two of them and a loss
     // on the other two, and the last row's fraction only ever repeated the one
@@ -142,6 +181,7 @@ pub fn stages(path: &Path, out: &Path) -> anyhow::Result<()> {
         "unit",
         "run",
         "truth",
+        "lost_prefilter",
         "lost_seed",
         "lost_align",
         "lost_cutoff",
@@ -162,6 +202,7 @@ pub fn stages(path: &Path, out: &Path) -> anyhow::Result<()> {
                 unit.clone(),
                 column.name.clone(),
                 tally.truth.to_string(),
+                tally.lost_prefilter[run].to_string(),
                 tally.lost_seed[run].to_string(),
                 tally.lost_cloud_align[run].to_string(),
                 tally.lost_cutoff[run].to_string(),

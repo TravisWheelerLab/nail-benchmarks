@@ -4,11 +4,12 @@
     plot.py stages.tbl --out figures/
 
 One panel per target corpus, one bar per arm. A bar is the hits hmmer found
-that the arm did not keep, split by the stage that dropped them: never seeded,
-seeded but absent from nail's table, or scored under the family's cutoff. The
-bar is drawn to 100% of what was lost, so the arms compare by where the loss
-sits rather than by how much there was, and how much there was goes beside
-each bar with the arm's sensitivity.
+that the arm did not keep, split by the stage that dropped them: not in the
+mmseqs prefilter list, in it but dropped by mmseqs' alignment, seeded but
+dropped by nail's cloud search or forward filter, or scored under the
+family's cutoff. The bar is drawn to 100% of what was lost, so the arms
+compare by where the loss sits rather than by how much there was, and how
+much there was goes beside each bar with the arm's sensitivity.
 
 The lost_ columns of stages.tbl are the stages, in the table's order, so a
 column added there becomes a segment here; a column with no colour below is
@@ -30,6 +31,7 @@ mpl.rcParams.update({"font.size": mpl.rcParams["font.size"] * SCALE})
 
 # the palette the other benchmarks use, so figures from all of them sit together
 TOL_BLUE = "#0077BB"
+TOL_CYAN = "#33BBEE"
 TOL_TEAL = "#009988"
 TOL_RED = "#CC3311"
 
@@ -37,14 +39,21 @@ TOL_RED = "#CC3311"
 # fixed per stage rather than cycled, so a figure with fewer stages
 # keeps the same colour on each
 STAGES = {
-    "lost_seed": ("never seeded", TOL_BLUE),
-    "lost_align": ("seeded, not aligned", TOL_TEAL),
-    "lost_cutoff": ("under the family cutoff", TOL_RED),
+    "lost_prefilter": ("pre-filtered (mmseqs)", TOL_BLUE),
+    "lost_seed": ("not seeded (mmseqs)", TOL_CYAN),
+    "lost_align": ("filtered (nail)", TOL_TEAL),
+    "lost_cutoff": ("under cutoff", TOL_RED),
 }
 
 # a segment narrower than this gets no label inside it: the legend
 # carries its identity and the table its count
 LABEL_FROM = 0.06
+
+
+def ink_on(colour):
+    """White or near-black, whichever clears the fill."""
+    r, g, b = (int(colour[i : i + 2], 16) / 255 for i in (1, 3, 5))
+    return "white" if 0.2126 * r + 0.7152 * g + 0.0722 * b < 0.5 else "0.15"
 
 
 def table(path):
@@ -95,7 +104,8 @@ def draw(stages_path, out):
                         edgecolor="white", linewidth=1.5)
                 if share >= LABEL_FROM:
                     ax.text(left + share / 2, y, f"{share:.0%}", ha="center",
-                            va="center", color="white", fontsize=mpl.rcParams["font.size"] * 0.9)
+                            va="center", color=ink_on(colour),
+                            fontsize=mpl.rcParams["font.size"] * 0.9)
                 left += share
             # beside the bar: how much was lost, and what that leaves
             ax.text(1.03, y, f"{lost:,}", va="center", ha="left", color="0.2")
