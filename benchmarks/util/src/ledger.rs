@@ -587,6 +587,33 @@ pub fn record(dir: &Path) -> anyhow::Result<()> {
     Ok(())
 }
 
+/// Adds a finished pipeline's manifest to the ledger already in `dir`.
+///
+/// A row of the same run, shard and stage is replaced and the rest are kept,
+/// so an arm run on its own joins the record of the run it was added to.
+pub fn add(dir: &Path, manifest: &Path) -> anyhow::Result<()> {
+    let out = path(dir);
+    let kept = Ledger::read(&out).with_context(|| format!("no {} to add to", out.display()))?;
+    let new = Ledger::distill(manifest)?;
+    warn(new.failed(), "command(s)");
+
+    let mut rows: Vec<Row> = kept
+        .rows
+        .into_iter()
+        .filter(|row| {
+            !new.rows
+                .iter()
+                .any(|n| n.name == row.name && n.shard == row.shard && n.stage == row.stage)
+        })
+        .collect();
+    rows.extend(new.rows);
+
+    Ledger::from_rows(rows).stamp().write(&out)?;
+
+    println!("wrote {}", out.display());
+    Ok(())
+}
+
 /// What a caller should say about the runs a pipeline did not finish.
 pub fn warn(failed: &[(String, String)], what: &str) {
     if failed.is_empty() {

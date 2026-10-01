@@ -55,6 +55,16 @@ pub struct Args {
     )]
     sensitivities: Vec<f64>,
 
+    /// Sensitivities to add a full-DP arm at: `s<X>-full` replays `s<X>`'s
+    /// seed list with `--full-dp`, so the only thing moving is the cloud
+    #[arg(long = "full-dp", value_delimiter = ',', value_name = "X,X,...")]
+    full_dp: Vec<f64>,
+
+    /// Run only these arms, and add them to the ledger of a run that has
+    /// finished rather than starting the record over. `hmmer` names hmmer
+    #[arg(long, value_delimiter = ',', value_name = "name,...")]
+    only: Vec<String>,
+
     /// Threads per search, and the cores each search is pinned to
     #[arg(short, long)]
     threads: Option<usize>,
@@ -91,13 +101,28 @@ pub fn main(args: Args, paths: &crate::Paths) -> anyhow::Result<()> {
         .pool(threads)
         .step(dirs.mkdir().path(dirs.tmp.join("align")));
 
-    let arms: Vec<(String, String)> = args
+    // an arm is its name, its sensitivity, and whether it replays the
+    // static arm's seed list under --full-dp
+    let mut arms: Vec<(String, String, bool)> = args
         .sensitivities
         .iter()
-        .map(|s| (format!("s{s}"), format!("{s}")))
+        .map(|s| (format!("s{s}"), format!("{s}"), false))
         .collect();
+    arms.extend(
+        args.full_dp
+            .iter()
+            .map(|s| (format!("s{s}-full"), format!("{s}"), true)),
+    );
 
     ensure!(!arms.is_empty(), "the sweep has no arms");
+
+    let wanted = |name: &str| args.only.is_empty() || args.only.iter().any(|o| o == name);
+    for name in &args.only {
+        ensure!(
+            name == HMMER || arms.iter().any(|(arm, _, _)| arm == name),
+            "--only names {name:?}, which is not an arm of this run"
+        );
+    }
     println!(
         "{} arms over {} {}",
         arms.len(),
@@ -119,46 +144,68 @@ pub fn main(args: Args, paths: &crate::Paths) -> anyhow::Result<()> {
         // per unit rather than per run: a cross can pair more than one query
         // source, and two of them cut into the same directory would search each
         // other's parts
-        let split = Split::new(
-            &query_hmm,
-            Kind::Hmm,
-            dirs.tmp.join("hmmer-query").join(&shard),
-            util::search::jobs(threads),
-        );
-        pl = pl.step(split.step("split", &[(manifest::SHARD, shard.clone())]));
+        if wanted(HMMER) {
+            let split = Split::new(
+                &query_hmm,
+                Kind::Hmm,
+                dirs.tmp.join("hmmer-query").join(&shard),
+                util::search::jobs(threads),
+            );
+            pl = pl.step(split.step("split", &[(manifest::SHARD, shard.clone())]));
 
-        let hmmer = util::search::hmmer(
-            &bins.hmmsearch,
-            &split,
-            &dirs,
-            HMMER,
-            "hmmer",
-            &shard,
-            &target,
-            util::search::EVALUE,
-            true,
-            &[],
-        );
-        pl = pl.step(hmmer.search).step(hmmer.cat);
+            let hmmer = util::search::hmmer(
+                &bins.hmmsearch,
+                &split,
+                &dirs,
+                HMMER,
+                "hmmer",
+                &shard,
+                &target,
+                util::search::EVALUE,
+                true,
+                &[],
+            );
+            pl = pl.step(hmmer.search).step(hmmer.cat);
+        }
 
         // one nail per arm: static seeding with no cap aligns everything
         // the prefilter returned, so there is no list to replay. the seed
         // list is written beside the table for parse to read which pairs
         // the seeding offered, and mmseqs' databases stay in the tmp dir
         // for depth to read a pair's rank
-        for (name, s) in &arms {
+        for (name, s, full) in &arms {
+            if !wanted(name) {
+                continue;
+            }
+
             let cmd = Cmd::new(&bins.nail)
                 .sub("search")
+                // nail looks for mmseqs at startup even when it replays
+                // seeds and never calls it
                 .arg("--mmseqs-path", &bins.mmseqs)
-                .arg("-t", threads)
-                .arg(
-                    "--tmp-dir",
-                    crate::scores::depth::prefilter_dir(&dirs.root, name, &shard),
-                )
-                .arg("--mmseqs-s", s)
-                .arg("--mmseqs-max-seqs", UNBOUNDED)
-                .arg("--seed-mode", "static")
-                .arg("--seeds-out", dirs.seeds(name, &shard))
+                .arg("-t", threads);
+
+            // the seeding it replays is the static arm at the same -s; a
+            // static arm seeds itself and writes the list the full arm reads
+            let seeding = format!("s{s}");
+            let cmd = match full {
+                true => cmd
+                    .arg("--seeds", dirs.seeds(&seeding, &shard))
+                    .flag("--full-dp")
+                    .arg("--tmp-dir", dirs.tmp.join("full"))
+                    .field("dp", "full"),
+                false => cmd
+                    .arg(
+                        "--tmp-dir",
+                        crate::scores::depth::prefilter_dir(&dirs.root, name, &shard),
+                    )
+                    .arg("--mmseqs-s", s)
+                    .arg("--mmseqs-max-seqs", UNBOUNDED)
+                    .arg("--seed-mode", "static")
+                    .arg("--seeds-out", dirs.seeds(name, &shard)),
+            };
+
+            let cmd = cmd
                 .arg("-E", args.nail_evalue)
                 .arg("--tbl-out", dirs.table(name, &shard))
                 .flag("--allow-overwrite")
@@ -166,8 +213,8 @@ pub fn main(args: Args, paths: &crate::Paths) -> anyhow::Result<()> {
                 .path(&target)
                 .field(manifest::NAME, name)
                 .field(manifest::TOOL, "nail")
-                // the list this run wrote, which is what it aligned
-                .field(manifest::SEEDS, name)
+                // the list it aligned: its own, or the static arm's
+                .field(manifest::SEEDS, &seeding)
                 .field(manifest::SHARD, &shard)
                 .field("s", s)
                 .field("E", args.nail_evalue);
@@ -180,16 +227,30 @@ pub fn main(args: Args, paths: &crate::Paths) -> anyhow::Result<()> {
         }
     }
 
+    // an added arm keeps its own manifest beside the run's, and joins the
+    // run's ledger rather than replacing it
+    let manifest = match args.only.is_empty() {
+        true => dirs.root.join("manifest.tbl"),
+        false => dirs
+            .root
+            .join(format!("manifest-{}.tbl", args.only.join("+"))),
+    };
+
     let pipeline = pl
         .stderr_dir(dirs.tmp.join("stderr"))
         .sink(Progress::new())
-        .sink(Table::new(dirs.root.join("manifest.tbl")))
+        .sink(Table::new(&manifest))
         .build()
         .context("failed to build the run")?;
 
     if args.dry_run {
         pipeline.dry_run();
         return Ok(());
+    }
+
+    if !args.only.is_empty() {
+        pipeline.run()?;
+        return ledger::add(&dirs.root, &manifest);
     }
 
     // the ledger describes the results this run is about to replace, so it
