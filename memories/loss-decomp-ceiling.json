@@ -1,0 +1,10 @@
+{
+  "slug": "loss-decomp-ceiling",
+  "text": "loss-decomp runs no hmmer since 30 Sep: three nail arms, -s 12/10/7.5, static and --mmseqs-max-seqs unbounded, and the highest -s is the ceiling every other arm is measured against. Its real set is Pfam x 2,455,940 MGnify sequences, one unit. On the old 500k cross hmmer was 59 of a 68-minute run; the three nail arms alone were about 8 minutes an arm on 500k at 48 threads.",
+  "created_at": "2026-10-01T03:51:15.484556724Z",
+  "updated_at": "2026-10-01T03:51:15.484556724Z",
+  "stamp": {
+    "commit": "a6abba0",
+    "branch": "claude-refactor"
+  }
+}
