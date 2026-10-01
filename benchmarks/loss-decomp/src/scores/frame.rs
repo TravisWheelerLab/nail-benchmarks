@@ -354,7 +354,7 @@ impl<'a> Row<'a> {
         };
 
         let cutoff = match self.meta.runs[run].tool {
-            Tool::Nail | Tool::Hmmer => self.state.cutoff.0,
+            Tool::Nail => self.state.cutoff.0,
             Tool::Mmseqs => self.state.cutoff.1,
         };
 

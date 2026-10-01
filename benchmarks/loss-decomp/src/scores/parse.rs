@@ -19,8 +19,7 @@ pub enum Cmd {
     /// Read a sweep's results into runs.tbl, one row per pair, one score
     /// column per run, and whether seeding found the pair.
     Runs(ScoresArgs),
-    /// Where the hits hmmer found were lost, one row per run per
-    /// checkpoint.
+    /// Where the ceiling's hits were lost, one row per run per checkpoint.
     Stages(TableArgs),
     /// How far down the prefilter list the hits sit, one row per run per
     /// depth bin.

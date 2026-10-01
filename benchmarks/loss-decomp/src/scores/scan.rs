@@ -3,12 +3,10 @@
 //!
 //! The framing and the field split are `libsail::lines::Rows` and
 //! `libsail::tbl::fields`. What is left here is what libsail has no business
-//! knowing: hmmer's inclusion column, and the shapes of the target names this
-//! repository searches.
+//! knowing: the shapes of the target names this repository searches.
 
 use libsail::tbl::HitColumns;
 pub use libsail::tbl::fields;
-use libsail::tbl::hmmer::HmmerTable;
 
 /// How many fields a line has, which is what a layout is checked against.
 pub fn count(line: &[u8]) -> usize {
@@ -20,28 +18,6 @@ pub fn count(line: &[u8]) -> usize {
 /// The query, target and score of one row, at layout `C`'s own indices.
 pub fn hit<C: HitColumns>(line: &[u8]) -> Option<[&[u8]; 3]> {
     fields(line, [C::QUERY, C::TARGET, C::SCORE])
-}
-
-/// hmmer's `--tblout`, for the one column `libsail`'s layout does not carry:
-/// how many of a pair's domains fall inside the inclusion threshold.
-///
-/// ```text
-/// |  0   | 1 |   2  | 3 |  4   |  5  |  6 | ... | 15 | 16 | 17 |   18
-/// # target acc query acc e-value score bias ... dom  rep  inc  description
-/// ```
-const INC: usize = 17;
-
-/// The query, target, score and `inc` of one `--tblout` row.
-pub fn hmmer_hit(line: &[u8]) -> Option<[&[u8]; 4]> {
-    fields(
-        line,
-        [
-            HmmerTable::QUERY,
-            HmmerTable::TARGET,
-            HmmerTable::SCORE,
-            INC,
-        ],
-    )
 }
 
 /// Whether a row carries the fields layout `C` calls for.
@@ -89,12 +65,11 @@ pub fn mgyp(name: &[u8]) -> Option<u64> {
 mod tests {
     use super::*;
 
-    /// A row of each of the four layouts, as the tool itself wrote it, so the
-    /// indices `libsail` declares are held against a real file.
+    /// A row of each layout, as the tool itself wrote it, so the indices
+    /// `libsail` declares are held against a real file.
     #[test]
     fn a_hit_is_read_at_its_layout_s_indices() {
         use libsail::tbl::blast::BlastTable;
-        use libsail::tbl::hmmer::HmmerDomTable;
         use libsail::tbl::nail::NailTable;
 
         let nail = b"MGYP005808827855 AAA_30 42     152    22    121   18.1  0.0  9.6e-5 0.066";
@@ -111,31 +86,9 @@ mod tests {
             [&b"AAA_30"[..], b"MGYP005808827855", b"45.7"]
         );
 
-        // the description field carries spaces, so the row splits into more
-        // than the eighteen a layout asks for
-        let hmmer = b"MGYP003392859013     -          2_5_RNA_ligase2      PF13563.10     1e-15   54.0   0.2   1.3e-15   53.7   0.2   1.2   1   0   0   1   1   1   1 CR=1 FL=0";
-        assert!(fits::<HmmerTable>(hmmer));
-        assert_eq!(
-            hmmer_hit(hmmer).unwrap(),
-            [&b"2_5_RNA_ligase2"[..], b"MGYP003392859013", b"54.0", b"1"]
-        );
-
-        let dom = b"MGYP000987338150     -            178 2-oxoacid_dh         PF00198.27   232   9.3e-44  145.5   0.5   1   1   1.1e-46   1.1e-43  145.2   0.5     5   143    42   178    39   178 0.97 FL=0";
-        assert!(fits::<HmmerDomTable>(dom));
-        assert_eq!(
-            hit::<HmmerDomTable>(dom).unwrap(),
-            [&b"2-oxoacid_dh"[..], b"MGYP000987338150", b"145.2"]
-        );
-
-        // a table of the wrong tool, which is what the field count is for
-        assert!(!fits::<HmmerTable>(nail));
-        assert!(!fits::<BlastTable>(hmmer_short()));
-    }
-
-    /// An hmmer row cut to the fields before the description, which is fewer
-    /// than blast's twelve are wide.
-    fn hmmer_short() -> &'static [u8] {
-        b"MGYP003392859013 - 2_5_RNA_ligase2 PF13563.10 1e-15 54.0"
+        // a table of the wrong tool, which is what the field count is for:
+        // nail's ten fields are short of blast's twelve
+        assert!(!fits::<BlastTable>(nail));
     }
 
     #[test]

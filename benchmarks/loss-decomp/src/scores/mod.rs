@@ -1,64 +1,13 @@
 //! One row per query/target pair, and what the runs made of it.
 //!
-//! Two tables are written in this shape and share everything but their
-//! columns. [`write`] holds recall's, a score per tool; [`runs`] holds the
-//! sweeps', a score per run. What is in this module is what neither owns: the
-//! tools, the runs a ledger declares, the query numbering, the cutoffs, and
-//! the preamble both write. [`shard`] reads a shard's results into pairs and
-//! [`collect`] turns shards into a file; [`frame`] reads one back.
+//! [`runs`] writes and reads the table, a score per run. What is in this
+//! module is what it does not own: the tools, the runs a ledger declares, the
+//! query numbering, the cutoffs, and the preamble. [`shard`] reads a shard's
+//! results into pairs and [`collect`] turns shards into a file; [`frame`]
+//! reads one back.
 //!
-//! ```text
-//! #= format scores 2
-//! #= query <count> <residues> <bytes>
-//! #= target <shard> <count> <residues> <bytes>
-//! #= seed <shard> <wall_s>
-//! #= cutoffs <path> c=<n>
-//! #= run <name> <tool> <wall_s> [k=v ...]
-//! #= pass <run name> ...
-//! # query target           pass   nail   mmseqs hmmer  inc dom
-//! # ----- ---------------- ------ ------ ------ ------ --- ---
-//! #= shard 1
-//! 2-Hacid_dh_C MGYP000522683479 NNNMMH 98.8   94.0   98.7   1   98.1
-//! 2-Hacid_dh_C MGYP000715666710 nnnmmh -      -      13.7   0   9.3,2.8
-//! 2-oxoacid_dh MGYP000987338150 NNNMMH 145.6  140.0  145.5  1   145.2
-//! #= shard 2
-//! ...
-//! #= end <rows>
-//! ```
-//!
-//! One `#= target` line per shard and one `#= run` line per run, both in
-//! ledger order; `#= seed` says what seeding cost, and is absent for a
-//! pipeline that never seeds; `#= cutoffs` records the file and the column the
-//! pass letters were judged by; `#= pass` names the run behind each character
-//! of the `pass` column. A reader refuses a file that does not open the format
-//! line its table expects.
-//!
-//! Rows sit in a block per shard, sorted by (query, target) within the block.
-//! A sequence lives in exactly one shard, so the blocks partition the pairs
-//! and nothing has to sort the whole file at once.
-//!
-//! `pass` holds one character per run: `n`, `m` or `h` for the tool, uppercase
-//! where that run reported the pair at or above its family's cutoff and
-//! lowercase otherwise, so a pair no run passed reads `nnnmmh`. hmmer is held
-//! to nail's cutoff, as it is in the calibration.
-//!
-//! Which axis the score columns run along is the one thing the two tables
-//! disagree about, and [`write`] and [`runs`] each say why. `-` means no score:
-//! absent is not one, and a zero or a NaN would compare against a threshold
-//! and look like one.
-//!
-//! `inc` is hmmer's tblout inclusion count and `dom` its per-domain scores in
-//! domtbl order, so the k-th score is the k-th row of
-//! `results/<run>.<shard>.domtbl` and the coordinates stay there.
-//!
-//! A pair earns a row by clearing some run's cutoff, or by hmmer having
-//! reported it at all. hmmer's whole reported set is kept because it is what
-//! everything else is measured against: a pair it found weakly is still a
-//! pair they can be asked about.
-//!
-//! Every column is padded to its width except `query`, which is unpadded
-//! because a query's rows are adjacent and so line up without it, and `dom`,
-//! which is as wide as the pair has domains.
+//! A pair earns a row by clearing some run's cutoff. The most sensitive run
+//! is the ceiling, and every other run is measured against what it kept.
 
 pub mod analyze;
 pub mod collect;
@@ -82,9 +31,6 @@ use libsail::seq::p7hmm::leng_of;
 use util::ledger::{self, Ledger};
 use util::set::Set;
 
-/// What recall's table opens with. The sweeps' is [`runs::FORMAT`].
-pub const FORMAT: &str = "scores 2";
-
 // ---
 
 /// Which program produced a results table, which settles both how to read it
@@ -93,7 +39,6 @@ pub const FORMAT: &str = "scores 2";
 pub enum Tool {
     Nail,
     Mmseqs,
-    Hmmer,
 }
 
 impl Tool {
@@ -101,7 +46,6 @@ impl Tool {
         match name {
             "nail" => Ok(Tool::Nail),
             "mmseqs" => Ok(Tool::Mmseqs),
-            "hmmer" => Ok(Tool::Hmmer),
             other => bail!("unknown tool {other:?} in ledger.tbl"),
         }
     }
@@ -111,7 +55,6 @@ impl Tool {
         match self {
             Tool::Nail => b'n',
             Tool::Mmseqs => b'm',
-            Tool::Hmmer => b'h',
         }
     }
 }
@@ -121,7 +64,6 @@ impl fmt::Display for Tool {
         let name = match self {
             Tool::Nail => "nail",
             Tool::Mmseqs => "mmseqs",
-            Tool::Hmmer => "hmmer",
         };
         write!(f, "{name}")
     }
@@ -325,9 +267,6 @@ impl Queries {
 // ------------------------------------------------------------------ cutoffs
 
 /// The score each family's hits are held to, by query id.
-///
-/// hmmer takes nail's: nail approximates hmmer's model, and the calibration
-/// learns no threshold of hmmer's own that anything reads.
 pub struct Cutoffs {
     nail: Vec<Option<f32>>,
     mmseqs: Vec<Option<f32>>,
@@ -337,7 +276,7 @@ impl Cutoffs {
     /// The threshold a run of `tool` is held to on one family.
     pub fn get(&self, tool: Tool, query: u32) -> Option<f32> {
         let column = match tool {
-            Tool::Nail | Tool::Hmmer => &self.nail,
+            Tool::Nail => &self.nail,
             Tool::Mmseqs => &self.mmseqs,
         };
 
@@ -531,30 +470,32 @@ impl Meta {
             out.meta("run", words)?;
         }
 
-        // the legend belongs to the pass string, so a table without one gets
-        // no line: `#= run` already gives the order, and a legend beside no
-        // column would read as saying the column is there
-        if format == FORMAT {
-            out.meta("pass", self.runs.iter().map(|run| run.name.as_str()))?;
-        }
-
         Ok(())
     }
 
-    /// Which column is hmmer's, which is what everything else is measured
-    /// against.
-    ///
-    /// A pipeline runs one, so more than one is a table the analyses have no
-    /// answer for rather than a choice to make quietly.
-    pub fn hmmer(&self) -> anyhow::Result<usize> {
-        let mut it = self
-            .runs
-            .iter()
-            .enumerate()
-            .filter(|(_, run)| run.tool == Tool::Hmmer);
+    /// Which column is the ceiling, which every other run is measured
+    /// against: the run seeded at the highest sensitivity.
+    pub fn ceiling(&self) -> anyhow::Result<usize> {
+        let mut at: Vec<(usize, f64)> = Vec::with_capacity(self.runs.len());
+        for (i, run) in self.runs.iter().enumerate() {
+            let s = run
+                .params
+                .get("s")
+                .with_context(|| format!("run {:?} records no `s` setting", run.name))?;
+            let s: f64 = s
+                .parse()
+                .with_context(|| format!("run {:?} has s={s:?}", run.name))?;
+            at.push((i, s));
+        }
 
-        let (i, _) = it.next().context("no hmmer run to measure against")?;
-        ensure!(it.next().is_none(), "more than one hmmer run");
+        let top = at.iter().map(|&(_, s)| s).fold(f64::NEG_INFINITY, f64::max);
+        let mut it = at.iter().filter(|&&(_, s)| s == top);
+
+        let &(i, _) = it.next().context("no runs to take a ceiling from")?;
+        ensure!(
+            it.next().is_none(),
+            "two runs seeded at s={top}; no single run is the ceiling"
+        );
 
         Ok(i)
     }
@@ -570,7 +511,6 @@ pub struct Preamble {
     c: Option<usize>,
     runs: Vec<Run>,
     tools: Vec<util::tools::Identity>,
-    pass: Vec<String>,
 }
 
 impl Preamble {
@@ -605,7 +545,6 @@ impl Preamble {
                 });
             }
             "run" => self.runs.push(run(row)?),
-            "pass" => self.pass = words(row).map(str::to_string).collect(),
             other => bail!("unknown `#= {other}` line"),
         }
 
@@ -626,18 +565,6 @@ impl Preamble {
 
         ensure!(!meta.runs.is_empty(), "no `#= run` lines");
         ensure!(!meta.targets.is_empty(), "no `#= target` lines");
-
-        // the pass string is read by position, so a legend that disagrees with
-        // the runs is a file that cannot be read rather than one to guess at.
-        // a table with no pass string has no legend, and the `#= run` lines
-        // are the order there
-        let names: Vec<&str> = meta.runs.iter().map(|run| run.name.as_str()).collect();
-        ensure!(
-            self.pass.is_empty() || self.pass == names,
-            "`#= pass` names {:?}, the runs are {:?}",
-            self.pass,
-            names
-        );
 
         Ok(meta)
     }

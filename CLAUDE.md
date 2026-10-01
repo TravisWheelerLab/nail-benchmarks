@@ -521,16 +521,18 @@ MMseqs2's prefilter sensitivity. `cloud-search` seeds once, then searches every
 `(A, B)` pruning cell off those same seeds, so the pruning parameters are the
 only thing moving. The grid is run twice, at `-a 5` and at `-a 1`, because a
 surface at one `-a` cannot say whether a hard-pruning cell found its hits or
-recovered them. `loss-decomp` asks where nail loses the hits HMMER finds,
-and how far down the prefilter list the hits it does find sit. Its arms are
-sensitivities, `--s 12.0,10.0,7.5`, each seeded static with
+recovered them. `loss-decomp` asks where nail loses the hits its most
+sensitive seeding reaches, and how far down the prefilter list the hits sit.
+Its arms are sensitivities, `--s 12.0,10.0,7.5`, each seeded static with
 `--mmseqs-max-seqs` unbounded, so an arm aligns everything the prefilter
 returned and its seed list is the most nail could get at that sensitivity.
-An arm is one `nail search`, seeding and alignment together, with the seed
-list written beside its table so `parse` can tell a pair the seeding never
-offered from one it offered and nail dropped; hmmer runs once outside the
-sweep, because the truth set is the same for all of them and is most of the
-wall clock. An arm leaves mmseqs' databases under
+The arm at the highest `-s` is the ceiling: a hit is a pair it kept over the
+family's cutoff, and a lost hit is one of those another arm did not keep.
+Nothing here runs hmmer, so the benchmark is nail against itself, and the
+hits hmmer finds that no sensitivity seeds are recall's to measure. An arm is
+one `nail search`, seeding and alignment together, with the seed list written
+beside its table so `parse` can tell a pair the seeding never offered from
+one it offered and nail dropped. An arm leaves mmseqs' databases under
 `results/prefilter.<arm>.<unit>/`, which is part of the record: `parse depth`
 reads a pair's rank in its query's prefilter list out of it.
 
@@ -594,14 +596,16 @@ disjoint clouds instead. A summary with one `-a` in it draws two panels.
 `depth` bins each pair's rank in its query's prefilter list in ranges that
 double from `--bin`, the way prog's `n_take` does, and writes `depth.tbl`: per
 unit, run and bin, the prefilter pairs at that depth, the seeds, the pairs
-nail kept over the cutoff, the pairs hmmer found, and the hits, kept and found
-both. Hits over prefilter pairs is what a stopping rule is betting on. A last
-row per run counts hmmer's pairs the prefilter never returned.
+the arm kept over the cutoff, the pairs the ceiling kept, and the hits, kept
+by both. Hits over prefilter pairs is what a stopping rule is betting on. A
+last row per run counts the ceiling's hits that arm's prefilter never
+returned, which is zero for the ceiling itself.
 
-`stages` writes one row per (unit, run) with a column per checkpoint, which
-is the shape a figure reads. loss-decomp's figure shows where in nail's
-pipeline the hits were lost; a point per arm that gives the total without
-saying which stage took it is not that figure.
+`stages` writes one row per (unit, run) with a column per checkpoint, the
+ceiling's hits in every row and no row for the ceiling, which is the shape a
+figure reads. loss-decomp's figure is one 100% stacked bar per arm of where
+in nail's pipeline the ceiling's hits were lost; a point per arm that gives
+the total without saying which stage took it is not that figure.
 
 ## benchmarks/cutoffs
 

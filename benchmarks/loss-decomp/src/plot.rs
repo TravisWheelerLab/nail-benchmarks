@@ -1,4 +1,4 @@
-//! Draws where each arm lost the hits hmmer found, by handing stages.tbl to
+//! Draws where each arm lost the ceiling's hits, by handing stages.tbl to
 //! matplotlib, and where the hits sit in the prefilter list from hits.tbl and
 //! lists.tbl.
 //!

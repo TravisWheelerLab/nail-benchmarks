@@ -5,7 +5,8 @@
 
 Two figures, one panel per target corpus each, columns square on a log rank
 axis. In both, a column is the distribution across families of a fraction:
-good seeds, kept over the cutoff and found by hmmer, over prefilter pairs.
+good seeds, kept over the cutoff by the arm and by the ceiling, over
+prefilter pairs.
 Cumulative takes the family's first R pairs; binned takes only its pairs at
 the ranks the column covers. A column has one cell per value the fraction can
 take, up to a hundred, and a cell is coloured by how many families sit in it,
