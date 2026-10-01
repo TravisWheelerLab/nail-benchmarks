@@ -371,11 +371,12 @@ built. N x M, N x 1 and 1 x M are one recipe and one manifest, a row per
 combination, `unit` naming both sides.
 
 cloud-search and loss-decomp read `cross` because their questions are about
-the kind of sequence being searched rather than about how much of it there is:
-both draw Pfam against MGnify and against Swissprot, 500,000 a side, so their
-two surfaces differ only in where the targets came from. Swissprot is not much
-bigger than that, and a target the size of most of its source is a sample of
-nothing.
+the kind of sequence being searched rather than about how much of it there is.
+cloud-search draws Pfam against MGnify and against Swissprot, 500,000 a side,
+so its two surfaces differ only in where the targets came from; Swissprot is
+not much bigger than that, and a target the size of most of its source is a
+sample of nothing. loss-decomp draws Pfam against one recall shard's worth of
+MGnify, 2,455,940 sequences, and nothing else.
 
 `pairs` is the one shape with no draw in it. Its two sources are separate
 directories of fasta, so a sequence is never on both sides, and pair `i` is the
