@@ -13,7 +13,7 @@
   "lease_expires": null,
   "defer_until": null,
   "created_at": "2026-09-28T19:02:29.799446418Z",
-  "updated_at": "2026-10-01T04:42:47.827514208Z",
+  "updated_at": "2026-10-01T05:01:22.039951532Z",
   "closed_at": null,
   "close_reason": null,
   "resolution": null,
@@ -99,6 +99,13 @@
       "at": "2026-10-01T04:42:47.827513309Z",
       "author": "jackroddy/924b3ec0",
       "text": "Real run on the one-unit set finished 30 Sep 21:42: 57 min at 48 threads; s12 2,511 s at 149 GiB peak, s10 750 s at 33 GiB, s7.5 145 s at 7 GiB; outputs 185 GB. Parse and plot started right after, log tmp-claude/2026-09-30-loss-decomp-stages/parse-real.log.",
+      "commit": "a6abba0",
+      "branch": "claude-refactor"
+    },
+    {
+      "at": "2026-10-01T05:01:22.039950435Z",
+      "author": "jackroddy/924b3ec0",
+      "text": "Parsed and plotted 30 Sep 22:01. Ceiling s12: 2,146,055 hits over 2.46M MGnify. s10 sens 0.9724 (59,187 lost), s7.5 0.8208 (384,481 lost); lost_align and lost_cutoff are 0 in both, so every loss between the arms is seeding. s12 depth: ranks 1-200 hold 703,732 hits of 4.16M prefilter pairs (17%), 801-1600 295k, 6401-12800 64k, past 100k rank still 8,226. Prefilter lists run to 1.6M per query. depth took 18 min, parse runs 7 s. Figures in figures/loss-decomp-*.pdf.",
       "commit": "a6abba0",
       "branch": "claude-refactor"
     }
