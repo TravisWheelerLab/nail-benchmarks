@@ -1,22 +1,18 @@
 #!/usr/bin/env python3
-"""What each seeding arm found, against what it cost.
+"""Where in nail's pipeline the hits hmmer found were lost.
 
-    plot.py stages.tbl ledger.tbl --out figures/
+    plot.py stages.tbl --out figures/
 
-One panel per target corpus. The two seeding policies sweep different knobs --
-static moves --mmseqs-max-seqs alone, prog moves --prog-n against --prog-f --
-so they share no axis of their own. What they do share is the bill: an arm is
-a seeding plus the alignment that replays it, and sensitivity per second is the
-question a reader actually has.
+One panel per target corpus, one bar per arm. A bar is the hits hmmer found
+that the arm did not keep, split by the stage that dropped them: never seeded,
+seeded but absent from nail's table, or scored under the family's cutoff. The
+bar is drawn to 100% of what was lost, so the arms compare by where the loss
+sits rather than by how much there was, and how much there was goes beside
+each bar with the arm's sensitivity.
 
-The y axis is what an arm missed rather than what it found, on a log scale.
-Sensitivity 0.9103 against 0.9093 is invisible on an axis that also has to hold
---mmseqs-max-seqs 200 at 0.6246; the same pair as 8.97% missed against 9.07% is
-legible, and the arm that misses 37.5% sits four times up the axis.
-
-The stage decomposition is not drawn. Loss at the cloud and alignment stages
-runs to tens of pairs against tens of thousands lost at seeding, so a stacked
-bar would be one visible colour and a sentence says it better.
+The lost_ columns of stages.tbl are the stages, in the table's order, so a
+column added there becomes a segment here; a column with no colour below is
+an error rather than a hue picked at random.
 """
 
 import argparse
@@ -27,115 +23,113 @@ import matplotlib as mpl
 mpl.use("Agg")
 
 import matplotlib.pyplot as plt
+from matplotlib.patches import Patch
 
-SCALE = 1.5
+SCALE = 1.4
 mpl.rcParams.update({"font.size": mpl.rcParams["font.size"] * SCALE})
 
 # the palette the other benchmarks use, so figures from all of them sit together
-TOL_RED = "#CC3311"
+TOL_BLUE = "#0077BB"
 TOL_TEAL = "#009988"
+TOL_RED = "#CC3311"
+
+# a stage's column in stages.tbl, what to call it, and its colour.
+# fixed per stage rather than cycled, so a figure with fewer stages
+# keeps the same colour on each
+STAGES = {
+    "lost_seed": ("never seeded", TOL_BLUE),
+    "lost_align": ("seeded, not aligned", TOL_TEAL),
+    "lost_cutoff": ("under the family cutoff", TOL_RED),
+}
+
+# a segment narrower than this gets no label inside it: the legend
+# carries its identity and the table its count
+LABEL_FROM = 0.06
 
 
-def rows(path):
-    """A `#`-headed table as dicts, the header being the last `#` line whose
-    first field is not a dash."""
-    names, out = None, []
+def table(path):
+    """A `#`-headed table's rows as dicts, the header being the last `#` line
+    whose first field is not a dash."""
+    names, rows = None, []
     for line in Path(path).read_text().splitlines():
+        if line.startswith("#="):
+            continue
         if line.startswith("#"):
             f = line.lstrip("#").split()
             if f and not f[0].startswith("-"):
                 names = f
             continue
         if line.split():
-            out.append(dict(zip(names, line.split())))
-    return out
+            rows.append(dict(zip(names, line.split())))
+    return names, rows
 
 
-def costs(ledger):
-    """Seconds per (unit, arm): the alignment, plus the seeding it replayed.
+def draw(stages_path, out):
+    names, rows = table(stages_path)
+    stages = [n for n in names if n.startswith("lost_")]
+    unknown = [n for n in stages if n not in STAGES]
+    if unknown:
+        raise SystemExit(f"no colour for {', '.join(unknown)}; add it to STAGES in {__file__}")
 
-    A run's ledger row already sums the shards it covered, but these pipelines
-    write one row per unit, so the pair is what keys it.
-    """
-    out = {}
-    for r in rows(ledger):
-        wall = float(r["wall(s)"]) if r["wall(s)"] != "-" else 0.0
-        arm = r["seeds"] if r["seeds"] != "-" else r["name"]
-        if arm == "-" or r["tool"] == "hmmer":
-            continue
-        out[(r["shard"], arm)] = out.get((r["shard"], arm), 0.0) + wall
-    return out
+    units = list(dict.fromkeys(r["unit"] for r in rows))
+    per_unit = {u: [r for r in rows if r["unit"] == u] for u in units}
+    tallest = max(len(v) for v in per_unit.values())
 
+    fig, axes = plt.subplots(
+        len(units), 1, sharex=True, squeeze=False,
+        figsize=(11, 1.4 + 0.85 * tallest * len(units)),
+        layout="constrained",
+    )
+    for ax, unit in zip(axes[:, 0], units):
+        arms = per_unit[unit]
+        ys = range(len(arms))[::-1]
+        for y, r in zip(ys, arms):
+            lost = int(r["truth"]) - int(r["kept"])
+            left = 0.0
+            for stage in stages:
+                n = int(r[stage])
+                share = n / lost if lost else 0.0
+                _, colour = STAGES[stage]
+                # a surface-coloured edge is the gap between segments
+                ax.barh(y, share, left=left, height=0.62, color=colour,
+                        edgecolor="white", linewidth=1.5)
+                if share >= LABEL_FROM:
+                    ax.text(left + share / 2, y, f"{share:.0%}", ha="center",
+                            va="center", color="white", fontsize=mpl.rcParams["font.size"] * 0.9)
+                left += share
+            # beside the bar: how much was lost, and what that leaves
+            ax.text(1.03, y, f"{lost:,}", va="center", ha="left", color="0.2")
+            ax.text(1.23, y, r["sens"], va="center", ha="left", color="0.2")
 
-def pareto(points):
-    """The arms nothing else beats on both cost and sensitivity."""
-    front, best = [], -1.0
-    for p in sorted(points, key=lambda p: (p[0], -p[1])):
-        if p[1] > best:
-            front.append(p)
-            best = p[1]
-    return front
+        ax.set_yticks(list(ys))
+        ax.set_yticklabels([r["run"] for r in arms])
+        ax.set_ylim(-0.6, len(arms) - 0.4)
+        ax.set_title(unit, loc="left", fontsize=mpl.rcParams["font.size"])
+        for side in ("top", "right", "left"):
+            ax.spines[side].set_visible(False)
+        ax.tick_params(axis="y", length=0)
+        ax.grid(axis="x", alpha=0.25)
+        ax.set_axisbelow(True)
 
+    top = axes[0, 0]
+    top.text(1.03, len(per_unit[units[0]]) - 0.3, "hits lost", ha="left", va="bottom",
+             color="0.4", fontsize=mpl.rcParams["font.size"] * 0.85)
+    top.text(1.23, len(per_unit[units[0]]) - 0.3, "sensitivity", ha="left", va="bottom",
+             color="0.4", fontsize=mpl.rcParams["font.size"] * 0.85)
 
-def draw(stages, ledger, out):
-    cost = costs(ledger)
-    at = {}
-    for r in rows(stages):
-        at.setdefault(r["unit"], []).append((r["run"], float(r["sens"])))
+    bottom = axes[-1, 0]
+    bottom.set_xlim(0, 1.42)
+    bottom.set_xticks([0, 0.25, 0.5, 0.75, 1.0])
+    bottom.xaxis.set_major_formatter(plt.FuncFormatter(lambda v, _: f"{v:.0%}"))
+    bottom.set_xlabel("share of the hits hmmer found that nail lost, by stage")
 
-    units = sorted(at)
-    fig, axes = plt.subplots(1, len(units), figsize=(9 * len(units), 8),
-                             constrained_layout=True)
-    axes = [axes] if len(units) == 1 else list(axes)
+    fig.legend(
+        handles=[Patch(color=c, label=l) for l, c in (STAGES[s] for s in stages)],
+        loc="outside lower center", ncol=len(stages), frameon=False,
+    )
+    fig.suptitle("loss-decomp: where nail loses the hits hmmer finds", x=0.0, ha="left")
 
-    for ax, unit in zip(axes, units):
-        pts = []
-        for arm, sens in at[unit]:
-            seconds = cost.get((unit, arm))
-            if seconds is None:
-                continue
-            pts.append((seconds, sens, arm))
-
-        # static sweeps one knob and joins into a line; prog sweeps two and is
-        # a cloud, so the shapes say which policy a point belongs to
-        line = sorted(p for p in pts if p[2].startswith("static"))
-        cloud = [p for p in pts if not p[2].startswith("static")]
-
-        miss = lambda s: max(1.0 - s, 1e-4)
-
-        ax.plot([p[0] for p in line], [miss(p[1]) for p in line], "-o",
-                color=TOL_RED, markersize=11, linewidth=2.5, label="static", zorder=3)
-        ax.scatter([p[0] for p in cloud], [miss(p[1]) for p in cloud],
-                   s=110, color=TOL_TEAL, label="prog", zorder=3)
-
-        front = pareto([(p[0], p[1]) for p in pts])
-        ax.plot([p[0] for p in front], [miss(p[1]) for p in front], "--",
-                color="0.4", linewidth=1.5, zorder=2, label="pareto front")
-
-        # only the front is labelled: the arms behind it are the ones a reader
-        # has no decision to make about, and twelve labels in one cluster is
-        # nothing anyone can read
-        on_front = {(round(c, 3), round(s, 6)) for c, s in front}
-        for seconds, sens, arm in pts:
-            if (round(seconds, 3), round(sens, 6)) not in on_front:
-                continue
-            ax.annotate(arm.replace("static-ms", "ms").replace("prog-", ""),
-                        (seconds, miss(sens)), textcoords="offset points",
-                        xytext=(8, 4), fontsize=10, color="0.2")
-
-        ax.set_yscale("log")
-        ax.set_title(unit)
-        ax.set_xlabel("wall clock for the arm (s)   seeding + alignment")
-        ax.set_ylabel("missed, of what hmmer found")
-        ax.yaxis.set_major_formatter(
-            plt.FuncFormatter(lambda v, _: f"{v * 100:g}%")
-        )
-        ax.grid(alpha=0.25, which="both")
-        ax.legend(loc="upper right")
-
-    fig.suptitle("loss-decomp: what each seeding arm missed, against what it cost")
-
-    path = out / "seeding.pdf"
+    path = out / "loss-decomp-stages.pdf"
     fig.savefig(path)
     plt.close(fig)
     return path
@@ -144,13 +138,12 @@ def draw(stages, ledger, out):
 def main():
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument("stages", help="the stages.tbl to plot")
-    ap.add_argument("ledger", help="the ledger.tbl its costs come from")
     ap.add_argument("--out", default="figures", help="where the pdfs go")
     args = ap.parse_args()
 
     out = Path(args.out)
     out.mkdir(parents=True, exist_ok=True)
-    print(f"wrote {draw(args.stages, args.ledger, out)}")
+    print(f"wrote {draw(args.stages, out)}")
 
 
 if __name__ == "__main__":

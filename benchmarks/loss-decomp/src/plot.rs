@@ -1,10 +1,6 @@
-//! Draws what each seeding arm missed against what it cost, by handing
-//! stages.tbl and the ledger to matplotlib, and where the hits sit in the
-//! prefilter list from depth.tbl and hits.tbl.
-//!
-//! The ledger comes too because the cost is not in stages.tbl: an arm is a
-//! seeding plus the alignment replaying it, and only the ledger has both, per
-//! unit. Passing it beats widening stages.tbl with a column one figure reads.
+//! Draws where each arm lost the hits hmmer found, by handing stages.tbl to
+//! matplotlib, and where the hits sit in the prefilter list from hits.tbl and
+//! lists.tbl.
 //!
 //! The drawing is python because matplotlib is what the other benchmarks plot
 //! with and there is no reason for this one to be different. It goes through
@@ -42,16 +38,12 @@ pub struct Args {
 
 pub fn main(args: Args, paths: &crate::Paths) -> anyhow::Result<()> {
     let stages = paths.analysis.join("stages.tbl");
-    let ledger = paths.run.join("ledger.tbl");
 
     if !stages.is_file() {
         bail!(
             "no stages.tbl at {}; run `loss-decomp parse stages` first",
             stages.display()
         );
-    }
-    if !ledger.is_file() {
-        bail!("no ledger.tbl at {}", ledger.display());
     }
 
     let out = args.out.clone().unwrap_or_else(|| paths.figures.clone());
@@ -73,8 +65,7 @@ pub fn main(args: Args, paths: &crate::Paths) -> anyhow::Result<()> {
         .name("plot")
         .sub(script.to_string_lossy())
         .arg("--out", &out)
-        .path(&stages)
-        .path(&ledger);
+        .path(&stages);
 
     let mut pl = PipelineBuilder::new().step(Step::serial([cmd]));
 
