@@ -13,7 +13,7 @@
   "lease_expires": null,
   "defer_until": null,
   "created_at": "2026-09-28T19:02:29.799446418Z",
-  "updated_at": "2026-10-01T02:09:59.642503278Z",
+  "updated_at": "2026-10-01T02:26:58.31618909Z",
   "closed_at": null,
   "close_reason": null,
   "resolution": null,
@@ -79,6 +79,13 @@
       "author": "jackroddy/01dd6c44",
       "text": "released at session end",
       "commit": "f8f4436",
+      "branch": "claude-refactor"
+    },
+    {
+      "at": "2026-10-01T02:26:58.316188343Z",
+      "author": "jackroddy/924b3ec0",
+      "text": "30 Sep evening: binned depth figure committed, prog arm removed, stages figure done (issue 68e851 closed), ledger restore dropped (db5b20). Next is (2) of the 30 Sep plan: the per-arm hit tables with rank and gate_f, after checking nail's seed_stage.rs for the per-round count. When those exist the stages figure can grow a bar per synthetic cap or prog f from the same tables, and its never-seeded segment splits into never-in-the-prefilter-list and beyond-the-cap; the script already takes its segments from whatever lost_ columns stages.tbl carries.",
+      "commit": "ac4893d",
       "branch": "claude-refactor"
     }
   ],
