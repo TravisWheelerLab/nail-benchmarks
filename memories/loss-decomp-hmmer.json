@@ -1,0 +1,10 @@
+{
+  "slug": "loss-decomp-hmmer",
+  "text": "loss-decomp runs hmmer once per unit as the baseline every nail arm is measured against, the unbounded s12 arm included; a ceiling of nail's own was tried on 30 Sep and reverted on 1 Oct (commit 96a3954) because it cannot show what s12 itself loses to seeding. The real set is Pfam x 2,455,940 MGnify sequences, one unit. Without hmmer the three nail arms took 57 min at 48 threads, s12 at 149 GiB peak; hmmer on a set this size took 59 min in September.",
+  "created_at": "2026-10-01T08:37:58.439923913Z",
+  "updated_at": "2026-10-01T08:37:58.439923913Z",
+  "stamp": {
+    "commit": "96a3954",
+    "branch": "claude-refactor"
+  }
+}
