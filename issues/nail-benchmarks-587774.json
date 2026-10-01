@@ -13,7 +13,7 @@
   "lease_expires": null,
   "defer_until": null,
   "created_at": "2026-09-28T19:02:29.799446418Z",
-  "updated_at": "2026-10-01T10:16:49.927937874Z",
+  "updated_at": "2026-10-01T10:35:33.085447374Z",
   "closed_at": null,
   "close_reason": null,
   "resolution": null,
@@ -120,6 +120,13 @@
       "at": "2026-10-01T10:16:49.927937024Z",
       "author": "jackroddy/924b3ec0",
       "text": "Real run with hmmer finished 1 Oct 03:19: 99 min at 48 threads, 31 steps, 0 failed. hmmer 2,448 s; s12 2,526 s at 149 GiB; s10 745 s; s7.5 147 s. Parse and plot started, log tmp-claude/2026-09-30-loss-decomp-stages/parse-real3.log.",
+      "commit": "96a3954",
+      "branch": "claude-refactor"
+    },
+    {
+      "at": "2026-10-01T10:35:33.0854464Z",
+      "author": "jackroddy/924b3ec0",
+      "text": "Parsed and plotted 1 Oct 03:35. hmmer 2,325,460 hits over 2.46M MGnify. s12: sens 0.9114, lost 78,857 seeding / 147 align / 127,054 cutoff. s10: 0.8883, 142,110 / 123 / 117,405. s7.5: 0.7516, 498,027 / 57 / 79,586. hmmer hits the s12 prefilter never returned: 19,416 (0.8%); s10 92,677; s7.5 470,519. runs.tbl 5.1M rows. Figures in figures/loss-decomp-*.pdf. The cutoff stage is the larger loss at s12 and s10, as on the 500k set.",
       "commit": "96a3954",
       "branch": "claude-refactor"
     }
