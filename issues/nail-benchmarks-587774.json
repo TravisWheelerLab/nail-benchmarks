@@ -13,7 +13,7 @@
   "lease_expires": null,
   "defer_until": null,
   "created_at": "2026-09-28T19:02:29.799446418Z",
-  "updated_at": "2026-10-01T10:35:33.085447374Z",
+  "updated_at": "2026-10-01T18:46:13.696231256Z",
   "closed_at": null,
   "close_reason": null,
   "resolution": null,
@@ -128,6 +128,13 @@
       "author": "jackroddy/924b3ec0",
       "text": "Parsed and plotted 1 Oct 03:35. hmmer 2,325,460 hits over 2.46M MGnify. s12: sens 0.9114, lost 78,857 seeding / 147 align / 127,054 cutoff. s10: 0.8883, 142,110 / 123 / 117,405. s7.5: 0.7516, 498,027 / 57 / 79,586. hmmer hits the s12 prefilter never returned: 19,416 (0.8%); s10 92,677; s7.5 470,519. runs.tbl 5.1M rows. Figures in figures/loss-decomp-*.pdf. The cutoff stage is the larger loss at s12 and s10, as on the 500k set.",
       "commit": "96a3954",
+      "branch": "claude-refactor"
+    },
+    {
+      "at": "2026-10-01T18:46:13.6962302Z",
+      "author": "jackroddy/924b3ec0",
+      "text": "1 Oct: stages split four ways (commit 6aa4d43), real parse 3.5 min. s12 of 2,325,460 hmmer hits: pre-filtered 19,416 / not seeded 59,441 / nail filtered 147 / under cutoff 127,054 / kept 2,119,402 (0.9114). s10: 92,677 / 49,433 / 123 / 117,405 (0.8883). s7.5: 470,519 / 27,508 / 57 / 79,586 (0.7516). Jack: no full-dp replay and no nail change to split the 147; four categories are the analysis. The 0.91 vs recall's 0.96 is sens vs sens_sd (single-domain); same rule, same cutoffs; by recall's rule this shard gives sens 0.913 and sens_sd 0.971 at s12.",
+      "commit": "6aa4d43",
       "branch": "claude-refactor"
     }
   ],
