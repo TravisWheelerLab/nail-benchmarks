@@ -134,7 +134,7 @@ impl Domains {
 }
 
 /// Where the hits hmmer found are lost, per unit and per run, three times
-/// over: for every hit, for the hits hmmer resolved as one domain, and for
+/// over: for every hit, for the hits hmmer reports one domain for, and for
 /// the rest.
 ///
 /// `root` is the run directory, for the prefilter databases under its
