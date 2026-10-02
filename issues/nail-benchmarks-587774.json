@@ -13,7 +13,7 @@
   "lease_expires": null,
   "defer_until": null,
   "created_at": "2026-09-28T19:02:29.799446418Z",
-  "updated_at": "2026-10-02T22:44:43.969665716Z",
+  "updated_at": "2026-10-02T22:48:47.158353038Z",
   "closed_at": null,
   "close_reason": null,
   "resolution": null,
@@ -170,6 +170,13 @@
       "author": "jackroddy/924b3ec0",
       "text": "2 Oct: Jack's definition: single-domain = hmmer reports exactly one domain, no score ratio. Crate, scripts and report redone (commit after 167ac35). s12 misses single 25,811 / multi 101,243. In the 25,811, nail is within 0.5 bits of hmmer's domain score for 22,379; the gap to the cutoff is between hmmer's full-sequence score and its own domain score. Report regenerated in reports/2026-10-01-loss-decomp-cutoff/.",
       "commit": "fb864f4",
+      "branch": "claude-refactor"
+    },
+    {
+      "at": "2026-10-02T22:48:47.158352242Z",
+      "author": "jackroddy/924b3ec0",
+      "text": "2 Oct: fb864f4 reverted. The pipeline's single/multi split stays on recall's 0.1-of-best rule; the one-reported-domain definition is only for the cutoff investigation scripts and reports/2026-10-01-loss-decomp-cutoff/. stages-single/multi.tbl re-parsed on the pipeline's rule.",
+      "commit": "47b1a3c",
       "branch": "claude-refactor"
     }
   ],
