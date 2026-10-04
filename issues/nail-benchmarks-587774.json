@@ -13,7 +13,7 @@
   "lease_expires": null,
   "defer_until": null,
   "created_at": "2026-09-28T19:02:29.799446418Z",
-  "updated_at": "2026-10-02T22:48:47.158353038Z",
+  "updated_at": "2026-10-04T19:40:50.379191102Z",
   "closed_at": null,
   "close_reason": null,
   "resolution": null,
@@ -176,6 +176,13 @@
       "at": "2026-10-02T22:48:47.158352242Z",
       "author": "jackroddy/924b3ec0",
       "text": "2 Oct: fb864f4 reverted. The pipeline's single/multi split stays on recall's 0.1-of-best rule; the one-reported-domain definition is only for the cutoff investigation scripts and reports/2026-10-01-loss-decomp-cutoff/. stages-single/multi.tbl re-parsed on the pipeline's rule.",
+      "commit": "47b1a3c",
+      "branch": "claude-refactor"
+    },
+    {
+      "at": "2026-10-04T19:40:50.379190219Z",
+      "author": "jackroddy/924b3ec0",
+      "text": "4 Oct: reports/2026-10-04-loss-decomp-single-misses/pairs.tbl, 25,811 rows: the pairs hmmer reports one domain for and scores over the cutoff that nail at s12 reports under it, with cutoff, hmmer seq and dom scores, nail score, hmmer ali and hmm coordinates, nail target and profile coordinates. report.py beside it. Finding behind it (seqdom-table.py in tmp-claude): 91% of these have hmmer's seq score more than 1 bit over its domain score while nail scores the domain 0.2-0.85 bits over hmmer's domain score, same as where it clears the cutoff; the 2,324 under 1 bit are where nail scores the domain lower (-0.5 to -2.7) with coverage 0.88-0.94.",
       "commit": "47b1a3c",
       "branch": "claude-refactor"
     }
