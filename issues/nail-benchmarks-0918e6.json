@@ -3,20 +3,20 @@
   "title": "check that recall-toy, cutoffs-toy and long-seqs-toy find real hits end to end",
   "body": "A toy is for build, run, parse, plot with real hits at every stage. A toy that runs clean and finds nothing leaves everything after the search untested, which is how loss-decomp parse shipped broken. cloud-search-toy and loss-decomp-toy were raised to 400 families against 50,000 sequences a side and produce tens of thousands of rows; pid-toy runs end to end with real hits. recall-toy, cutoffs-toy and long-seqs-toy have not been checked; recall's toy finds nothing that clears a cutoff, so its summary writer has never run. Scale the toy, never add a fixture beside it.",
   "type": "chore",
-  "status": "in_progress",
+  "status": "closed",
   "priority": 2,
   "labels": [],
   "parent": null,
   "blocked_by": [],
   "related": [],
   "assignee": "jackroddy/0d39a02d",
-  "lease_expires": "2026-10-06T23:09:16.951864402Z",
+  "lease_expires": null,
   "defer_until": null,
   "created_at": "2026-09-28T19:02:29.902590431Z",
-  "updated_at": "2026-10-06T23:00:40.214359598Z",
-  "closed_at": null,
-  "close_reason": null,
-  "resolution": null,
+  "updated_at": "2026-10-06T23:00:40.245709331Z",
+  "closed_at": "2026-10-06T23:00:40.245709331Z",
+  "close_reason": "every toy now finds real hits end to end; long-seqs' toy label removed as meaningless at six pairs",
+  "resolution": "done",
   "notes": [
     {
       "at": "2026-10-06T22:13:00.631262506Z",
@@ -38,6 +38,9 @@
       "commit": "e080da4",
       "branch": "claude-refactor"
     },
-    "closed": null
+    "closed": {
+      "commit": "dcdd68d",
+      "branch": "claude-refactor"
+    }
   }
 }
