@@ -7,13 +7,11 @@
 //! the recipe wrote down about each unit, so a search does not learn which of
 //! the two recipes ran.
 //!
-//! The two recipes differ in how they cut, not in what they cut. `fixed` deals
-//! one query set against target shards of equal size, which is what a question
-//! about recall needs: the shards are units of work rather than a variable.
-//! `ladder` nests rungs on both axes, each a prefix of the one above, which is
-//! what a question about scaling needs: every rung is a measurement.
+//! `fixed` deals one query set against target shards of equal size, which is
+//! what a question about recall needs: the shards are units of work rather
+//! than a variable.
 //!
-//! Neither knows what it is cutting, nor where the result goes. A label in
+//! No recipe knows what it is cutting, nor where the result goes. A label in
 //! `paths.toml` names the sources, the size and the destination, and this
 //! stamps the shape into the `set.tbl` it leaves there. So the benchmarks read
 //! a contract rather than a location, and cutting something other than Pfam is
@@ -44,7 +42,6 @@ use libsail::collection::{Aggregate, Indexable, Iterable};
 use libsail::format::{self, Format};
 use libsail::index::{self, Index};
 use libsail::seq::fasta::{DEFAULT_LINE_WIDTH, IndexedFasta};
-use libsail::seq::p7hmm::IndexedHmm;
 
 use michi::{Closure, Cmd as PCmd, PipelineBuilder, Progress, Step};
 mod profmark;
@@ -169,17 +166,6 @@ enum Recipe {
     /// units with only the query profile and the target, since the rest of a
     /// part's columns mean what its own shape says.
     Union { out: PathBuf, parts: Vec<Part> },
-    /// Nested rungs on both axes, each a prefix of the one above.
-    Ladder {
-        queries: PathBuf,
-        alignments: PathBuf,
-        targets: PathBuf,
-        out: PathBuf,
-        query_rungs: Vec<usize>,
-        target_rungs: Vec<usize>,
-        #[serde(default = "default_seed")]
-        seed: u64,
-    },
 }
 
 /// One part of a union: what to call it, and which label builds it.
@@ -216,7 +202,6 @@ impl Recipe {
             Recipe::Fixed { out, .. }
             | Recipe::Cross { out, .. }
             | Recipe::Pairs { out, .. }
-            | Recipe::Ladder { out, .. }
             | Recipe::Union { out, .. }
             | Recipe::Profmark { out, .. } => out,
         }
@@ -228,7 +213,6 @@ impl Recipe {
             Recipe::Fixed { out, .. }
             | Recipe::Cross { out, .. }
             | Recipe::Pairs { out, .. }
-            | Recipe::Ladder { out, .. }
             | Recipe::Union { out, .. }
             | Recipe::Profmark { out, .. } => *out = at,
         }
@@ -241,7 +225,6 @@ impl Recipe {
             Recipe::Fixed { .. } => "fixed",
             Recipe::Cross { .. } => "cross",
             Recipe::Pairs { .. } => "pairs",
-            Recipe::Ladder { .. } => "ladder",
             Recipe::Union { .. } => "union",
             Recipe::Profmark { .. } => "profmark",
         }
@@ -352,22 +335,6 @@ fn build(recipe: Recipe, paths: &paths::File, threads: usize) -> anyhow::Result<
             train_test_id,
             min_test,
             max_test,
-            threads,
-        ),
-        Recipe::Ladder {
-            queries,
-            alignments,
-            targets,
-            out,
-            query_rungs,
-            target_rungs,
-            seed,
-        } => ladder(
-            Sources::new(paths, queries, alignments, targets)?,
-            paths.at(out),
-            &query_rungs,
-            &target_rungs,
-            seed,
             threads,
         ),
         Recipe::Union { out, parts } => union(paths, paths.at(out), parts, threads),
@@ -508,22 +475,6 @@ fn listing(paths: &paths::File) -> anyhow::Result<String> {
                         .map(|p| p.name.as_str())
                         .collect::<Vec<_>>()
                         .join(", ")
-                ),
-                out,
-            ),
-            Recipe::Ladder {
-                out,
-                query_rungs,
-                target_rungs,
-                ..
-            } => (
-                recipe.shape(),
-                format!(
-                    "{} query {} x {} target {}",
-                    query_rungs.len(),
-                    plural(query_rungs.len(), "rung"),
-                    target_rungs.len(),
-                    plural(target_rungs.len(), "rung")
                 ),
                 out,
             ),
@@ -1097,195 +1048,6 @@ fn measure(path: &Path) -> anyhow::Result<(usize, u64)> {
     Ok((fa.len(), residues))
 }
 
-// ------------------------------------------------------------------- ladder
-
-fn ladder(
-    src: Sources,
-    root: PathBuf,
-    query_rungs: &[usize],
-    target_rungs: &[usize],
-    seed: u64,
-    threads: usize,
-) -> anyhow::Result<()> {
-    claim(&root)?;
-
-    let queries = root.join(QUERIES);
-    let targets = root.join(TARGETS);
-
-    // ---- queries
-
-    // an index of the file and nothing more: counting families does not need
-    // the models parsed
-    let n_fams = IndexedHmm::open(&src.hmm)
-        .with_context(|| format!("failed to index {}", src.hmm.display()))?
-        .len();
-    let query_ladder = rungs(query_rungs, n_fams);
-    println!("pfam holds {n_fams} families; query rungs: {query_ladder:?}");
-
-    let mut query_residues: Vec<u64> = Vec::new();
-    let mut pl = PipelineBuilder::new().pool(threads);
-
-    for &q in &query_ladder {
-        let dir = queries.join(q.to_string());
-        std::fs::create_dir_all(&dir)
-            .with_context(|| format!("failed to create {}", dir.display()))?;
-
-        let (query_hmm, query_sto) = (dir.join(QUERY_HMM), dir.join(QUERY_STO));
-
-        println!("taking {q} families...");
-        // a rung at or past the whole of Pfam is the whole of Pfam, which the
-        // subset says by being asked for nothing
-        subset_query(&src, (q < n_fams).then_some(q), &query_hmm, &query_sto)?;
-
-        // LENG is the query axis of a search's matrix, and so the honest
-        // measure of how much work a rung is
-        let models = IndexedHmm::open(&query_hmm)
-            .with_context(|| format!("failed to index {}", query_hmm.display()))?;
-
-        query_residues.push(models.iter().map(|m| m.header.leng as u64).sum());
-
-        pl = pl.step(profile_db(&src.mmseqs, &dir).name(format!("queryDB.q{q}")));
-    }
-
-    println!("building the mmseqs profile dbs...");
-    pl.stderr_dir(root.join("stderr"))
-        .sink(Progress::new())
-        .build()?
-        .run()?;
-
-    // ---- targets
-
-    let seqs = src.collection()?;
-
-    let total = seqs.len();
-    let target_ladder = rungs(target_rungs, total);
-    println!(
-        "the collection holds {total} sequences across {} files; target rungs: {target_ladder:?}",
-        seqs.parts().len()
-    );
-
-    let drawn = deal_nested(&seqs, &target_ladder, seed, &targets)?;
-
-    // ---- the manifest
-
-    // every rung of one axis against every rung of the other: a caller that
-    // wants one query rung's targets filters on the attribute rather than
-    // rebuilding the product
-    let mut rows = Vec::new();
-    for (&q, &q_residues) in query_ladder.iter().zip(&query_residues) {
-        for (&t, &(t_residues, t_bytes)) in target_ladder.iter().zip(&drawn) {
-            rows.push(
-                set::Row::new(format!("q{q}.t{t}"), format!("{TARGETS}/{t}.fa"))
-                    .query_hmm(format!("{QUERIES}/{q}/{QUERY_HMM}"))
-                    .query_sto(format!("{QUERIES}/{q}/{QUERY_STO}"))
-                    .query_db(format!("{QUERIES}/{q}/{QUERY_DB}"))
-                    .attr("query_rung", q)
-                    .attr("target_rung", t)
-                    .attr("query_residues", q_residues)
-                    .attr("target_residues", t_residues)
-                    .attr("target_bytes", t_bytes),
-            );
-        }
-    }
-
-    Set::new(&root, rows)
-        .says("shape", set::shape::LADDER.name)
-        .says("recipe", "ladder")
-        .says("seed", seed)
-        .says("query", src.hmm.display())
-        .says("targets", src.dir.display())
-        .save()?;
-
-    println!("\nbuilt {}", root.display());
-    Ok(())
-}
-
-/// Sort the rungs, drop the duplicates, and cap them at what there is. Asking
-/// for more than exists is how you say "all of it", so the rung is renamed to
-/// the real number rather than refused.
-fn rungs(asked: &[usize], max: usize) -> Vec<usize> {
-    let mut out: Vec<usize> = asked
-        .iter()
-        .map(|&n| n.min(max))
-        .filter(|&n| n > 0)
-        .collect();
-
-    out.sort_unstable();
-    out.dedup();
-    out
-}
-
-/// Draw every target rung in one pass, each a prefix of the next.
-///
-/// Returns the residues and bytes that landed in each.
-fn deal_nested(
-    seqs: &Aggregate<IndexedFasta>,
-    rungs: &[usize],
-    seed: u64,
-    out_dir: &Path,
-) -> anyhow::Result<Vec<(u64, u64)>> {
-    std::fs::create_dir_all(out_dir)
-        .with_context(|| format!("failed to create {}", out_dir.display()))?;
-
-    let mut writers = Vec::with_capacity(rungs.len());
-    for &n in rungs {
-        let path = out_dir.join(format!("{n}.fa"));
-        let file =
-            File::create(&path).with_context(|| format!("failed to create {}", path.display()))?;
-        writers.push(BufWriter::new(file));
-    }
-
-    let mut counted = vec![(0u64, 0u64); rungs.len()];
-
-    let largest = rungs.last().copied().unwrap_or(0);
-    let drawn = seqs.sample(largest, seed);
-
-    // the rungs are ascending, so record i belongs to every rung past the first
-    // one big enough to hold it, and that boundary only ever moves forward
-    let mut first = 0usize;
-
-    // one record's bytes, written once and copied into every rung that holds
-    // it -- and its length is the bytes that rung grew by
-    let mut bytes: Vec<u8> = Vec::new();
-
-    // every draw is a seek into a collection of billions, so the top rung takes
-    // a while and says nothing while it does
-    let start = std::time::Instant::now();
-    const TICK: usize = 10_000;
-
-    for (i, rec) in drawn.iter().enumerate() {
-        while first < rungs.len() && rungs[first] <= i {
-            first += 1;
-        }
-
-        bytes.clear();
-        rec.write_to(&mut bytes, DEFAULT_LINE_WIDTH)?;
-        let residues = rec.seq.len() as u64;
-
-        for (w, c) in writers[first..].iter_mut().zip(counted[first..].iter_mut()) {
-            w.write_all(&bytes)?;
-            c.0 += residues;
-            c.1 += bytes.len() as u64;
-        }
-
-        let done = i + 1;
-        if done % TICK == 0 || done == largest {
-            let secs = start.elapsed().as_secs_f64();
-            let rate = done as f64 / secs;
-            let left = (largest - done) as f64 / rate;
-            eprint!("\r  drew {done}/{largest} ({rate:.0}/s, {left:.0}s left)    ");
-        }
-    }
-
-    eprintln!();
-
-    for mut w in writers {
-        w.flush()?;
-    }
-
-    Ok(counted)
-}
-
 // ------------------------------------------------------------------- shared
 
 /// One query source: what to call it, where it is, and how much of it to cut.
@@ -1750,38 +1512,5 @@ mod tests {
         assert_eq!(a, b);
 
         std::fs::remove_dir_all(&dir).ok();
-    }
-
-    /// Every rung a prefix of the next, which is what makes the grid a surface.
-    #[test]
-    fn ladder_rungs_are_nested() {
-        let dir = collection("ladder", 2, 60);
-        let agg = collection_at(&dir).unwrap();
-
-        let out = dir.join("ladder-out");
-        let rungs = [10usize, 30, 90];
-        let counted = deal_nested(&agg, &rungs, 67779, &out).unwrap();
-
-        let read = |n: usize| std::fs::read(out.join(format!("{n}.fa"))).unwrap();
-        let (small, mid, big) = (read(10), read(30), read(90));
-
-        assert_eq!(&big[..small.len()], &small[..], "10 is not a prefix of 90");
-        assert_eq!(&big[..mid.len()], &mid[..], "30 is not a prefix of 90");
-
-        // and the counts describe what actually landed
-        for (&rung, (_, bytes)) in rungs.iter().zip(&counted) {
-            assert_eq!(*bytes, read(rung).len() as u64, "rung {rung}: wrong bytes");
-        }
-
-        std::fs::remove_dir_all(&dir).ok();
-    }
-
-    /// Rungs past what exists collapse onto it rather than being refused.
-    #[test]
-    fn rungs_are_sorted_deduped_and_capped() {
-        assert_eq!(rungs(&[100, 10, 100], 1000), vec![10, 100]);
-        assert_eq!(rungs(&[10, 5000], 1000), vec![10, 1000]);
-        assert_eq!(rungs(&[5000, 6000], 1000), vec![1000]);
-        assert_eq!(rungs(&[0, 10], 1000), vec![10]);
     }
 }

@@ -76,11 +76,11 @@ impl Rep {
 /// discovered one missing path at a time.
 ///
 /// The open half of `set.tbl` is what lets one manifest describe a deal of
-/// shards and a nest of rungs. The cost of that is that a set and the benchmark
-/// reading it can disagree without anything saying so: a ladder loads fine
-/// against a sweep expecting shards, and the sweep searches the product of both
-/// axes as if it were a list of targets. A shape is the declaration that closes
-/// that -- the builder stamps one, the benchmark names the one it wants, and
+/// shards and a grid of sources. The cost of that is that a set and the
+/// benchmark reading it can disagree without anything saying so: a `reversed`
+/// set loads fine where a `fixed` one is wanted, and every score is against a
+/// sequence written backwards. A shape is the declaration that closes that --
+/// the builder stamps one, the benchmark names the one it wants, and
 /// [`Set::check`] holds them to each other before a search starts.
 pub struct Shape {
     pub name: &'static str,
@@ -121,18 +121,6 @@ pub mod shape {
         attrs: &["shard", "seqs", "residues", "bytes"],
     };
 
-    /// Nested rungs on both axes, each a prefix of the one above.
-    pub const LADDER: Shape = Shape {
-        name: "ladder",
-        needs: &[Rep::QueryHmm, Rep::QuerySto, Rep::QueryDb, Rep::Target],
-        attrs: &[
-            "query_rung",
-            "target_rung",
-            "query_residues",
-            "target_residues",
-        ],
-    };
-
     /// One query against one target, paired rather than crossed.
     pub const PAIRS: Shape = Shape {
         name: "pairs",
@@ -144,8 +132,7 @@ pub mod shape {
     ///
     /// The one shape where both sides are lists of independent sources rather
     /// than cuts of one. [`FIXED`] grids a query over a partition of a single
-    /// target source and [`LADDER`] grids nested subsets of one source per
-    /// axis, so in both the units are pieces of the same thing; here a unit is
+    /// target source, so there a unit is a piece of the same thing; here a unit is
     /// one whole source against another, and what moves between units is which
     /// sources they are. [`PAIRS`] is the diagonal of a cross that was never
     /// built.
@@ -320,7 +307,7 @@ impl Set {
     /// the recipe called the set says less than what the unit carries: a
     /// `fixed` shard and a `profmark` split are the same search to a pipeline
     /// that wants a query and a target. A reader that needs more than that --
-    /// an attribute, a particular number of units, a `ladder`'s two axes --
+    /// an attribute, a particular number of units --
     /// names the shape instead, because then the recipe is what it depends on.
     pub fn load_needing(dir: impl AsRef<Path>, needs: &[Rep]) -> anyhow::Result<Set> {
         let set = Set::load(dir)?;
@@ -730,33 +717,6 @@ mod tests {
         let err = set.check(&shape::FIXED).unwrap_err().to_string();
         assert!(err.contains("residues"), "{err}");
         assert!(err.contains("\"1\""), "{err}");
-    }
-
-    /// The failure this whole idea exists for: a ladder loads against a sweep
-    /// expecting shards, and without the check the sweep searches the product
-    /// of both axes as if it were a list of targets.
-    #[test]
-    fn a_ladder_is_refused_where_a_fixed_set_is_wanted() {
-        let ladder = Set::new(
-            "/tmp/x",
-            vec![
-                Row::new("q10.t1000", "targets/1000.fa")
-                    .query_hmm("queries/10/query.hmm")
-                    .query_sto("queries/10/query.sto")
-                    .query_db("queries/10/queryDB/queryDB")
-                    .attr("query_rung", 10)
-                    .attr("target_rung", 1000)
-                    .attr("query_residues", 1175u64)
-                    .attr("target_residues", 41677u64),
-            ],
-        )
-        .says("shape", "ladder");
-
-        assert!(ladder.check(&shape::LADDER).is_ok());
-
-        let err = ladder.check(&shape::FIXED).unwrap_err().to_string();
-        assert!(err.contains("ladder"), "{err}");
-        assert!(err.contains("fixed"), "{err}");
     }
 
     /// A set built before shapes existed says nothing about itself, so the

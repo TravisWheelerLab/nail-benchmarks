@@ -60,8 +60,7 @@ pub fn subset_hmm(
 /// `dst_dir/<name>/query.hmm`, returning how many were written.
 ///
 /// One directory per family holding a `query.hmm` and a `query.sto`, which is
-/// the shape a ladder rung's query directory has, and what the tools that take
-/// one family at a time read.
+/// what the tools that take one family at a time read.
 pub fn scatter_hmm(
     src: impl AsRef<Path>,
     names: &HashSet<String>,
