@@ -15,7 +15,7 @@
   "lease_expires": null,
   "defer_until": null,
   "created_at": "2026-09-28T19:02:29.934675012Z",
-  "updated_at": "2026-10-06T18:36:03.550683854Z",
+  "updated_at": "2026-10-06T18:54:22.827549303Z",
   "closed_at": null,
   "close_reason": null,
   "resolution": null,
@@ -45,6 +45,13 @@
       "at": "2026-10-06T18:36:03.550682966Z",
       "author": "jackroddy/21204bf1",
       "text": "Side experiment (tmp-claude/2026-10-06-mmseqs-only-judge/): top 10 mmseqs-only recruits per family by E over the 100 shards, 143,145 pairs, 142,819 originals pulled from the reversed shards; all of Pfam against them with hmmsearch at -Z 2455940, 24 parts at --cpu 2, 222 s wall. Joined to the recruiting family, 568 pairs (0.4%) are rejects at E<=1e-3, flat across ranks 1-10; only 748 are hit at E<=10 at all. 18,526 of 18,670 families keep all of their top-5 mmseqs-only recruits as decoys. So they are decoys, not reversed homologs, and they would stand in mmseqs' null: dropping mmseqs from recruit moves mmseqs' cutoff in most families.",
+      "commit": "5b03f2d",
+      "branch": "claude-refactor"
+    },
+    {
+      "at": "2026-10-06T18:54:22.82754793Z",
+      "author": "jackroddy/21204bf1",
+      "text": "Shard 1 rescored the way reject does (tmp-claude/2026-10-06-mmseqs-rescore/): the reversals of all 112,038 recruits pooled, Pfam profile db against them with mmseqs -s 12 --max-seqs 1e9 -e 10 -k 6, 237 s at 48 threads. mmseqs scores 24% of the 102,661 nail-only recruits, 99% of both and of mmseqs-only. In the rescored per-family lists an mmseqs-only recruit is in mmseqs' top 5 for 3,635 of the 3,648 families that have one, rank 1 in 3,122, and holds half the top-5 slots. So the story holds after rescoring: nail's recruits do not displace them from mmseqs' null.",
       "commit": "5b03f2d",
       "branch": "claude-refactor"
     }
