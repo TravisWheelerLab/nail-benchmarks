@@ -1,15 +1,16 @@
 # Where cutoffs reads and writes. Paths only, relative to this file.
 #
-# It reads one set and everything it makes goes under that set's outputs. The
-# decoys are an intermediate -- stage 2 writes them, stage 3 reads them -- not
-# a set of their own: a set is what build-set produces from sources under a
-# recipe, and these come out of whatever recruit happened to score.
+# It reads one set and everything it makes goes under that set's outputs, one
+# directory per stage. The recruits and the decoys are intermediates, not a set
+# of their own: a set is what build-set produces from sources under a recipe,
+# and these come out of whatever recruit happened to score.
 
 [toy]
 set      = "../../sets-toy/cutoffs/inputs"
 recruit  = "../../sets-toy/cutoffs/outputs/recruit"
 gather   = "../../sets-toy/cutoffs/outputs/gather"
 reject   = "../../sets-toy/cutoffs/outputs/reject"
+fill     = "../../sets-toy/cutoffs/outputs/fill"
 analysis = "../../sets-toy/cutoffs/analysis"
 tmp      = "../../sets-toy/cutoffs/tmp"
 
@@ -18,6 +19,7 @@ set      = "../../sets/cutoffs/inputs"
 recruit  = "../../sets/cutoffs/outputs/recruit"
 gather   = "../../sets/cutoffs/outputs/gather"
 reject   = "../../sets/cutoffs/outputs/reject"
+fill     = "../../sets/cutoffs/outputs/fill"
 analysis = "../../sets/cutoffs/analysis"
 tmp      = "../../sets/cutoffs/tmp"
 
@@ -26,6 +28,7 @@ set      = "../../sets/cutoffs-sp-10k/inputs"
 recruit  = "../../sets/cutoffs-sp-10k/outputs/recruit"
 gather   = "../../sets/cutoffs-sp-10k/outputs/gather"
 reject   = "../../sets/cutoffs-sp-10k/outputs/reject"
+fill     = "../../sets/cutoffs-sp-10k/outputs/fill"
 analysis = "../../sets/cutoffs-sp-10k/analysis"
 tmp      = "../../sets/cutoffs-sp-10k/tmp"
 
@@ -34,6 +37,7 @@ set      = "../../sets/cutoffs-sp-100k/inputs"
 recruit  = "../../sets/cutoffs-sp-100k/outputs/recruit"
 gather   = "../../sets/cutoffs-sp-100k/outputs/gather"
 reject   = "../../sets/cutoffs-sp-100k/outputs/reject"
+fill     = "../../sets/cutoffs-sp-100k/outputs/fill"
 analysis = "../../sets/cutoffs-sp-100k/analysis"
 tmp      = "../../sets/cutoffs-sp-100k/tmp"
 
@@ -42,6 +46,7 @@ set      = "../../sets/cutoffs-sp-250k/inputs"
 recruit  = "../../sets/cutoffs-sp-250k/outputs/recruit"
 gather   = "../../sets/cutoffs-sp-250k/outputs/gather"
 reject   = "../../sets/cutoffs-sp-250k/outputs/reject"
+fill     = "../../sets/cutoffs-sp-250k/outputs/fill"
 analysis = "../../sets/cutoffs-sp-250k/analysis"
 tmp      = "../../sets/cutoffs-sp-250k/tmp"
 
@@ -50,5 +55,6 @@ set      = "../../sets/cutoffs-sp-all/inputs"
 recruit  = "../../sets/cutoffs-sp-all/outputs/recruit"
 gather   = "../../sets/cutoffs-sp-all/outputs/gather"
 reject   = "../../sets/cutoffs-sp-all/outputs/reject"
+fill     = "../../sets/cutoffs-sp-all/outputs/fill"
 analysis = "../../sets/cutoffs-sp-all/analysis"
 tmp      = "../../sets/cutoffs-sp-all/tmp"

@@ -259,7 +259,7 @@ figures/                         the pdfs, outside the set
 
 A benchmark that runs in one pass writes straight into `outputs/`. cutoffs
 names a directory under it per stage, `recruit/`, `gather/`, `reject/`,
-because each of those is a pipeline of its own with its own manifest and its
+`fill/`, because each of those is a pipeline of its own with its own manifest and its
 own results; pid names `search/` and `reject/`. So the level, where it exists,
 is a stage rather than a repeat of the benchmark's name.
 
@@ -640,20 +640,27 @@ hides the one thing the method turns on.
 
 `recruit` searches every family against the initial reversals, cheaply, and
 finds the small subset that scores at all. `gather` pulls those out of the
-shards in both forms. `reject` searches each family against its recruits with
-the prefilter effectively off, so a score is a real score, and runs one
-hmmsearch of the family against the recruits' originals, which is the judge
-that splits them into decoys and rejects. `learn` turns the decoy scores into
-the per-family cutoffs every hit is afterwards held against.
+shards in both forms. `reject` runs one hmmsearch of each family against its
+recruits' originals, the judge that splits them into decoys and rejects, and
+writes the rejected pairs to `rejects.tbl`. `fill` searches every tool
+against the decoys with the prefilter effectively off and `-E 1e9`, so each
+tool has a score for every decoy and not only for the ones it recruited.
+`learn` turns those scores into the per-family cutoffs every hit is
+afterwards held against.
 
 hmmsearch is the one judge for every tool, as it is in pid. A recruit whose
 original the family's profile hits at E ≤ 1e-3 is a reject for nail and
-mmseqs as well as for hmmer, so `learn` draws the three nulls from one set
-of decoys, and they differ only in what each tool scored them. The judge runs at `-Z`
-equal to the sequence count of one shard, read from `set.tbl`, so a reject
-means what it would in the search a cutoff is applied to rather than in the
-small file of one family's recruits, and `fanout` and `union` reject the
-same pairs.
+mmseqs as well as for hmmer, so `fill` searches one set of decoys for all
+three and the nulls differ only in what each tool scored them. The judge
+runs at `-Z` equal to the sequence count of one shard, read from `set.tbl`,
+so a reject means what it would in the search a cutoff is applied to rather
+than in the small file of one family's recruits, and `fanout` and `union`
+reject the same pairs.
+
+`fill` rescores nothing. A tool's score for a pair does not move with these
+settings; what the pass adds is the pairs a tool never reached in `recruit`. The threshold is an E-value rather than a `-Z` because it is one
+mechanism the three tools share, and because its only job is to keep a weak
+decoy from being left off the table.
 
 The set arrives reversed, built by a `fixed` recipe under a `reversed` tag, so
 no stage here reverses anything and no second copy of the shards is made. A
@@ -685,8 +692,9 @@ at all.
 
 Searching all of Pfam against the union of every family's recruits in one
 invocation is fine, and it is how the fanout is avoided. What is not fine is
-letting the union widen any family's null. `learn` joins each hit back to the
-family that recruited the sequence, and keeps only those.
+letting the union widen any family's null. `reject` joins each of the judge's
+hits back to the family that recruited the sequence, and `learn` keeps a score
+only for the family that was filled against the sequence.
 
 **The restriction costs nothing, and it comes with its own test.** Widening the
 pool cannot change a family's null: the null is the scores of sequences the
@@ -708,18 +716,21 @@ an argument for pooling.
 
 ### `--strategy fanout|union`
 
-Two ways for `reject` to score the recruits. `fanout` is one search per
-family per tool over its reversals, and one judge per family. `union` is one
-invocation per tool, all of Pfam against every recruit's reversal, and one
-judge over every recruit's original, with `learn` joining each hit back to
-the family that recruited the sequence. The per-pair rule above is what
-`union` must not break.
+Two ways for `reject` and `fill` to run. `fanout` is one search per family:
+its judge over its own originals, then each tool over its own decoys. `union`
+is one search per tool, all of Pfam against every original and then against
+every decoy, with `reject` keeping a hit only for the family that recruited
+the sequence and `learn` keeping a score only for the family that was filled
+against it. The per-pair rule above is what `union` must not break.
+
+Which is faster cannot be read off the toy: the question is per-process
+overhead against wasted cross-family alignments, and a tiny set skews it the
+wrong way.
 
 Which is faster is unmeasured on MGnify, and nail's and mmseqs' runtimes do
 not scale linearly in target size, so do not pick between the arms from an
-extrapolation or from the SwissProt result: measure both on the same input.
-`auto` needs a fitted model before it means anything, and stays unimplemented
-until then.
+extrapolation: measure both on the same input. `auto` needs a fitted model
+before it means anything, and stays unimplemented until then.
 
 ## benchmarks/pid
 

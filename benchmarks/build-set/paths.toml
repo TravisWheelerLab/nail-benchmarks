@@ -228,8 +228,8 @@ alignments = "../../data/pfam.sto"
 targets    = "../../data/mgnify"
 out        = "../../sets-toy/cutoffs/inputs"
 shards     = 2
-seqs       = 400
-fams       = 5
+seqs       = 100000
+fams       = 1000
 reversed   = true
 
 [cutoffs-real]
