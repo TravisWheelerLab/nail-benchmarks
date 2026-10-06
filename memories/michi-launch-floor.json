@@ -1,0 +1,10 @@
+{
+  "slug": "michi-launch-floor",
+  "text": "michi 0.2.0 launches a command in 0.73 ms serially, as cheap as a bare fork+exec, but the rate does not rise with batch width: 1.3 ms per launch at 48 wide over 2,000 /bin/true, 2.25 ms at 20,000; xargs -P 48 gets 0.42. pre_exec for affinity forces fork() over posix_spawn, and fork copies the parent's page tables under the mm lock, so launches serialise and cost scales with parent RSS: cutoffs fill at 2.6 GB ran 11 a second. Driver in tmp-claude/2026-10-06-launch-overhead/.",
+  "created_at": "2026-10-06T20:45:45.898013928Z",
+  "updated_at": "2026-10-06T20:45:45.898013928Z",
+  "stamp": {
+    "commit": "66e9c72",
+    "branch": "claude-refactor"
+  }
+}
