@@ -15,7 +15,7 @@
   "lease_expires": "2026-10-06T17:43:37.16654336Z",
   "defer_until": null,
   "created_at": "2026-09-28T19:02:29.934675012Z",
-  "updated_at": "2026-10-06T17:28:37.16654336Z",
+  "updated_at": "2026-10-06T17:34:06.850179803Z",
   "closed_at": null,
   "close_reason": null,
   "resolution": null,
@@ -25,6 +25,13 @@
       "author": "jackroddy/01dd6c44",
       "text": "Counted over the 100 MGnify shards on disk, 245 million reversed sequences: nail recruited 10,579,765 (family, sequence) pairs, 94.75% of the union; mmseqs 957,796, 8.58%; both 371,975; mmseqs only 585,821, 5.25%; nail only 10,207,790. Per shard nail takes 140 s and mmseqs 177 s, steady across all 100. So mmseqs is 56% of the stage for 5.25% of the pairs, about 21x nail's cost per recruit nail would not have found. Dropping it takes the stage from 323 s to 141 s a shard, and the 1000 shards from 90 hours to 39. Both run at -s 11.0, --max-seqs 5000, E-value 10, and -k 6 for mmseqs. Not yet counted: whether the 585,821 are spread thinly or concentrated.",
       "commit": "e080da4",
+      "branch": "claude-refactor"
+    },
+    {
+      "at": "2026-10-06T17:34:06.850178526Z",
+      "author": "jackroddy/21204bf1",
+      "text": "Ranked the 585,821 mmseqs-only pairs within each family's pooled mmseqs list over the 100 shards (script in tmp-claude/2026-10-06-mmseqs-only-rank/). They are 61% of mmseqs' own recruits and spread through the ranking rather than at the bottom: 18,670 of 19,615 families have one, 10,228 families have one at rank 1, 16,594 in the top 5, 2,895 families recruit only through mmseqs. Rank by E and by bits agree exactly. In absolute terms mmseqs' lists are weak: 92% of mmseqs-only pairs have E in (1,10], only 94 families have an mmseqs-only hit at E <= 1e-3; bits p50 31 for only and shared alike. Whether a weak mmseqs recruit becomes a high nail score at s12 with the prefilter off is unmeasured and is what decides it.",
+      "commit": "47b1a3c",
       "branch": "claude-refactor"
     }
   ],
