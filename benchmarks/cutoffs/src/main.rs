@@ -118,6 +118,21 @@ const FILL_S: &str = "12.0";
 const FILL_MAX_SEQS: usize = 1_000_000_000;
 const FILL_E: &str = "1e9";
 
+// static rather than the shared prog mode: prog grows a query's seed list in
+// rounds and stops it by the hit rate of the last round, so on a target of
+// two sequences and on a pool of two thousand it reaches different pairs.
+// static aligns the whole prefilter list, which on these targets is every
+// decoy, and that is what the fill is for
+const FILL_SEED_MODE: &str = "static";
+
+// nail hands its mmseqs align step `-e S * Z`, with Z the target count, and
+// mmseqs scales its E-value by residues rather than by sequences, so the
+// effective filter moves with the mean length of the target file: a family's
+// few decoys under fanout and the whole pool under union get different ones.
+// a P-value no hit exceeds turns the step off, the way FILL_E does for the
+// reporting threshold
+const FILL_SEED_P: &str = "1e9";
+
 /// The E-value at which the judge's hit on a recruit's original makes it a
 /// reject.
 const REJECT_E: f64 = 1e-3;
@@ -1395,7 +1410,8 @@ fn fill(args: FillArgs, paths: &Paths) -> anyhow::Result<()> {
                                 .arg("-t", 1)
                                 .arg("--tmp-dir", scratch(family).join("nail"))
                                 .arg("--mmseqs-s", FILL_S)
-                                .arg("--seed-mode", util::search::SEED_MODE)
+                                .arg("--seed-mode", FILL_SEED_MODE)
+                                .arg("-S", FILL_SEED_P)
                                 .arg("--mmseqs-max-seqs", FILL_MAX_SEQS)
                                 .arg("-E", FILL_E)
                                 .flag("--allow-overwrite")
@@ -1554,7 +1570,8 @@ fn fill(args: FillArgs, paths: &Paths) -> anyhow::Result<()> {
                         .arg("-t", threads)
                         .arg("--tmp-dir", scratch.join("nail"))
                         .arg("--mmseqs-s", FILL_S)
-                        .arg("--seed-mode", util::search::SEED_MODE)
+                        .arg("--seed-mode", FILL_SEED_MODE)
+                        .arg("-S", FILL_SEED_P)
                         .arg("--mmseqs-max-seqs", FILL_MAX_SEQS)
                         .arg("-E", FILL_E)
                         .flag("--allow-overwrite")
@@ -1683,10 +1700,14 @@ where
 
     let mut out = HashMap::new();
     for (family, mut hits) in by_family {
+        // ties broken on score and then name, so the row does not depend on
+        // which of two equal hits a hash map yielded first
         hits.sort_by(|a, b| {
             a.e_value
                 .partial_cmp(&b.e_value)
                 .expect("NaN in decoy e-values")
+                .then(b.score.partial_cmp(&a.score).expect("NaN in decoy scores"))
+                .then_with(|| a.target.cmp(&b.target))
         });
         let scores: Vec<f32> = hits
             .iter()
