@@ -3,7 +3,7 @@
   "title": "cutoffs per-decoy table, one row per recruit",
   "body": "A row per decoy rather than per pair: 42,195 distinct recruits against 11,224 families at sp-all, so about 42k rows and cheap. What goes in a row (which family recruited it, at what score, whether it was rejected) waits until the MGnify cutoff scale can be seen beside SwissProt's.",
   "type": "feature",
-  "status": "open",
+  "status": "closed",
   "priority": 3,
   "labels": [],
   "parent": null,
@@ -15,16 +15,19 @@
   "lease_expires": null,
   "defer_until": null,
   "created_at": "2026-09-28T19:02:30.065361291Z",
-  "updated_at": "2026-09-28T19:02:30.065361291Z",
-  "closed_at": null,
-  "close_reason": null,
-  "resolution": null,
+  "updated_at": "2026-10-06T22:13:00.599061572Z",
+  "closed_at": "2026-10-06T22:13:00.599061572Z",
+  "close_reason": "superseded 6 Oct: reject writes rejects.tbl (family, target, evalue, score) and fill writes decoys.tbl (family, target), one row per recruit between them; the recruit score is in recruit's own tables",
+  "resolution": "done",
   "notes": [],
   "stamps": {
     "created": {
       "commit": "e080da4",
       "branch": "claude-refactor"
     },
-    "closed": null
+    "closed": {
+      "commit": "fde5a6b",
+      "branch": "claude-refactor"
+    }
   }
 }
