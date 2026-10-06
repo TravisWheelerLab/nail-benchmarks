@@ -181,9 +181,9 @@ struct Layout {
     //
     // a cutoff learned here is applied to a search of one shard this size,
     // so a reject has to mean what it would mean there rather than in the
-    // small file of one family's recruits. every shard of a fixed deal holds
-    // the same count, and `new` refuses a set where they differ rather than
-    // averaging them
+    // small file of one family's recruits. a deal's shards differ by one
+    // sequence when the count does not divide, so this is the larger, and
+    // `new` refuses a set whose shards differ by more
     seqs: u64,
 }
 
@@ -200,15 +200,17 @@ impl Layout {
             .map(|u| Ok((u.name().to_string(), u.target()?)))
             .collect::<anyhow::Result<Vec<_>>>()?;
 
-        let seqs = first.number("seqs")?;
+        let (mut seqs, mut least) = (0u64, u64::MAX);
         for unit in set.units() {
             let n = unit.number("seqs")?;
-            if n != seqs {
-                bail!(
-                    "the set at {} has shards of different sizes ({seqs} and {n} sequences), so there is no one -Z for the judge",
-                    paths.set.display()
-                );
-            }
+            seqs = seqs.max(n);
+            least = least.min(n);
+        }
+        if seqs - least > 1 {
+            bail!(
+                "the set at {} has shards of different sizes ({least} and {seqs} sequences), so there is no one -Z for the judge",
+                paths.set.display()
+            );
         }
 
         Ok(Layout {
