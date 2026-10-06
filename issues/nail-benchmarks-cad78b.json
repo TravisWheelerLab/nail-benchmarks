@@ -15,7 +15,7 @@
   "lease_expires": null,
   "defer_until": null,
   "created_at": "2026-09-28T19:02:29.934675012Z",
-  "updated_at": "2026-10-06T19:00:43.474257444Z",
+  "updated_at": "2026-10-06T19:02:05.431488732Z",
   "closed_at": null,
   "close_reason": null,
   "resolution": null,
@@ -59,6 +59,13 @@
       "at": "2026-10-06T19:00:43.474256304Z",
       "author": "jackroddy/21204bf1",
       "text": "One-shard estimate of what dropping mmseqs from recruit does to mmseqs' cutoffs: against the committed data/mgy-cutoffs.tbl, whose null is ~10,600 decoys deep per family with mmseqs_5 at 34-42 bits, shard 1's recruits rescored by mmseqs put 358 decoys at or above mmseqs_5, 165 of them mmseqs-only (46%) and 193 nail-recruited. The tail decays 3.7x per bit, so keeping 54% of it lowers the top five by about 0.5 bits. Per-shard rank-1 counts were an artifact of a one-shard null. Not yet measured: the same for nail's cutoffs, which needs nail at reject settings over the pooled recruits.",
+      "commit": "5b03f2d",
+      "branch": "claude-refactor"
+    },
+    {
+      "at": "2026-10-06T19:02:05.431487719Z",
+      "author": "jackroddy/21204bf1",
+      "text": "Jack's verdict on the one-shard estimate: pointless. Which decoys built the committed mmseqs scores cannot be proven from recruits on one shard, only by the full run. What stands from shard 1: mmseqs-only recruits are about half of the recruits mmseqs scores at or above the committed mmseqs_5, and 0.4% of the top-10 mmseqs-only recruits over 100 shards are hmmer rejects. Open decision: recruit the 1000 shards with nail alone (39 h) or both (90 h).",
       "commit": "5b03f2d",
       "branch": "claude-refactor"
     }
