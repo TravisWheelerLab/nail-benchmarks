@@ -3,7 +3,7 @@
   "title": "why mmseqs gives nail no seed for 88 single-domain decoys that hmmer scores up to 34 bits",
   "body": "All 88 single-domain decoys in reports/pid-2026-09-24/singles.tbl that nail missed outright had no seed from mmseqs. decoys.tbl records how nail reached each of the top 500: search 100, one-by-one at search settings 255, one-by-one with every filter open 7, synthetic seed 88, never 50. For mmseqs: search 124, one-by-one 251, never 125.",
   "type": "spike",
-  "status": "open",
+  "status": "closed",
   "priority": 2,
   "labels": [],
   "parent": null,
@@ -13,16 +13,19 @@
   "lease_expires": null,
   "defer_until": null,
   "created_at": "2026-09-28T19:02:29.715803222Z",
-  "updated_at": "2026-09-28T19:02:29.715803222Z",
-  "closed_at": null,
-  "close_reason": null,
-  "resolution": null,
+  "updated_at": "2026-10-06T23:21:55.764160877Z",
+  "closed_at": "2026-10-06T23:21:55.764160877Z",
+  "close_reason": "Jack: a question never asked and not wanted",
+  "resolution": "dropped",
   "notes": [],
   "stamps": {
     "created": {
       "commit": "e080da4",
       "branch": "claude-refactor"
     },
-    "closed": null
+    "closed": {
+      "commit": "54360ed",
+      "branch": "claude-refactor"
+    }
   }
 }
