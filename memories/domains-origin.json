@@ -1,10 +1,10 @@
 {
   "slug": "domains-origin",
-  "text": "util::domains ports classify_direct, the classifier behind the May 2026 MGnify multi-domain analysis in ~/00-nail-benchmarks/05-19-multi-domain-hmmer/. A differential test ran classify against the original on 5 million generated cases; it is in tmp-claude/domcheck/ while it lasts. data/mgy-cutoffs.tbl has no hmmer column, and the cutoffs.txt that analysis read is gone.",
+  "text": "util::domains ports classify_direct, the classifier behind the May 2026 MGnify multi-domain analysis in ~/00-nail-benchmarks/05-19-multi-domain-hmmer/. A differential test ran classify against the original on 5 million generated cases and agreed; it was scratch under tmp-claude and was removed on 6 Oct 2026. data/mgy-cutoffs.tbl has no hmmer column, and the cutoffs.txt that analysis read is gone.",
   "created_at": "2026-09-28T19:04:03.252177557Z",
-  "updated_at": "2026-09-28T19:04:03.252177557Z",
+  "updated_at": "2026-10-06T22:18:32.431806368Z",
   "stamp": {
-    "commit": "e080da4",
+    "commit": "fde5a6b",
     "branch": "claude-refactor"
   }
 }
