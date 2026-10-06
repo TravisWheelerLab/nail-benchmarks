@@ -15,7 +15,7 @@
   "lease_expires": null,
   "defer_until": null,
   "created_at": "2026-09-28T19:02:29.649550227Z",
-  "updated_at": "2026-10-06T20:12:39.041537656Z",
+  "updated_at": "2026-10-06T22:09:50.247801432Z",
   "closed_at": null,
   "close_reason": null,
   "resolution": null,
@@ -31,6 +31,13 @@
       "at": "2026-10-06T20:12:39.04153601Z",
       "author": "jackroddy/21204bf1",
       "text": "Pipeline is now recruit, gather, reject (judge only, rejects.tbl), fill (three tools over the decoys, -E 1e9, nail static with -S 1e9), learn; commits 03a13b3 and 66e9c72. Cost note for the real run: with -S open nail aligns the whole prefilter list, so under union it aligns every family against every decoy in the pool, which is what Jack called wasted cross-family alignments; under fanout each family aligns only its own recruits, 1.13e8 pairs in all. On the toy union's nail went from 10 s to 63 s when -S opened. fill under fanout is the likely shape for MGnify, to be measured (7c8146).",
+      "commit": "66e9c72",
+      "branch": "claude-refactor"
+    },
+    {
+      "at": "2026-10-06T22:09:50.24780064Z",
+      "author": "jackroddy/21204bf1",
+      "text": "On the 100 shards (sandbox, 6 Oct): gather 50 s, judge 77 s, fill 24 min at -j 48, learn 1 s. The 1000-shard fill has ten times the decoys per family, so hours rather than days. Open before the real run: commit the fanout-only cutoffs (in the tree, uncommitted), and recruit restarts from scratch.",
       "commit": "66e9c72",
       "branch": "claude-refactor"
     }
