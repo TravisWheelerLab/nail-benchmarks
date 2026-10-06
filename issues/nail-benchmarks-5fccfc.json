@@ -3,26 +3,29 @@
   "title": "pid's parse.rs opens a result table three ways; make it one",
   "body": "Through its own reader, and twice more by calling a parser directly. Nothing is duplicated, and it is still three shapes to learn (REFACTOR.md, one way per file to do one thing).",
   "type": "chore",
-  "status": "in_progress",
+  "status": "closed",
   "priority": 3,
   "labels": [],
   "parent": "nail-benchmarks-a3dec2",
   "blocked_by": [],
   "related": [],
   "assignee": "jackroddy/0d39a02d",
-  "lease_expires": "2026-10-06T23:36:55.821511553Z",
+  "lease_expires": null,
   "defer_until": null,
   "created_at": "2026-09-28T19:02:30.37857716Z",
-  "updated_at": "2026-10-06T23:21:55.821511553Z",
-  "closed_at": null,
-  "close_reason": null,
-  "resolution": null,
+  "updated_at": "2026-10-06T23:28:48.174687444Z",
+  "closed_at": "2026-10-06T23:28:48.174687444Z",
+  "close_reason": "score and cells read through Run from the ledger; nail_rows for the cell fraction; proved by byte diff on the pid toy (score.tbl sorted, was hash order)",
+  "resolution": "done",
   "notes": [],
   "stamps": {
     "created": {
       "commit": "e080da4",
       "branch": "claude-refactor"
     },
-    "closed": null
+    "closed": {
+      "commit": "028a077",
+      "branch": "claude-refactor"
+    }
   }
 }
