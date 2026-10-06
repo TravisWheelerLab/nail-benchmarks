@@ -3,26 +3,29 @@
   "title": "drop feisty from workspace.dependencies",
   "body": "It sits in [workspace.dependencies] and no member uses it.",
   "type": "chore",
-  "status": "in_progress",
+  "status": "closed",
   "priority": 3,
   "labels": [],
   "parent": "nail-benchmarks-a3dec2",
   "blocked_by": [],
   "related": [],
   "assignee": "jackroddy/0d39a02d",
-  "lease_expires": "2026-10-06T23:23:37.080578357Z",
+  "lease_expires": null,
   "defer_until": null,
   "created_at": "2026-09-28T19:02:30.323416467Z",
-  "updated_at": "2026-10-06T23:08:37.080578357Z",
-  "closed_at": null,
-  "close_reason": null,
-  "resolution": null,
+  "updated_at": "2026-10-06T23:09:32.760295918Z",
+  "closed_at": "2026-10-06T23:09:32.760295918Z",
+  "close_reason": "removed; feisty stays in Cargo.lock as libsail's own dependency",
+  "resolution": "done",
   "notes": [],
   "stamps": {
     "created": {
       "commit": "e080da4",
       "branch": "claude-refactor"
     },
-    "closed": null
+    "closed": {
+      "commit": "c76de68",
+      "branch": "claude-refactor"
+    }
   }
 }
