@@ -1,10 +1,10 @@
 {
   "slug": "mmseqs-bare-accession",
-  "text": "mmseqs reports a bare accession where the fasta and nail report the piped name. cutoffs' recruit-map filter keys both spellings; before that, union mode silently dropped every mmseqs hit. union agrees with fanout byte for byte on the toy.",
+  "text": "mmseqs reports a bare accession where the fasta and nail report the piped name: a Swissprot record sp|Q7PKQ5|SQUT_ECO57 comes back as Q7PKQ5. MGnify names are one token, so the tools agree there. cutoffs no longer keys anything on a name across tools: each family is searched against its own files, so the file is the join.",
   "created_at": "2026-09-28T19:03:57.854689383Z",
-  "updated_at": "2026-09-28T19:03:57.854689383Z",
+  "updated_at": "2026-10-06T22:13:00.662655446Z",
   "stamp": {
-    "commit": "e080da4",
+    "commit": "fde5a6b",
     "branch": "claude-refactor"
   }
 }
