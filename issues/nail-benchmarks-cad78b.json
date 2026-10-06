@@ -15,7 +15,7 @@
   "lease_expires": null,
   "defer_until": null,
   "created_at": "2026-09-28T19:02:29.934675012Z",
-  "updated_at": "2026-10-06T18:23:17.840014305Z",
+  "updated_at": "2026-10-06T18:36:03.550683854Z",
   "closed_at": null,
   "close_reason": null,
   "resolution": null,
@@ -39,6 +39,13 @@
       "author": "jackroddy/21204bf1",
       "text": "Shard 1, nail at 48 threads with no --mmseqs-max-seqs (nail's default is 2^31-1), otherwise recruit's flags; tables under tmp-claude/2026-10-06-nail-no-maxseqs/. Capped s11 from the run: 139 s, 106,327 pairs, 3,666 shared with mmseqs' 9,377. Uncapped s11: 197 s, 111,564 pairs, a strict superset of the capped run, 3,675 shared. Uncapped s12: 329 s, 123,501 pairs, 3,731 shared, but 6,913 of s11's pairs missing. mmseqs-only stays 5,702 and 5,646 of 9,377: the cap is not why nail misses them.",
       "commit": "47b1a3c",
+      "branch": "claude-refactor"
+    },
+    {
+      "at": "2026-10-06T18:36:03.550682966Z",
+      "author": "jackroddy/21204bf1",
+      "text": "Side experiment (tmp-claude/2026-10-06-mmseqs-only-judge/): top 10 mmseqs-only recruits per family by E over the 100 shards, 143,145 pairs, 142,819 originals pulled from the reversed shards; all of Pfam against them with hmmsearch at -Z 2455940, 24 parts at --cpu 2, 222 s wall. Joined to the recruiting family, 568 pairs (0.4%) are rejects at E<=1e-3, flat across ranks 1-10; only 748 are hit at E<=10 at all. 18,526 of 18,670 families keep all of their top-5 mmseqs-only recruits as decoys. So they are decoys, not reversed homologs, and they would stand in mmseqs' null: dropping mmseqs from recruit moves mmseqs' cutoff in most families.",
+      "commit": "5b03f2d",
       "branch": "claude-refactor"
     }
   ],
