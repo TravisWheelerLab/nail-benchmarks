@@ -3,7 +3,7 @@
   "title": "finish the MGnify cutoffs run: gather, reject and learn have never run",
   "body": "The MGnify reversed set was drawn (501 G, 1000 shards, 2,455,940 sequences a shard, 62.5 minutes) and recruit ran over 100 of the 1000 shards before it was stopped deliberately. Those 200 tables are in sets/cutoffs/outputs/recruit/results/. gather, reject and learn have not run on MGnify at all. data/mgy-cutoffs.tbl is from an earlier harness.",
   "type": "task",
-  "status": "in_progress",
+  "status": "open",
   "priority": 2,
   "labels": [],
   "parent": null,
@@ -11,11 +11,11 @@
     "nail-benchmarks-a762cd"
   ],
   "related": [],
-  "assignee": "jackroddy/0d39a02d",
-  "lease_expires": "2026-10-06T22:49:11.975865853Z",
+  "assignee": null,
+  "lease_expires": null,
   "defer_until": null,
   "created_at": "2026-09-28T19:02:29.649550227Z",
-  "updated_at": "2026-10-06T22:38:55.112665648Z",
+  "updated_at": "2026-10-06T22:44:56.615010767Z",
   "closed_at": null,
   "close_reason": null,
   "resolution": null,
@@ -46,6 +46,13 @@
       "author": "jackroddy/0d39a02d",
       "text": "Recruit restarted 6 Oct 15:37 from the real tree, tmux session cutoffs-recruit, --threads 48 over all 1000 shards, log at tmp-claude/2026-10-06-cutoffs-real/recruit.log. First start failed: the deal leaves 8 of the 1000 shards at 2,455,939 sequences against 2,455,940, and Layout::new demanded equal shards for -Z. Loosened to a spread of one, taking the larger.",
       "commit": "fde5a6b",
+      "branch": "claude-refactor"
+    },
+    {
+      "at": "2026-10-06T22:44:56.615009555Z",
+      "author": "jackroddy/0d39a02d",
+      "text": "released at session end",
+      "commit": "d3f18ab",
       "branch": "claude-refactor"
     }
   ],
