@@ -3,20 +3,20 @@
   "title": "cutoffs reject: hmmer is the sole rejection judge",
   "body": "",
   "type": "feature",
-  "status": "in_progress",
+  "status": "closed",
   "priority": 1,
   "labels": [],
   "parent": null,
   "blocked_by": [],
   "related": [],
   "assignee": "jackroddy/21204bf1",
-  "lease_expires": "2026-10-06T17:43:44.102699148Z",
+  "lease_expires": null,
   "defer_until": null,
   "created_at": "2026-10-06T17:28:37.194963249Z",
-  "updated_at": "2026-10-06T18:20:15.02413877Z",
-  "closed_at": null,
-  "close_reason": null,
-  "resolution": null,
+  "updated_at": "2026-10-06T18:23:17.782762102Z",
+  "closed_at": "2026-10-06T18:23:17.782762102Z",
+  "close_reason": "committed: hmmsearch over the originals at the shard's -Z is the one judge; toy fanout and union agree byte for byte, sp-10k calibrates",
+  "resolution": "done",
   "notes": [
     {
       "at": "2026-10-06T18:20:15.024137875Z",
@@ -31,6 +31,9 @@
       "commit": "47b1a3c",
       "branch": "claude-refactor"
     },
-    "closed": null
+    "closed": {
+      "commit": "5b03f2d",
+      "branch": "claude-refactor"
+    }
   }
 }
