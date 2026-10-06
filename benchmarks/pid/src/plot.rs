@@ -17,11 +17,6 @@ use clap::Parser;
 use michi::{Cmd, PipelineBuilder, Progress, Step};
 
 /// A figure: which script draws it, and which of `parse`'s files it reads.
-///
-/// `plot_params` and `plot_threads` are not here. They read a points file and
-/// a directory of thread sweeps that nothing in this benchmark produces --
-/// there is no `--threads` axis in the run, and no producer for the points
-/// survived. Wiring them up would mean deciding what they should read.
 struct Figure {
     name: &'static str,
     script: &'static str,
