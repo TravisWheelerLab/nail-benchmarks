@@ -13,11 +13,19 @@
   "lease_expires": null,
   "defer_until": null,
   "created_at": "2026-09-28T19:02:30.205108596Z",
-  "updated_at": "2026-09-28T19:02:30.205108596Z",
+  "updated_at": "2026-10-06T22:18:21.233103236Z",
   "closed_at": null,
   "close_reason": null,
   "resolution": null,
-  "notes": [],
+  "notes": [
+    {
+      "at": "2026-10-06T22:18:21.233102556Z",
+      "author": "jackroddy/21204bf1",
+      "text": "The libsail sampling proposal that sat in tmp-claude was removed with the rest of the scratch on 6 Oct.",
+      "commit": "fde5a6b",
+      "branch": "claude-refactor"
+    }
+  ],
   "stamps": {
     "created": {
       "commit": "e080da4",
