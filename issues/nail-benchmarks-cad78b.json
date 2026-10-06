@@ -3,7 +3,7 @@
   "title": "does recruit need mmseqs at all: count whether the mmseqs-only pairs concentrate in families that would lose their null",
   "body": "Answer it on MGnify over the 1000 shards, not on Swissprot: a bucket measured against 570k curated proteins says little about 2.4 billion metagenomic fragments. The four cutoffs-sp-* sets still hold their recruit tables and can be counted in minutes as a check.",
   "type": "spike",
-  "status": "open",
+  "status": "closed",
   "priority": 2,
   "labels": [],
   "parent": null,
@@ -15,10 +15,10 @@
   "lease_expires": null,
   "defer_until": null,
   "created_at": "2026-09-28T19:02:29.934675012Z",
-  "updated_at": "2026-10-06T19:12:31.748611835Z",
-  "closed_at": null,
-  "close_reason": null,
-  "resolution": null,
+  "updated_at": "2026-10-06T19:17:38.27181565Z",
+  "closed_at": "2026-10-06T19:17:38.27181565Z",
+  "close_reason": "decided 6 Oct: nail and mmseqs both recruit, hmmsearch alone rejects. mmseqs-only recruits are decoys (0.4% rejected), about half of mmseqs' tail decoys on a shard, and nail loses most of them inside its own seeding's align step; the full run is the only way to see what they do to the committed cutoffs",
+  "resolution": "done",
   "notes": [
     {
       "at": "2026-09-28T19:02:29.961780583Z",
@@ -89,6 +89,9 @@
       "commit": "e080da4",
       "branch": "claude-refactor"
     },
-    "closed": null
+    "closed": {
+      "commit": "5b03f2d",
+      "branch": "claude-refactor"
+    }
   }
 }
