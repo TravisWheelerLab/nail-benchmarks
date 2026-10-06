@@ -38,18 +38,18 @@
 //!
 //! Both searching stages are `michi` pipelines, and they get there differently.
 //! `recruit` is one big search per shard, so a shard's short chain unrolls
-//! straight into steps. `search` is the opposite shape: many single-query
+//! straight into steps. `reject` is the opposite shape: many single-query
 //! searches, each a chain of its own, and every tool here parallelises over
 //! queries alone -- so a thread count above one buys nothing and the
 //! parallelism has to be many families at once.
 //!
 //! A `Step` holds `Cmd`s rather than `Step`s, so a batch of ordered chains is
-//! not something michi can be asked for. `search` transposes it: one step per
+//! not something michi can be asked for. `reject` transposes it: one step per
 //! link of the chain, each batched across every family. Every family's link
 //! still runs in order, since a step finishes before the next begins, and the
 //! cost is a barrier per link rather than one straggler overall.
 //!
-//! `decoys` and `learn` run no tools, so they stay a plain rayon pool.
+//! `gather` and `learn` run no tools, so they stay a plain rayon pool.
 
 use std::collections::{HashMap, HashSet};
 use std::io::Write;
@@ -93,9 +93,6 @@ pub enum Strategy {
     Union,
 }
 
-/// Name of the calibration when none is given.
-pub const DEFAULT_NAME: &str = "default";
-
 /// What `gather` lays out, relative to its own root. These spell both the paths
 /// the stages write and the cells the manifest carries.
 //
@@ -133,7 +130,7 @@ const JUDGE: &str = "judge";
 /// is never charged to the tool that reads it.
 //
 // createdb and convert are not here: those commands come from
-// `search`, which names its own stages
+// `util::search`, which names its own stages
 const DIRS: &str = "dirs";
 const PROFILE: &str = "profile";
 const CLEAN: &str = "clean";
@@ -268,8 +265,7 @@ impl Layout {
         self.gather.join(REVERSALS)
     }
 
-    /// One directory per family, each holding a `query.hmm` and a `query.sto`
-    /// -- the same shape as a ladder rung's query directory.
+    /// One directory per family, each holding a `query.hmm` and a `query.sto`.
     fn queries(&self) -> PathBuf {
         self.gather.join(QUERIES)
     }
@@ -451,8 +447,8 @@ struct Cli {
 /// Where this calibration reads and writes, as one label of `paths.toml` names
 /// them.
 ///
-/// It is the one tool here that both reads a set and builds one, so it names
-/// both: `set` is what it calibrates, `decoys` is what it makes out of that.
+/// `set` is what it calibrates; the rest is what it makes out of that, one
+/// directory per stage.
 #[derive(serde::Deserialize, Debug)]
 #[serde(deny_unknown_fields)]
 pub struct Paths {
@@ -602,11 +598,11 @@ fn recruit(args: RecruitArgs, paths: &Paths) -> anyhow::Result<()> {
                     .cmds();
 
                     [
-                        cmds.search,
-                        cmds.convert
+                        cmds.search
                             .field(manifest::NAME, MMSEQS)
                             .field(manifest::TOOL, MMSEQS)
                             .field(manifest::SHARD, idx.to_string()),
+                        cmds.convert.field(manifest::SHARD, idx.to_string()),
                     ]
                 })
                 .name(format!("mmseqs.{idx}")),
@@ -625,7 +621,9 @@ fn recruit(args: RecruitArgs, paths: &Paths) -> anyhow::Result<()> {
         return Ok(());
     }
 
-    Ok(pipeline.run()?)
+    ledger::clear(&stage.root);
+    pipeline.run()?;
+    ledger::record(&stage.root)
 }
 
 // ------------------------------------------------------------------ decoys
@@ -1554,7 +1552,7 @@ fn learn(args: LearnArgs, paths: &Paths) -> anyhow::Result<()> {
     let failed = searched.failed().count();
     if failed > 0 {
         bail!(
-            "{failed} searches in {} did not finish; re-run `mgy cutoffs search`",
+            "{failed} searches in {} did not finish; re-run `cutoffs reject`",
             stage.manifest().display()
         );
     }
