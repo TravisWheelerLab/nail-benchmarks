@@ -641,9 +641,19 @@ hides the one thing the method turns on.
 `recruit` searches every family against the initial reversals, cheaply, and
 finds the small subset that scores at all. `gather` pulls those out of the
 shards in both forms. `reject` searches each family against its recruits with
-the prefilter effectively off, so a score is a real score, and the two forms
-together split the recruits into decoys and rejects. `learn` turns the decoy
-scores into the per-family cutoffs every hit is afterwards held against.
+the prefilter effectively off, so a score is a real score, and runs one
+hmmsearch of the family against the recruits' originals, which is the judge
+that splits them into decoys and rejects. `learn` turns the decoy scores into
+the per-family cutoffs every hit is afterwards held against.
+
+hmmsearch is the one judge for every tool, as it is in pid. A recruit whose
+original the family's profile hits at E ≤ 1e-3 is a reject for nail and
+mmseqs as well as for hmmer, so `learn` draws the three nulls from one set
+of decoys, and they differ only in what each tool scored them. The judge runs at `-Z`
+equal to the sequence count of one shard, read from `set.tbl`, so a reject
+means what it would in the search a cutoff is applied to rather than in the
+small file of one family's recruits, and `fanout` and `union` reject the
+same pairs.
 
 The set arrives reversed, built by a `fixed` recipe under a `reversed` tag, so
 no stage here reverses anything and no second copy of the shards is made. A
@@ -699,10 +709,11 @@ an argument for pooling.
 ### `--strategy fanout|union`
 
 Two ways for `reject` to score the recruits. `fanout` is one search per
-family per form. `union` is two invocations, all of Pfam against every
-recruit's reversal and then against every recruit's original, with `learn`
-joining each hit back to the family that recruited the sequence. The per-pair
-rule above is what `union` must not break.
+family per tool over its reversals, and one judge per family. `union` is one
+invocation per tool, all of Pfam against every recruit's reversal, and one
+judge over every recruit's original, with `learn` joining each hit back to
+the family that recruited the sequence. The per-pair rule above is what
+`union` must not break.
 
 Which is faster is unmeasured on MGnify, and nail's and mmseqs' runtimes do
 not scale linearly in target size, so do not pick between the arms from an

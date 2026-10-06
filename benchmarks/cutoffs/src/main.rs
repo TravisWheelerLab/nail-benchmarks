@@ -15,10 +15,11 @@
 //!   1. `recruit` — a cheap sweep of every family against the initial
 //!      reversals, which finds the small subset that scores at all. What it
 //!      finds are *recruits*.
-//!   2. `reject` — an exhaustive pass, against a family's own recruits in both
-//!      forms. A recruit whose *original* does not match the family is a
-//!      *decoy*; one whose original does match is a *reject*, a reversed
-//!      homolog rather than a piece of noise.
+//!   2. `reject` — an exhaustive pass of every tool against a family's own
+//!      recruits, and one hmmsearch of the family against their *originals*,
+//!      which judges them for every tool. A recruit whose original does not
+//!      match the family is a *decoy*; one whose original does match is a
+//!      *reject*, a reversed homolog rather than a piece of noise.
 //!
 //! `reject` is the stage the cutoffs are read from. It runs at high sensitivity
 //! with the prefilter effectively disabled, so a decoy's score is its real
@@ -26,7 +27,9 @@
 //! originals is what separates the decoys from the rejects, and it matters
 //! more than it looks: a reversal keeps a surprisingly high score against its
 //! own original, so the recruits that look like the best decoys are exactly
-//! the ones that may not be decoys at all.
+//! the ones that may not be decoys at all. The judge searches at the `-Z` of
+//! one shard, so a reject means what it would in the search a cutoff is
+//! applied to rather than in the small file of one family's recruits.
 //!
 //! `gather` sits between them: it reads `recruit`'s hit tables and pulls the
 //! sequences that hit out of the shard they came from. A record read there is
@@ -122,8 +125,10 @@ const NAIL: &str = "nail";
 const MMSEQS: &str = "mmseqs";
 const HMMER: &str = "hmmer";
 
-/// Which form of a family's recruits a search covered. The originals keep the
-/// bare tool name; only the reversals need saying.
+/// The run that searches the originals: hmmsearch, judging every tool's
+/// recruits.
+const JUDGE: &str = "judge";
+
 /// What the manifest calls the commands around a search, so a database build
 /// is never charged to the tool that reads it.
 //
@@ -143,12 +148,9 @@ const FORM: &str = "form";
 const ORIGINAL: &str = "orig";
 const REVERSAL: &str = "rev";
 
-/// The run name for one tool searching one form.
-fn run_name(tool: &str, form: &str) -> String {
-    match form {
-        REVERSAL => format!("{tool}-{REVERSAL}"),
-        _ => tool.to_string(),
-    }
+/// The run a tool's search of the reversals files its table under.
+fn rev_run(tool: &str) -> String {
+    format!("{tool}-{REVERSAL}")
 }
 
 // ------------------------------------------------------------------ layout
@@ -191,6 +193,14 @@ struct Layout {
     query_sto: PathBuf,
     query_db: PathBuf,
     targets: Vec<(String, PathBuf)>,
+    /// The sequences in one shard, which is the `-Z` the judge searches at.
+    //
+    // a cutoff learned here is applied to a search of one shard this size,
+    // so a reject has to mean what it would mean there rather than in the
+    // small file of one family's recruits. every shard of a fixed deal holds
+    // the same count, and `new` refuses a set where they differ rather than
+    // averaging them
+    seqs: u64,
 }
 
 impl Layout {
@@ -206,6 +216,17 @@ impl Layout {
             .map(|u| Ok((u.name().to_string(), u.target()?)))
             .collect::<anyhow::Result<Vec<_>>>()?;
 
+        let seqs = first.number("seqs")?;
+        for unit in set.units() {
+            let n = unit.number("seqs")?;
+            if n != seqs {
+                bail!(
+                    "the set at {} has shards of different sizes ({seqs} and {n} sequences), so there is no one -Z for the judge",
+                    paths.set.display()
+                );
+            }
+        }
+
         Ok(Layout {
             gather: paths.gather.clone(),
             recruit: paths.recruit.clone(),
@@ -216,6 +237,7 @@ impl Layout {
             query_sto,
             query_db,
             targets,
+            seqs,
         })
     }
 
@@ -306,8 +328,8 @@ enum Cmd {
     Recruit(RecruitArgs),
     /// Lay out the recruits and their originals, and split the query set.
     Gather(GatherArgs),
-    /// Search each family against its recruits, both forms, which splits them
-    /// into decoys and rejects.
+    /// Search each family against its recruits, and hmmsearch against their
+    /// originals, which splits them into decoys and rejects.
     Reject(RejectArgs),
     /// Turn the decoy scores into per-family cutoffs.
     Learn(LearnArgs),
@@ -370,7 +392,7 @@ pub struct RejectArgs {
     pub jobs: Option<usize>,
 
     /// Threads per search, and the cores each search is pinned to. `union`
-    /// only, where there are two searches per tool rather than two per family
+    /// only, where there is one search per tool rather than one per family
     #[arg(short, long)]
     pub threads: Option<usize>,
 }
@@ -384,8 +406,8 @@ pub struct LearnArgs {
     #[arg(long, value_enum, default_value_t = Strategy::Fanout)]
     pub strategy: Strategy,
 
-    /// A recruit whose original hits at or below this E-value is a reject, and
-    /// its reversal is left out of the decoy scores
+    /// A recruit whose original hmmsearch hits at or below this E-value is a
+    /// reject for every tool, and its reversal is left out of the decoy scores
     #[arg(short = 'e', default_value_t = 1e-3, value_name = "F")]
     pub reverse_e_cutoff: f64,
 
@@ -914,20 +936,18 @@ fn reject_union(
     let hmmsearch_bin = hmmsearch()?;
 
     // one file per form, every recruit once
-    let mut targets = Vec::new();
+    let target = |form: &str| tmp.join(format!("recruits.{form}.fa"));
     for (form, from) in [
         (REVERSAL, layout.reversals()),
         (ORIGINAL, layout.originals()),
     ] {
-        let to = tmp.join(format!("recruits.{form}.fa"));
-        let n = union_fasta(&from, &to)?;
-        println!("{n} distinct recruits in {}", to.display());
-        targets.push((form, to));
+        let n = union_fasta(&from, &target(form))?;
+        println!("{n} distinct recruits in {}", target(form).display());
     }
 
     let query_hmm = layout.query_hmm();
     let query_db = layout.query_db();
-    let table = |tool: &str, form: &str| manifest::table_path(&results, &run_name(tool, form), ALL);
+    let table = |run: &str| manifest::table_path(&results, run, ALL);
 
     // hmmsearch does not scale past a couple of threads, so it gets the query
     // cut into parts and the parts run together at util::search::HMMER_CPU each,
@@ -944,101 +964,144 @@ fn reject_union(
         .pool(threads)
         .step(split.step("split", &[]));
 
-    for (form, target) in &targets {
-        let scratch = tmp.join(form);
-        let (name, tool, shard) = (run_name(NAIL, form), NAIL.to_string(), ALL.to_string());
+    // every tool against the reversals: the scores the cutoffs are learned from
+    let form = REVERSAL;
+    let reversals = target(form);
+    let scratch = tmp.join(form);
 
-        pl = pl
-            .step(
-                Step::serial([PCmd::new("mkdir")
-                    .name("dirs")
-                    .flag("-p")
-                    .path(scratch.join("targetDB"))
-                    .path(scratch.join("alnDB"))
-                    .path(scratch.join("hmmer"))])
-                .name(format!("dirs.{form}")),
-            )
-            .step(
-                Step::serial([PCmd::new(&nail_bin)
-                    .sub("search")
-                    .arg("--mmseqs-path", &mmseqs_bin)
-                    .arg("-t", threads)
-                    .arg("--tmp-dir", scratch.join("nail"))
-                    .arg("--mmseqs-s", DECOY_S)
-                    .arg("--seed-mode", util::search::SEED_MODE)
-                    .arg("--mmseqs-max-seqs", DECOY_MAX_SEQS)
-                    .arg("-E", util::search::EVALUE)
-                    .flag("--allow-overwrite")
-                    .arg("--tbl-out", table(NAIL, form))
-                    .path(&query_hmm)
-                    .path(target)
-                    .field(manifest::NAME, &name)
-                    .field(manifest::TOOL, &tool)
-                    .field(manifest::SHARD, &shard)
-                    .field(FORM, *form)])
-                .name(format!("nail.{form}"))
-                .cores(threads),
-            )
-            .step(
-                Step::serial([util::search::createdb(
-                    &mmseqs_bin,
-                    target,
-                    &scratch.join("targetDB/targetDB"),
-                    ALL,
-                    threads,
-                )])
-                .name(format!("createdb.{form}")),
-            );
-
-        let cmds = util::search::Mmseqs {
-            bin: &mmseqs_bin,
-            query_db: &query_db,
-            target_db: &scratch.join("targetDB/targetDB"),
-            aln_db: scratch.join("alnDB/alnDB"),
-            work: scratch.join("work"),
-            out: table(MMSEQS, form),
-            threads,
-            s: Some(DECOY_S.to_string()),
-            max_seqs: Some(DECOY_MAX_SEQS),
-            evalue: util::search::EVALUE,
-        }
-        .cmds();
-
-        pl = pl
-            .step(
-                Step::serial([cmds
-                    .search
-                    .field(manifest::NAME, run_name(MMSEQS, form))
-                    .field(manifest::TOOL, MMSEQS)
-                    .field(manifest::SHARD, ALL)
-                    .field(FORM, *form)])
-                .name(format!("mmseqs.{form}"))
-                .cores(threads),
-            )
-            .step(
-                Step::serial([cmds.convert.field(manifest::SHARD, ALL)])
-                    .name(format!("convert.{form}")),
-            );
-
-        // the one command in this stage built through `search` rather than by
-        // hand, because the batching is the whole point of it
-        let hmmer = util::search::hmmer(
-            &hmmsearch_bin,
-            &split,
-            &util::search::Dirs::new(&stage.root, &scratch),
-            &run_name(HMMER, form),
-            "hmmer",
-            ALL,
-            target,
-            util::search::EVALUE,
-            true,
-            &[(FORM, form.to_string())],
+    pl = pl
+        .step(
+            Step::serial([PCmd::new("mkdir")
+                .name("dirs")
+                .flag("-p")
+                .path(scratch.join("targetDB"))
+                .path(scratch.join("alnDB"))
+                .path(scratch.join("hmmer"))
+                .path(tmp.join(ORIGINAL).join("hmmer"))])
+            .name("dirs"),
+        )
+        .step(
+            Step::serial([PCmd::new(&nail_bin)
+                .sub("search")
+                .arg("--mmseqs-path", &mmseqs_bin)
+                .arg("-t", threads)
+                .arg("--tmp-dir", scratch.join("nail"))
+                .arg("--mmseqs-s", DECOY_S)
+                .arg("--seed-mode", util::search::SEED_MODE)
+                .arg("--mmseqs-max-seqs", DECOY_MAX_SEQS)
+                .arg("-E", util::search::EVALUE)
+                .flag("--allow-overwrite")
+                .arg("--tbl-out", table(&rev_run(NAIL)))
+                .path(&query_hmm)
+                .path(&reversals)
+                .field(manifest::NAME, rev_run(NAIL))
+                .field(manifest::TOOL, NAIL)
+                .field(manifest::SHARD, ALL)
+                .field(FORM, form)])
+            .name(format!("nail.{form}"))
+            .cores(threads),
+        )
+        .step(
+            Step::serial([util::search::createdb(
+                &mmseqs_bin,
+                &reversals,
+                &scratch.join("targetDB/targetDB"),
+                ALL,
+                threads,
+            )])
+            .name(format!("createdb.{form}")),
         );
 
-        pl = pl
-            .step(hmmer.search.name(format!("hmmer.{form}")))
-            .step(hmmer.cat.name(format!("cat.hmmer.{form}")));
+    let cmds = util::search::Mmseqs {
+        bin: &mmseqs_bin,
+        query_db: &query_db,
+        target_db: &scratch.join("targetDB/targetDB"),
+        aln_db: scratch.join("alnDB/alnDB"),
+        work: scratch.join("work"),
+        out: table(&rev_run(MMSEQS)),
+        threads,
+        s: Some(DECOY_S.to_string()),
+        max_seqs: Some(DECOY_MAX_SEQS),
+        evalue: util::search::EVALUE,
     }
+    .cmds();
+
+    pl = pl
+        .step(
+            Step::serial([cmds
+                .search
+                .field(manifest::NAME, rev_run(MMSEQS))
+                .field(manifest::TOOL, MMSEQS)
+                .field(manifest::SHARD, ALL)
+                .field(FORM, form)])
+            .name(format!("mmseqs.{form}"))
+            .cores(threads),
+        )
+        .step(
+            Step::serial([cmds.convert.field(manifest::SHARD, ALL)])
+                .name(format!("convert.{form}")),
+        );
+
+    let hmmer = util::search::hmmer(
+        &hmmsearch_bin,
+        &split,
+        &util::search::Dirs::new(&stage.root, &scratch),
+        &rev_run(HMMER),
+        HMMER,
+        ALL,
+        &reversals,
+        util::search::EVALUE,
+        true,
+        &[(FORM, form.to_string())],
+    );
+
+    pl = pl
+        .step(hmmer.search.name(format!("hmmer.{form}")))
+        .step(hmmer.cat.name(format!("cat.hmmer.{form}")));
+
+    // the judge: hmmsearch over the originals, the same parts batched the
+    // same way, built here because util::search::hmmer takes no -Z
+    let originals = target(ORIGINAL);
+    let judge_scratch = tmp.join(ORIGINAL).join("hmmer");
+    let fields = [(FORM, ORIGINAL.to_string())];
+    let parts = split.parts();
+
+    let search = parts.iter().enumerate().map(|(i, part)| {
+        util::search::tag(
+            PCmd::new(&hmmsearch_bin)
+                .name(i.to_string())
+                .arg("--cpu", util::search::HMMER_CPU)
+                .arg("-Z", layout.seqs)
+                .arg("--tblout", judge_scratch.join(format!("{i}.tbl")))
+                .arg("-E", util::search::EVALUE)
+                .path(part)
+                .path(&originals),
+            JUDGE,
+            HMMER,
+            &fields,
+        )
+        .field(manifest::SHARD, ALL)
+    });
+
+    let cat = (0..parts.len())
+        .fold(PCmd::new("cat").name("tbl"), |cmd, i| {
+            cmd.path(judge_scratch.join(format!("{i}.tbl")))
+        })
+        .stdout_to(table(JUDGE));
+
+    pl = pl
+        .step(
+            Step::batched(parts.len(), search)
+                .name(JUDGE)
+                // one pool the parts share, as util::search::hmmer runs them
+                .pool(util::search::HMMER_CPU * parts.len()),
+        )
+        .step(
+            Step::serial([
+                util::search::tag(cat, JUDGE, HMMER, &fields).field(manifest::SHARD, ALL)
+            ])
+            .name(format!("cat.{JUDGE}")),
+        );
 
     let pipeline = pl
         .stderr_dir(tmp.join("stderr"))
@@ -1073,16 +1136,16 @@ fn reject(args: RejectArgs, paths: &Paths) -> anyhow::Result<()> {
         return reject_union(&args, &layout, &stage, threads);
     }
 
-    let decoy_dir = layout.originals();
+    let orig_dir = layout.originals();
 
-    if !decoy_dir.is_dir() {
+    if !orig_dir.is_dir() {
         bail!(
-            "no decoys in {}; run `cutoffs decoys` first",
-            decoy_dir.display()
+            "no recruits in {}; run `cutoffs gather` first",
+            orig_dir.display()
         );
     }
 
-    let mut families: Vec<String> = std::fs::read_dir(&decoy_dir)?
+    let mut families: Vec<String> = std::fs::read_dir(&orig_dir)?
         .filter_map(|e| e.ok())
         .map(|e| e.path())
         .filter(|p| p.extension().is_some_and(|x| x == "fa"))
@@ -1091,7 +1154,7 @@ fn reject(args: RejectArgs, paths: &Paths) -> anyhow::Result<()> {
     families.sort();
 
     if families.is_empty() {
-        bail!("no decoy files in {}", decoy_dir.display());
+        bail!("no recruit files in {}", orig_dir.display());
     }
 
     let rev_dir = layout.reversals();
@@ -1134,7 +1197,6 @@ fn reject(args: RejectArgs, paths: &Paths) -> anyhow::Result<()> {
     };
 
     let scratch = |family: &str| tmp.join(family);
-    let dir_scratch = |family: &str, direction: &str| scratch(family).join(direction);
     let query_db = |family: &str| scratch(family).join("queryDB");
 
     // every batch below runs in one pool of `jobs` cores, which its commands
@@ -1143,19 +1205,19 @@ fn reject(args: RejectArgs, paths: &Paths) -> anyhow::Result<()> {
         Step::batched(
             jobs,
             per_family(&|family| {
-                let mut cmd = PCmd::new("mkdir").name("dirs").flag("-p").path(&results);
-                for direction in [ORIGINAL, REVERSAL] {
-                    let d = dir_scratch(family, direction);
-                    cmd = cmd.path(d.join("targetDB")).path(d.join("alnDB"));
-                }
-                cmd.field(manifest::STAGE, DIRS)
+                let d = scratch(family);
+                PCmd::new("mkdir")
+                    .name("dirs")
+                    .flag("-p")
+                    .path(&results)
+                    .path(d.join("targetDB"))
+                    .path(d.join("alnDB"))
+                    .field(manifest::STAGE, DIRS)
             }),
         )
         .name("dirs"),
     );
 
-    // the query profile is the same for both directions, so it is built once
-    // per family rather than once per search
     pl = pl
         .step(
             Step::batched(
@@ -1188,145 +1250,145 @@ fn reject(args: RejectArgs, paths: &Paths) -> anyhow::Result<()> {
             .name("msa2profile"),
         );
 
-    for (direction, decoys) in [(ORIGINAL, &decoy_dir), (REVERSAL, &rev_dir)] {
-        let target = |family: &str| decoys.join(format!("{family}.fa"));
-        let hmm = |family: &str| queries.join(family).join("query.hmm");
-        let table = |tool: &str, family: &str| {
-            manifest::table_path(&results, &run_name(tool, direction), family)
-        };
+    // every tool against the reversals: the scores the cutoffs are learned from
+    let form = REVERSAL;
+    let target = |family: &str| rev_dir.join(format!("{family}.fa"));
+    let hmm = |family: &str| queries.join(family).join("query.hmm");
+    let table = |tool: &str, family: &str| manifest::table_path(&results, &rev_run(tool), family);
 
-        // the family is the shard and the direction is the run, so a table is
-        // named the way every other pipeline names one
-        let run_of = |tool: &'static str, family: &str| {
-            (run_name(tool, direction), tool, family.to_string())
-        };
-
-        pl = pl
-            .step(
-                Step::batched(
-                    jobs,
-                    per_family(&|family| {
-                        let (name, tool, shard) = run_of(NAIL, family);
-                        PCmd::new(&nail_bin)
-                            .sub("search")
-                            .arg("--mmseqs-path", &mmseqs_bin)
-                            .arg("-t", 1)
-                            .arg("--tmp-dir", dir_scratch(family, direction).join("nail"))
-                            .arg("--mmseqs-s", DECOY_S)
-                            .arg("--seed-mode", util::search::SEED_MODE)
-                            .arg("--mmseqs-max-seqs", DECOY_MAX_SEQS)
-                            .arg("-E", util::search::EVALUE)
-                            .flag("--allow-overwrite")
-                            .arg("--tbl-out", table(NAIL, family))
-                            .path(hmm(family))
-                            .path(target(family))
-                            .field(manifest::NAME, name)
-                            .field(manifest::TOOL, tool)
-                            .field(manifest::SHARD, shard)
-                            .field(FORM, direction)
-                    }),
-                )
-                .name(format!("nail.{direction}")),
-            )
-            .step(
-                Step::batched(
-                    jobs,
-                    per_family(&|family| {
-                        util::search::createdb(
-                            &mmseqs_bin,
-                            &target(family),
-                            &dir_scratch(family, direction).join("targetDB/targetDB"),
-                            family,
-                            1,
-                        )
-                    }),
-                )
-                .name(format!("createdb.{direction}")),
-            )
-            .step(
-                Step::batched(
-                    jobs,
-                    per_family(&|family| {
-                        let (name, tool, shard) = run_of(MMSEQS, family);
-                        let d = dir_scratch(family, direction);
-                        util::search::Mmseqs {
-                            bin: &mmseqs_bin,
-                            query_db: &query_db(family),
-                            target_db: &d.join("targetDB/targetDB"),
-                            aln_db: d.join("alnDB/alnDB"),
-                            work: d.join("work"),
-                            out: table(MMSEQS, family),
-                            threads: 1,
-                            s: Some(DECOY_S.to_string()),
-                            max_seqs: Some(DECOY_MAX_SEQS),
-                            evalue: util::search::EVALUE,
-                        }
-                        .cmds()
-                        .search
-                        .field(manifest::NAME, name)
-                        .field(manifest::TOOL, tool)
-                        .field(manifest::SHARD, shard)
-                        .field(FORM, direction)
-                    }),
-                )
-                .name(format!("mmseqs.{direction}")),
-            )
-            .step(
-                Step::batched(
-                    jobs,
-                    per_family(&|family| {
-                        let d = dir_scratch(family, direction);
-                        util::search::Mmseqs {
-                            bin: &mmseqs_bin,
-                            query_db: &query_db(family),
-                            target_db: &d.join("targetDB/targetDB"),
-                            aln_db: d.join("alnDB/alnDB"),
-                            work: d.join("work"),
-                            out: table(MMSEQS, family),
-                            threads: 1,
-                            s: Some(DECOY_S.to_string()),
-                            max_seqs: Some(DECOY_MAX_SEQS),
-                            evalue: util::search::EVALUE,
-                        }
-                        .cmds()
-                        .convert
+    pl = pl
+        .step(
+            Step::batched(
+                jobs,
+                per_family(&|family| {
+                    PCmd::new(&nail_bin)
+                        .sub("search")
+                        .arg("--mmseqs-path", &mmseqs_bin)
+                        .arg("-t", 1)
+                        .arg("--tmp-dir", scratch(family).join("nail"))
+                        .arg("--mmseqs-s", DECOY_S)
+                        .arg("--seed-mode", util::search::SEED_MODE)
+                        .arg("--mmseqs-max-seqs", DECOY_MAX_SEQS)
+                        .arg("-E", util::search::EVALUE)
+                        .flag("--allow-overwrite")
+                        .arg("--tbl-out", table(NAIL, family))
+                        .path(hmm(family))
+                        .path(target(family))
+                        .field(manifest::NAME, rev_run(NAIL))
+                        .field(manifest::TOOL, NAIL)
                         .field(manifest::SHARD, family)
-                    }),
-                )
-                .name(format!("convert.{direction}")),
+                        .field(FORM, form)
+                }),
             )
-            .step(
-                Step::batched(
-                    jobs,
-                    // hmmsearch is the one command here not built through
-                    // `search`. util::search::hmmer returns a whole Step, batched
-                    // over the parts of one split query and followed by a cat
-                    // that joins their tables. this searches one family per
-                    // command and batches over families instead, and each
-                    // family's table is its own, so there is no split to cut
-                    // and nothing to concatenate
-                    per_family(&|family| {
-                        let (name, tool, shard) = run_of(HMMER, family);
-                        PCmd::new(&hmmsearch_bin)
-                            .arg("--cpu", 1)
-                            .arg("-E", util::search::EVALUE)
-                            .arg("-o", "/dev/null")
-                            .arg("--tblout", table(HMMER, family))
-                            .arg(
-                                "--domtblout",
-                                manifest::dom_path(&results, &run_name(HMMER, direction), family),
-                            )
-                            .path(hmm(family))
-                            .path(target(family))
-                            .field(manifest::NAME, name)
-                            .field(manifest::TOOL, tool)
-                            .field(manifest::SHARD, shard)
-                            .field(FORM, direction)
-                    }),
-                )
-                .name(format!("hmmer.{direction}")),
-            );
-    }
+            .name(format!("nail.{form}")),
+        )
+        .step(
+            Step::batched(
+                jobs,
+                per_family(&|family| {
+                    util::search::createdb(
+                        &mmseqs_bin,
+                        &target(family),
+                        &scratch(family).join("targetDB/targetDB"),
+                        family,
+                        1,
+                    )
+                }),
+            )
+            .name(format!("createdb.{form}")),
+        );
+
+    let mmseqs_cmds = |family: &str| {
+        let d = scratch(family);
+        util::search::Mmseqs {
+            bin: &mmseqs_bin,
+            query_db: &query_db(family),
+            target_db: &d.join("targetDB/targetDB"),
+            aln_db: d.join("alnDB/alnDB"),
+            work: d.join("work"),
+            out: table(MMSEQS, family),
+            threads: 1,
+            s: Some(DECOY_S.to_string()),
+            max_seqs: Some(DECOY_MAX_SEQS),
+            evalue: util::search::EVALUE,
+        }
+        .cmds()
+    };
+
+    pl = pl
+        .step(
+            Step::batched(
+                jobs,
+                per_family(&|family| {
+                    mmseqs_cmds(family)
+                        .search
+                        .field(manifest::NAME, rev_run(MMSEQS))
+                        .field(manifest::TOOL, MMSEQS)
+                        .field(manifest::SHARD, family)
+                        .field(FORM, form)
+                }),
+            )
+            .name(format!("mmseqs.{form}")),
+        )
+        .step(
+            Step::batched(
+                jobs,
+                per_family(&|family| mmseqs_cmds(family).convert.field(manifest::SHARD, family)),
+            )
+            .name(format!("convert.{form}")),
+        )
+        .step(
+            Step::batched(
+                jobs,
+                // hmmsearch is the one command here not built through
+                // `search`. util::search::hmmer returns a whole Step, batched
+                // over the parts of one split query and followed by a cat
+                // that joins their tables. this searches one family per
+                // command and batches over families instead, and each
+                // family's table is its own, so there is no split to cut
+                // and nothing to concatenate
+                per_family(&|family| {
+                    PCmd::new(&hmmsearch_bin)
+                        .arg("--cpu", 1)
+                        .arg("-E", util::search::EVALUE)
+                        .arg("-o", "/dev/null")
+                        .arg("--tblout", table(HMMER, family))
+                        .arg(
+                            "--domtblout",
+                            manifest::dom_path(&results, &rev_run(HMMER), family),
+                        )
+                        .path(hmm(family))
+                        .path(target(family))
+                        .field(manifest::NAME, rev_run(HMMER))
+                        .field(manifest::TOOL, HMMER)
+                        .field(manifest::SHARD, family)
+                        .field(FORM, form)
+                }),
+            )
+            .name(format!("hmmer.{form}")),
+        )
+        // the judge: the family's profile against the originals of its
+        // recruits, at the -Z of the shard a cutoff is applied to
+        .step(
+            Step::batched(
+                jobs,
+                per_family(&|family| {
+                    PCmd::new(&hmmsearch_bin)
+                        .arg("--cpu", 1)
+                        .arg("-Z", layout.seqs)
+                        .arg("-E", util::search::EVALUE)
+                        .arg("-o", "/dev/null")
+                        .arg("--tblout", manifest::table_path(&results, JUDGE, family))
+                        .path(hmm(family))
+                        .path(orig_dir.join(format!("{family}.fa")))
+                        .field(manifest::NAME, JUDGE)
+                        .field(manifest::TOOL, HMMER)
+                        .field(manifest::SHARD, family)
+                        .field(FORM, ORIGINAL)
+                }),
+            )
+            .name(JUDGE),
+        );
 
     pl = pl.step(
         Step::batched(
@@ -1367,7 +1429,27 @@ const N_SCORES: usize = 5;
 /// The tools a calibration scores, in the order `cutoffs.tbl` writes them.
 const TOOLS: [&str; 3] = [NAIL, MMSEQS, HMMER];
 
-/// `decoy_scores` over the two union tables, for every family at once.
+/// The (family, sequence) pairs the judge found: every recruit whose original
+/// its family's profile hits at or under `e_cutoff`. None where the judge
+/// never ran.
+fn real_pairs(table: &Path, e_cutoff: f64) -> anyhow::Result<Option<HashSet<(String, String)>>> {
+    if !table.exists() {
+        return Ok(None);
+    }
+
+    let judge = Table::<HitParser<HmmerTable>>::open(table)
+        .with_context(|| format!("failed to read {}", table.display()))?;
+
+    Ok(Some(
+        judge
+            .iter()
+            .filter(|h| h.e_value <= e_cutoff)
+            .map(|h| (h.query.clone(), h.target.clone()))
+            .collect(),
+    ))
+}
+
+/// `decoy_scores` over one union table, for every family at once.
 ///
 /// The arithmetic is the fanout's, pair for pair. What the file layout used to
 /// say implicitly -- that a hit only counts for the family that recruited its
@@ -1376,30 +1458,20 @@ const TOOLS: [&str; 3] = [NAIL, MMSEQS, HMMER];
 fn decoy_scores_union<T>(
     results: &Path,
     tool: &str,
-    e_cutoff: f64,
+    real: &HashSet<(String, String)>,
     recruits: &HashMap<String, HashSet<String>>,
 ) -> anyhow::Result<HashMap<String, (Vec<f32>, usize)>>
 where
     T: HitColumns,
 {
-    let table = |form| manifest::table_path(results, &run_name(tool, form), ALL);
-    let (orig_path, rev_path) = (table(ORIGINAL), table(REVERSAL));
+    let rev_path = manifest::table_path(results, &rev_run(tool), ALL);
 
-    if !orig_path.exists() || !rev_path.exists() {
+    if !rev_path.exists() {
         return Ok(HashMap::new());
     }
 
-    let orig = Table::<HitParser<T>>::open(&orig_path)
-        .with_context(|| format!("failed to read {}", orig_path.display()))?;
     let rev = Table::<HitParser<T>>::open(&rev_path)
         .with_context(|| format!("failed to read {}", rev_path.display()))?;
-
-    // a recruit whose original hits its family is a reject, not a decoy
-    let real: HashSet<(&str, &str)> = orig
-        .iter()
-        .filter(|h| h.e_value <= e_cutoff)
-        .map(|h| (h.query.as_str(), h.target.as_str()))
-        .collect();
 
     // one entry per pair, the last row winning, exactly as the fanout does
     let mut by_pair: HashMap<(&str, &str), &Hit> = HashMap::new();
@@ -1416,9 +1488,10 @@ where
         by_pair.insert(pair, hit);
     }
 
+    // a recruit whose original the judge found is a reject, not a decoy
     let mut by_family: HashMap<&str, Vec<&Hit>> = HashMap::new();
     for (pair, hit) in by_pair {
-        if real.contains(&pair) {
+        if real.contains(&(pair.0.to_string(), pair.1.to_string())) {
             continue;
         }
         by_family.entry(pair.0).or_default().push(hit);
@@ -1492,11 +1565,16 @@ fn learn(args: LearnArgs, paths: &Paths) -> anyhow::Result<()> {
 
     // read once for every family, rather than once per family
     let pooled = match &union {
-        Some(recruits) => Some((
-            decoy_scores_union::<NailTable>(&results, NAIL, args.reverse_e_cutoff, recruits)?,
-            decoy_scores_union::<BlastTable>(&results, MMSEQS, args.reverse_e_cutoff, recruits)?,
-            decoy_scores_union::<HmmerTable>(&results, HMMER, args.reverse_e_cutoff, recruits)?,
-        )),
+        Some(recruits) => {
+            let judge = manifest::table_path(&results, JUDGE, ALL);
+            let real = real_pairs(&judge, args.reverse_e_cutoff)?
+                .with_context(|| format!("no judge table at {}", judge.display()))?;
+            Some((
+                decoy_scores_union::<NailTable>(&results, NAIL, &real, recruits)?,
+                decoy_scores_union::<BlastTable>(&results, MMSEQS, &real, recruits)?,
+                decoy_scores_union::<HmmerTable>(&results, HMMER, &real, recruits)?,
+            ))
+        }
         None => None,
     };
 
@@ -1515,16 +1593,20 @@ fn learn(args: LearnArgs, paths: &Paths) -> anyhow::Result<()> {
                         m.get(family).cloned(),
                         h.get(family).cloned(),
                     ),
-                    None => (
-                        decoy_scores::<NailTable>(&results, NAIL, family, args.reverse_e_cutoff)?,
-                        decoy_scores::<BlastTable>(
-                            &results,
-                            MMSEQS,
-                            family,
-                            args.reverse_e_cutoff,
-                        )?,
-                        decoy_scores::<HmmerTable>(&results, HMMER, family, args.reverse_e_cutoff)?,
-                    ),
+                    None => {
+                        let judge = manifest::table_path(&results, JUDGE, family);
+                        let Some(real) = real_pairs(&judge, args.reverse_e_cutoff)? else {
+                            // an unjudged family cannot tell its decoys from
+                            // its rejects
+                            skipped.fetch_add(1, Ordering::Relaxed);
+                            return Ok(None);
+                        };
+                        (
+                            decoy_scores::<NailTable>(&results, NAIL, family, &real)?,
+                            decoy_scores::<BlastTable>(&results, MMSEQS, family, &real)?,
+                            decoy_scores::<HmmerTable>(&results, HMMER, family, &real)?,
+                        )
+                    }
                 };
 
                 if nail.is_none() || mmseqs.is_none() {
@@ -1563,7 +1645,7 @@ fn learn(args: LearnArgs, paths: &Paths) -> anyhow::Result<()> {
 
     let skipped = skipped.load(Ordering::Relaxed);
     if skipped > 0 {
-        eprintln!("skipped {skipped} families missing a nail or mmseqs table");
+        eprintln!("skipped {skipped} families missing a judge, nail or mmseqs table");
     }
     println!("wrote {}", out_path.display());
     Ok(())
@@ -1594,29 +1676,19 @@ fn decoy_scores<T>(
     results: &Path,
     tool: &str,
     family: &str,
-    e_cutoff: f64,
+    real: &HashSet<(String, String)>,
 ) -> anyhow::Result<Option<(Vec<f32>, usize)>>
 where
     T: HitColumns,
 {
-    let table = |direction| manifest::table_path(results, &run_name(tool, direction), family);
+    let rev_path = manifest::table_path(results, &rev_run(tool), family);
 
-    let (orig_path, rev_path) = (table(ORIGINAL), table(REVERSAL));
-
-    if !orig_path.exists() || !rev_path.exists() {
+    if !rev_path.exists() {
         return Ok(None);
     }
 
-    let orig = Table::<HitParser<T>>::open(&orig_path)
-        .with_context(|| format!("failed to read {}", orig_path.display()))?;
     let rev = Table::<HitParser<T>>::open(&rev_path)
         .with_context(|| format!("failed to read {}", rev_path.display()))?;
-
-    let real: HashSet<(&str, &str)> = orig
-        .iter()
-        .filter(|h| h.e_value <= e_cutoff)
-        .map(|h| (h.query.as_str(), h.target.as_str()))
-        .collect();
 
     // one entry per pair, the last row for it winning, so a pair reported
     // twice counts as one decoy
@@ -1625,9 +1697,10 @@ where
         by_pair.insert((hit.query.as_str(), hit.target.as_str()), hit);
     }
 
+    // a recruit whose original the judge found is a reject, not a decoy
     let mut decoys: Vec<&Hit> = by_pair
         .into_iter()
-        .filter(|(k, _)| !real.contains(k))
+        .filter(|(k, _)| !real.contains(&(k.0.to_string(), k.1.to_string())))
         .map(|(_, v)| v)
         .collect();
 
