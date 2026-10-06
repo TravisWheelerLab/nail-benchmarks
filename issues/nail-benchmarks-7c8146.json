@@ -15,11 +15,19 @@
   "lease_expires": null,
   "defer_until": null,
   "created_at": "2026-09-28T19:02:30.038192989Z",
-  "updated_at": "2026-09-28T19:02:30.038192989Z",
+  "updated_at": "2026-10-06T20:23:38.283320355Z",
   "closed_at": null,
   "close_reason": null,
   "resolution": null,
-  "notes": [],
+  "notes": [
+    {
+      "at": "2026-10-06T20:23:38.28331858Z",
+      "author": "jackroddy/21204bf1",
+      "text": "Measured on the 100 recruited shards in the sandbox (tmp-claude/2026-10-06-strategy-timing/): 11.2 M pairs, 10.4 M distinct sequences, 20,778 families. gather 50 s. Judge (hmmsearch over originals, -Z 2455940): fanout 77 s at -j 48; union killed after 2 min of its hmmsearch batch with no part finished, after a 46 s query split. hmmer is fanout at any scale, as expected: no index to amortise, so union is every family against the whole pool. nail and mmseqs fill being timed next.",
+      "commit": "66e9c72",
+      "branch": "claude-refactor"
+    }
+  ],
   "stamps": {
     "created": {
       "commit": "e080da4",
