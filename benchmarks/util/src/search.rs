@@ -385,7 +385,7 @@ pub fn hmmer(
 // a standalone run left on 0 would be searching with a
 // different k at every rung of the ladder, and a different
 // one again from the k inside nail
-const MMSEQS_K: usize = 6;
+pub const MMSEQS_K: usize = 6;
 
 /// The stage a seeding belongs to, for the pipelines that record it as one.
 //

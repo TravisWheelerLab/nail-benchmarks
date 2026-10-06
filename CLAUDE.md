@@ -213,10 +213,10 @@ before this existed has no such line and still reads.
   one that does leases out of it. A `default_value_t` on `--threads`, a thread
   count in a `paths.toml` recipe and a fallback to `available_parallelism`
   all count as hard-coding. thread-scaling's pool is its top rung, and
-  `--rungs` has no default either. cutoffs' fanout sizes its pool by `--jobs`,
-  since its per-family searches run one thread each. The tools' own thread
-  counts are another matter: `HMMER_CPU` is 2, and cutoffs' fanout runs each
-  search at 1, both on purpose, and say so when adding one. The plot commands
+  `--rungs` has no default either. cutoffs' reject and fill size their pool
+  by `--jobs`, since their per-family searches run one thread each. The
+  tools' own thread counts are another matter: `HMMER_CPU` is 2, and cutoffs'
+  per-family searches run at 1, both on purpose, and say so when adding one. The plot commands
   are the only pipelines left unpinned.
 - `libsail` reads and writes the formats: FASTA, Stockholm, p7hmm, and the hit
   tables nail, HMMER, MMseqs2 and BLAST produce. It also draws the samples
@@ -436,8 +436,7 @@ a scratch disk is one line.
 much of it to make.** `build-set`'s labels carry `shards`, `seqs` and rungs,
 because a toy set is defined by being small and a size is not a path. Nothing
 about a search belongs in any of them: no tools, no flags, no sensitivities,
-no threads, no name templates. A strategy such as cutoffs' `--strategy` is
-CLI only.
+no threads, no name templates. A knob such as cutoffs' `--jobs` is CLI only.
 
 That line is drawn where it is because of what the last generation of these
 files did. They built argv out of templates, which made the file the thing
@@ -654,8 +653,7 @@ mmseqs as well as for hmmer, so `fill` searches one set of decoys for all
 three and the nulls differ only in what each tool scored them. The judge
 runs at `-Z` equal to the sequence count of one shard, read from `set.tbl`,
 so a reject means what it would in the search a cutoff is applied to rather
-than in the small file of one family's recruits, and `fanout` and `union`
-reject the same pairs.
+than in the small file of one family's recruits.
 
 `fill` rescores nothing. A tool's score for a pair does not move with these
 settings; what the pass adds is the pairs a tool never reached in `recruit`. The threshold is an E-value rather than a `-Z` because it is one
@@ -690,11 +688,12 @@ family's own true members are exactly the sequences that score well against it
 on the reverse pass. The decoys that look best are the ones that are not decoys
 at all.
 
-Searching all of Pfam against the union of every family's recruits in one
-invocation is fine, and it is how the fanout is avoided. What is not fine is
-letting the union widen any family's null. `reject` joins each of the judge's
-hits back to the family that recruited the sequence, and `learn` keeps a score
-only for the family that was filled against the sequence.
+`reject` and `fill` run one family at a time against that family's own
+recruits, so the file layout is what holds the rule: every hit in a family's
+table is a question that family was asked. Pooling the recruits into one
+target and searching all of Pfam against it was tried and taken out, for the
+cost given below; were it to come back, joining each hit to the family that
+recruited the sequence is what it must not skip.
 
 **The restriction costs nothing, and it comes with its own test.** Widening the
 pool cannot change a family's null: the null is the scores of sequences the
@@ -714,23 +713,27 @@ The one case where B's recruits could legitimately inform A is A and B being
 highly related, and that is the two families not being independent rather than
 an argument for pooling.
 
-### `--strategy fanout|union`
+### One search per family, and what a michi launch costs
 
-Two ways for `reject` and `fill` to run. `fanout` is one search per family:
-its judge over its own originals, then each tool over its own decoys. `union`
-is one search per tool, all of Pfam against every original and then against
-every decoy, with `reject` keeping a hit only for the family that recruited
-the sequence and `learn` keeping a score only for the family that was filled
-against it. The per-pair rule above is what `union` must not break.
+`reject` and `fill` run one search per family per tool, batched `--jobs`
+wide at one thread each. The alternative, one search per tool over the
+pooled recruits, was measured on 6 October 2026 over the 100 recruited
+shards, 10.4 M sequences: the judge did not finish a part in two minutes
+where the per-family judge took 77 s in all, and nail at fill's settings, an
+unbounded prefilter list at `-s 12`, wrote 467 GB of prefilter output in
+minutes, because against a pool that list is the cross product. A median
+family, 281 decoys, costs nail 0.8 s, the mmseqs chain 0.65 s and hmmsearch
+0.06 s on one thread.
 
-Which is faster cannot be read off the toy: the question is per-process
-overhead against wasted cross-family alignments, and a tiny set skews it the
-wrong way.
-
-Which is faster is unmeasured on MGnify, and nail's and mmseqs' runtimes do
-not scale linearly in target size, so do not pick between the arms from an
-extrapolation: measure both on the same input. `auto` needs a fitted model
-before it means anything, and stays unimplemented until then.
+What that structure pays is launches: 20,778 per tool per stage. michi
+launches a command by forking the process that built the pipeline, and a
+fork copies that process's page tables under one lock, so each launch costs
+in proportion to the parent's memory and the launches queue behind each
+other. A fill that held its 11 M-row `decoys.tbl` in memory ran 11 launches a
+second. So the stages stream their tables to disk, make and remove
+directories in their own thread, and run mmseqs' five-process chain as one
+shell command: three launches per family and nothing short-lived among
+them.
 
 ## benchmarks/pid
 
