@@ -21,7 +21,7 @@ use libsail::seq::fasta::IndexedFasta;
 use libsail::seq::p7hmm::Hmm;
 use libsail::tbl::blast::BlastTable;
 use libsail::tbl::hmmer::HmmerTable;
-use libsail::tbl::nail::NailTable;
+use libsail::tbl::nail::{NailRow, NailTable};
 use libsail::tbl::{Hit, HitColumns, HitParser, Table};
 
 use anyhow::Context;
@@ -141,27 +141,26 @@ pub fn main(cmd: Cmd, paths: &crate::Paths) -> anyhow::Result<()> {
 }
 
 fn score(args: ScoreArgs, paths: &crate::Paths) -> anyhow::Result<()> {
-    let results = paths.search().join("results");
+    let runs = runs(&paths.search())?;
 
     let read = |name: &str| -> anyhow::Result<HashMap<(String, String), f32>> {
-        let path = manifest::table_path(&results, name, "");
-        let tbl = Table::<HitParser<NailTable>>::open(&path)
-            .with_context(|| format!("failed to open {}", path.display()))?;
-
         // one entry per pair; a repeated pair keeps its last row
-        Ok(tbl
-            .iter()
-            .map(|h| ((h.query.clone(), h.target.clone()), h.score))
+        Ok(run_named(&runs, name)?
+            .hits()?
+            .into_iter()
+            .map(|h| ((h.query, h.target), h.score))
             .collect())
     };
 
     let full_tbl = read(&args.full)?;
     let sparse_tbl = read(&args.sparse)?;
 
-    let intersection = full_tbl
+    // sorted, so the table comes out the same bytes every time
+    let mut intersection = full_tbl
         .keys()
         .filter(|k| sparse_tbl.contains_key(*k))
         .collect::<Vec<_>>();
+    intersection.sort();
 
     let figures = args.which.out_dir(&paths.analysis);
     std::fs::create_dir_all(&figures)?;
@@ -183,10 +182,8 @@ fn score(args: ScoreArgs, paths: &crate::Paths) -> anyhow::Result<()> {
 }
 
 fn cells(args: CellsArgs, paths: &crate::Paths) -> anyhow::Result<()> {
-    let table = manifest::table_path(&paths.search().join("results"), &args.run, "");
-
-    let hits = libsail::tbl::NailRows::open(&table)
-        .with_context(|| format!("failed to read {}", table.display()))?;
+    let runs = runs(&paths.search())?;
+    let hits = run_named(&runs, &args.run)?.nail_rows()?;
 
     // read out of the files rather than shelled out to hmmstat and
     // esl-seqstat: neither is a dependency this benchmark declares, and both
@@ -359,11 +356,40 @@ impl Run {
         }
         .with_context(|| format!("failed to read {}", self.table.display()))
     }
+
+    /// Its rows with every column nail writes, for the cell fraction no
+    /// other tool reports.
+    pub fn nail_rows(&self) -> anyhow::Result<Vec<NailRow>> {
+        anyhow::ensure!(
+            self.tool == "nail",
+            "run {:?} is {}'s, and only nail reports cell fractions",
+            self.name,
+            self.tool
+        );
+        Ok(Table::<NailRow>::open(&self.table)
+            .with_context(|| format!("failed to read {}", self.table.display()))?
+            .iter()
+            .cloned()
+            .collect())
+    }
 }
 
 /// Every row of a table read as layout `C`.
 fn read_hits<C: HitColumns>(path: &Path) -> libsail::Result<Vec<Hit>> {
     Ok(Table::<HitParser<C>>::open(path)?.iter().cloned().collect())
+}
+
+/// The run the ledger lists under `name`.
+fn run_named<'a>(runs: &'a [Run], name: &str) -> anyhow::Result<&'a Run> {
+    runs.iter().find(|r| r.name == name).with_context(|| {
+        format!(
+            "no run named {name:?} in ledger.tbl; it holds: {}",
+            runs.iter()
+                .map(|r| r.name.as_str())
+                .collect::<Vec<_>>()
+                .join(", ")
+        )
+    })
 }
 
 /// The runs a pipeline finished, in the order it declared them.
