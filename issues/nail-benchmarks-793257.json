@@ -3,26 +3,29 @@
   "title": "delete pid's plot_params.py, plot_threads.py and plot_common.py",
   "body": "plot_params.py and plot_threads.py are wired to no figure: nothing writes what they read any more. plot_common.py is imported by nothing.",
   "type": "chore",
-  "status": "in_progress",
+  "status": "closed",
   "priority": 3,
   "labels": [],
   "parent": "nail-benchmarks-a3dec2",
   "blocked_by": [],
   "related": [],
   "assignee": "jackroddy/0d39a02d",
-  "lease_expires": "2026-10-06T23:27:19.210099074Z",
+  "lease_expires": null,
   "defer_until": null,
   "created_at": "2026-09-28T19:02:30.29590686Z",
-  "updated_at": "2026-10-06T23:12:19.210099074Z",
-  "closed_at": null,
-  "close_reason": null,
-  "resolution": null,
+  "updated_at": "2026-10-06T23:12:19.261622731Z",
+  "closed_at": "2026-10-06T23:12:19.261622731Z",
+  "close_reason": "deleted all three; nothing referenced them",
+  "resolution": "done",
   "notes": [],
   "stamps": {
     "created": {
       "commit": "e080da4",
       "branch": "claude-refactor"
     },
-    "closed": null
+    "closed": {
+      "commit": "049edc6",
+      "branch": "claude-refactor"
+    }
   }
 }
