@@ -15,7 +15,7 @@
   "lease_expires": null,
   "defer_until": null,
   "created_at": "2026-09-28T19:02:29.649550227Z",
-  "updated_at": "2026-10-06T19:21:10.882617396Z",
+  "updated_at": "2026-10-06T20:12:39.041537656Z",
   "closed_at": null,
   "close_reason": null,
   "resolution": null,
@@ -25,6 +25,13 @@
       "author": "jackroddy/21204bf1",
       "text": "Decided 6 Oct: recruit restarts from scratch over all 1000 shards with both tools, no resume added; the 100 done shards are redone (~9 h of ~90). Strategy fixed: nail and mmseqs recruit, hmmsearch alone rejects at -Z 2,455,940 (commit 5b03f2d). Reject's cost at this scale is unmeasured; 7c8146 times fanout against union and could run on the old 100-shard recruit tables while recruit runs.",
       "commit": "5b03f2d",
+      "branch": "claude-refactor"
+    },
+    {
+      "at": "2026-10-06T20:12:39.04153601Z",
+      "author": "jackroddy/21204bf1",
+      "text": "Pipeline is now recruit, gather, reject (judge only, rejects.tbl), fill (three tools over the decoys, -E 1e9, nail static with -S 1e9), learn; commits 03a13b3 and 66e9c72. Cost note for the real run: with -S open nail aligns the whole prefilter list, so under union it aligns every family against every decoy in the pool, which is what Jack called wasted cross-family alignments; under fanout each family aligns only its own recruits, 1.13e8 pairs in all. On the toy union's nail went from 10 s to 63 s when -S opened. fill under fanout is the likely shape for MGnify, to be measured (7c8146).",
+      "commit": "66e9c72",
       "branch": "claude-refactor"
     }
   ],
