@@ -3,7 +3,7 @@
   "title": "long-seqs: nothing draws its tables",
   "body": "",
   "type": "feature",
-  "status": "open",
+  "status": "closed",
   "priority": 4,
   "labels": [],
   "parent": null,
@@ -13,16 +13,19 @@
   "lease_expires": null,
   "defer_until": null,
   "created_at": "2026-09-28T19:02:30.440106365Z",
-  "updated_at": "2026-09-28T19:02:30.440106365Z",
-  "closed_at": null,
-  "close_reason": null,
-  "resolution": null,
+  "updated_at": "2026-10-06T23:39:55.695955795Z",
+  "closed_at": "2026-10-06T23:39:55.695955795Z",
+  "close_reason": "Jack, 6 Oct: not wanted",
+  "resolution": "dropped",
   "notes": [],
   "stamps": {
     "created": {
       "commit": "e080da4",
       "branch": "claude-refactor"
     },
-    "closed": null
+    "closed": {
+      "commit": "028a077",
+      "branch": "claude-refactor"
+    }
   }
 }
