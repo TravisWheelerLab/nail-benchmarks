@@ -76,7 +76,7 @@ benchmarks/recall/        recall against prefilter sensitivity   [fixed]
 benchmarks/cloud-search/  the (A, B) pruning surface             [cross]
 benchmarks/loss-decomp/   where nail loses hmmer's hits, by stage [cross]
 benchmarks/cutoffs/       per-family score cutoffs from decoys    [reversed]
-benchmarks/long-seqs/     how the tools scale with length         [pairs]
+benchmarks/long-seqs/     how nail scales with length             [pairs]
 benchmarks/pid/           recall against percent identity          [profmark]
 benchmarks/thread-scaling/ wall clock against thread count      [cross]
 benchmarks/stage-times/   where nail's wall clock goes, by stage  [union]
@@ -420,10 +420,10 @@ A label is a whole set of paths under one name, so a toy run and a real run
 differ by a word: `recall run --in toy --threads 8`. Running a tool without
 `--in` prints the labels its file holds.
 
-Every benchmark has `toy` and `real`, over two sets of its own:
-`sets-toy/<benchmark>/` and `sets/<benchmark>/`, which `build-set` builds
-under the labels `<benchmark>-toy` and `<benchmark>-real`. cutoffs has four
-more, `sp-10k` through `sp-all`, which are neither toy nor real and sit in
+Every benchmark but long-seqs has `toy` and `real`, over two sets of its
+own: `sets-toy/<benchmark>/` and `sets/<benchmark>/`, which `build-set`
+builds under the labels `<benchmark>-toy` and `<benchmark>-real`. long-seqs
+is six pairs in all and has only `real`. cutoffs has four more, `sp-10k` through `sp-all`, which are neither toy nor real and sit in
 `sets/` beside the rest.
 
 No benchmark reads a set another one built.
@@ -788,15 +788,16 @@ draws a subset, one name per flag.
 
 ## benchmarks/long-seqs
 
-How each tool's runtime scales as sequences get longer. Six paired
-query/target files, where `run` searches each query against its pair and
-`parse` turns that into tables. Its inputs are small and checked in under
-`data/long-seqs/`, and `build-set --in long-seqs-toy` or `--in
-long-seqs-real` cuts them into a set the same way every other benchmark gets
-one. Its queries are sequences rather than profiles, which is what the
-manifest's `query_fa` column is for, and its shape is `pairs`: one query
-against one target, with the two sources separate directories so a sequence
-is never on both sides.
+How nail's runtime scales as sequences get longer; no other tool runs here.
+Six paired query/target files, where `run` searches each query against its
+pair and `parse` turns that into tables. Its inputs are small and checked in
+under `data/long-seqs/`, and `build-set --in long-seqs-real` cuts them into a
+set the same way every other benchmark gets one. It has no toy: six pairs is
+the whole benchmark, and two of them would test nothing the six do not. Its
+queries are sequences rather than profiles, which is what the manifest's
+`query_fa` column is for, and its shape is `pairs`: one query against one
+target, with the two sources separate directories so a sequence is never on
+both sides.
 
 ## benchmarks/thread-scaling
 

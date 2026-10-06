@@ -1,14 +1,8 @@
 # Where long-seqs reads and writes. Paths only, relative to this file.
 #
-# Its sets are pairs rather than a cross, built by `build-set --in
-# long-seqs-toy|long-seqs-real` out of the sequences checked in under
-# data/long-seqs/.
-
-[toy]
-set      = "../../sets-toy/long-seqs/inputs"
-run      = "../../sets-toy/long-seqs/outputs"
-analysis = "../../sets-toy/long-seqs/analysis"
-tmp      = "../../sets-toy/long-seqs/tmp"
+# Its set is pairs rather than a cross, built by `build-set --in
+# long-seqs-real` out of the six pairs checked in under data/long-seqs/.
+# Six pairs is too small to have a toy.
 
 [real]
 set      = "../../sets/long-seqs/inputs"
