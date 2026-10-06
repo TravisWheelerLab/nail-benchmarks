@@ -1,10 +1,10 @@
 {
   "slug": "housekeeping-2026-09",
-  "text": "A cleanup on 17 September reclaimed 484 GB (free 1.7 T to 2.2 T): every toy set (rebuild is under a second each), the 2.46 M cloud-search-real and loss-decomp-real sets, and 145 GB of tmp-claude. Kept: recall-real, the cutoffs-real draw, and the four cutoffs-sp-* sets with their runs and analyses.",
+  "text": "A cleanup on 17 September reclaimed 484 GB (free 1.7 T to 2.2 T): every toy set (rebuild is under a second each), the 2.46 M cloud-search-real and loss-decomp-real sets, and 145 GB of tmp-claude. Kept: recall-real and the cutoffs-real draw with its 100 recruited shards. By 6 October the four cutoffs-sp-* sets were gone from sets/ as well; sp-10k rebuilds in seconds from the recipe and calibrates under union in a few minutes.",
   "created_at": "2026-09-28T19:04:03.353029228Z",
-  "updated_at": "2026-09-28T19:04:03.353029228Z",
+  "updated_at": "2026-10-06T18:16:26.330265044Z",
   "stamp": {
-    "commit": "e080da4",
+    "commit": "47b1a3c",
     "branch": "claude-refactor"
   }
 }
