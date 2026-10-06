@@ -15,7 +15,7 @@
   "lease_expires": null,
   "defer_until": null,
   "created_at": "2026-09-28T19:02:29.934675012Z",
-  "updated_at": "2026-10-06T19:10:02.27057626Z",
+  "updated_at": "2026-10-06T19:12:31.748611835Z",
   "closed_at": null,
   "close_reason": null,
   "resolution": null,
@@ -73,6 +73,13 @@
       "at": "2026-10-06T19:10:02.270575272Z",
       "author": "jackroddy/21204bf1",
       "text": "nail at reject settings over shard 1's pooled 104,276 recruit reversals (tmp-claude/2026-10-06-nail-rescore/, 82 s at 48 threads): scores 82% of nail-only recruits, 95% of both, 26% of mmseqs-only (1,468 of 5,711). Against the committed nail cutoffs: 6 mmseqs-only recruits at or above nail_5, none above nail_1; nail-only 61, both 55. Of the scored mmseqs-only, nail rank 1 in 162 families, top 5 in 580. nail scores a pair 11-18 bits under mmseqs across every class; mmseqs-only pairs sit lowest, nail p50 12.3 vs mmseqs 30. 4,243 mmseqs-only recruits nail never scores; their mmseqs bits p50 31, same as the scored ones.",
+      "commit": "5b03f2d",
+      "branch": "claude-refactor"
+    },
+    {
+      "at": "2026-10-06T19:12:31.748609891Z",
+      "author": "jackroddy/21204bf1",
+      "text": "Where nail loses the 4,243 mmseqs-only recruits it never scores over the shard-1 pool (a4, from nail's scratch): 3,863 (91%) are in nail's own mmseqs prefilter list, at rank p50 67 of lists ~25k long, so prog seeding reached them; only 458 appear in seeds.tsv, so ~3,400 were dropped by the mmseqs align step inside nail's seeding; 380 were never prefiltered. The 458 seeded ones nail aligned and scored under E 10. a5: where both tools score a pair they align the same region, target overlap p50 1.00, no overlap in under 0.3%.",
       "commit": "5b03f2d",
       "branch": "claude-refactor"
     }
