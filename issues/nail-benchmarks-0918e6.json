@@ -13,11 +13,19 @@
   "lease_expires": null,
   "defer_until": null,
   "created_at": "2026-09-28T19:02:29.902590431Z",
-  "updated_at": "2026-09-28T19:02:29.902590431Z",
+  "updated_at": "2026-10-06T22:13:00.631263286Z",
   "closed_at": null,
   "close_reason": null,
   "resolution": null,
-  "notes": [],
+  "notes": [
+    {
+      "at": "2026-10-06T22:13:00.631262506Z",
+      "author": "jackroddy/21204bf1",
+      "text": "cutoffs-toy done 6 Oct: recipe raised to 1000 families over 2 shards of 50,000, builds in 18 s, every stage finds something (13 rejects, 2,084 decoys, cutoffs for 235 nail / 672 mmseqs / 263 hmmer families), all five stages in about a minute at -t 48 -j 48. recall-toy and long-seqs-toy still unchecked.",
+      "commit": "fde5a6b",
+      "branch": "claude-refactor"
+    }
+  ],
   "stamps": {
     "created": {
       "commit": "e080da4",
