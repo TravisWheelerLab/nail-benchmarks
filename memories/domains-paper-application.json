@@ -1,0 +1,10 @@
+{
+  "slug": "domains-paper-application",
+  "text": "Fig. 6 of the paper applied the domain classes to the best-family-filtered set: (family, target) pairs where hmmer's full-sequence score exceeds h_cut and neither nail nor mmseqs reports a hit, grouped by n_pos, hmmer's count of positive-scoring domain alignments (Measure.positive), at most 50 pairs per Pfam family, 283,397 pairs. At n_pos = 2 colinear dominates; at n_pos >= 3 pileup:fragment does. util::domains has used the paper's names since 7 Oct 2026.",
+  "created_at": "2026-10-07T18:02:03.523982718Z",
+  "updated_at": "2026-10-07T18:02:03.523982718Z",
+  "stamp": {
+    "commit": "028a077",
+    "branch": "claude-refactor"
+  }
+}
