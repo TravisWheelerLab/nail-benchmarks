@@ -1,0 +1,10 @@
+{
+  "slug": "nail-prog-seed-slices",
+  "text": "nail's prog seeding leaves each round under <tmp-dir>/prog-seed/<round>/: pdb and pdb.index are the slice of the prefilter list mmseqs aligned that round, the next n_take targets of every still-active query (an inactive query has an empty entry); adb.* is the round's align result; report.txt is one line per query: 'key: hits_so_far | hits_in_round / n_take | fraction'. The union of the slices is every pair mmseqs aligned. Seen 7 Oct 2026, nail 0.7.1.",
+  "created_at": "2026-10-07T23:18:28.943652966Z",
+  "updated_at": "2026-10-07T23:18:28.943652966Z",
+  "stamp": {
+    "commit": "028a077",
+    "branch": "claude-refactor"
+  }
+}
