@@ -3,7 +3,7 @@
   "title": "loss-decomp: move its set to Pfam x one recall shard of MGnify",
   "body": "Jack's call 29 Sep: once the depth analysis is finalised on the current 500k cross, loss-decomp's real set becomes three units: mgy at one recall shard's worth of MGnify (2,455,940 sequences, as stage-times-mgy), swissprot as now (maybe kept), and pid's profmark set at pid's own parameters. The pid unit is a different shape, so this is a union label like stage-times-real, with the cross for mgy and swissprot and the profmark recipe for pid. Expect roughly five times the MGnify work and the pid unit new; the current 500k cross took 69 minutes at 48 threads with s12 at 31 GB peak on MGnify and 42 GB on Swissprot.",
   "type": "feature",
-  "status": "open",
+  "status": "closed",
   "priority": 3,
   "labels": [],
   "parent": null,
@@ -15,10 +15,10 @@
   "lease_expires": null,
   "defer_until": null,
   "created_at": "2026-09-29T17:34:36.478925089Z",
-  "updated_at": "2026-10-01T03:36:06.167858021Z",
-  "closed_at": null,
-  "close_reason": null,
-  "resolution": null,
+  "updated_at": "2026-10-07T17:43:12.002940678Z",
+  "closed_at": "2026-10-07T17:43:12.002940678Z",
+  "close_reason": "done 30 Sep: the set is Pfam x one recall shard of MGnify, 2,455,940 sequences, one unit; the swissprot and pid units were dropped by Jack",
+  "resolution": "done",
   "notes": [
     {
       "at": "2026-10-01T03:35:55.504427837Z",
@@ -33,6 +33,9 @@
       "commit": "a3a6c9c",
       "branch": "claude-refactor"
     },
-    "closed": null
+    "closed": {
+      "commit": "028a077",
+      "branch": "claude-refactor"
+    }
   }
 }
