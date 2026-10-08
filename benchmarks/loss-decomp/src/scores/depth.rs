@@ -14,7 +14,7 @@
 //! the files were one, and nail's header databases give which key is which
 //! name, in the order it wrote them.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::fs::File;
 use std::io::{BufRead, BufReader, Read};
 use std::os::unix::fs::FileExt;
@@ -221,47 +221,117 @@ fn headers(path: &Path) -> anyhow::Result<HashMap<String, u32>> {
     Ok(map)
 }
 
-/// Which of `pairs` one arm's prefilter never returned for one shard.
+/// How `pairs`, which one arm's seed list for one shard does not hold, were
+/// kept out of it: the ones the prefilter never returned, and the ones it
+/// returned past the rank where prog seeding stopped for their query, which
+/// mmseqs was never asked to align. The rest it aligned and dropped.
 ///
-/// A pair not in the list could not have been seeded, so this is where the
-/// loss before the seed list splits: the prefilter against mmseqs' alignment.
-pub fn beyond(
+/// prog seeding leaves each round's slice of the prefilter list under
+/// `prog-seed/<round>/pdb`, the next `n_take` targets of every query still
+/// active, so the pairs mmseqs aligned are the union of the slices. An arm
+/// seeded static has no slices and aligned the whole list.
+pub fn unseeded(
     root: &Path,
     arm: &str,
     shard: &str,
     pairs: &mut [(String, String)],
-) -> anyhow::Result<Vec<(String, String)>> {
+) -> anyhow::Result<(Vec<(String, String)>, Vec<(String, String)>)> {
     let dir = prefilter_dir(root, arm, shard);
     let pf = Prefilter::open(&dir)
         .with_context(|| format!("failed to open the prefilter database in {}", dir.display()))?;
+    let rounds = slices(&dir.join("prog-seed"))?;
 
     // by query, so each query's entry is read once for all of its pairs
     pairs.sort_unstable();
 
-    let mut missing = Vec::new();
+    let (mut missing, mut stopped) = (Vec::new(), Vec::new());
     let mut at = 0;
     while at < pairs.len() {
         let query = pairs[at].0.as_str();
-        let ranks = match pf.query_key.get(query) {
-            Some(&key) => pf.ranks(key)?,
+        let key = match pf.query_key.get(query) {
+            Some(&key) => key,
             None => bail!("query {query:?} is not in {}", dir.display()),
+        };
+        let ranks = pf.ranks(key)?;
+        let aligned = match rounds.is_empty() {
+            true => None,
+            false => Some(sliced(&rounds, key)?),
         };
 
         while at < pairs.len() && pairs[at].0 == query {
-            let target = &pairs[at].1;
-            if pf
-                .target_key
-                .get(target)
-                .and_then(|k| ranks.get(k))
-                .is_none()
-            {
-                missing.push(pairs[at].clone());
+            let target = pf.target_key.get(&pairs[at].1);
+            match target {
+                Some(k) if ranks.contains_key(k) => {
+                    if aligned.as_ref().is_some_and(|a| !a.contains(k)) {
+                        stopped.push(pairs[at].clone());
+                    }
+                }
+                _ => missing.push(pairs[at].clone()),
             }
             at += 1;
         }
     }
 
-    Ok(missing)
+    Ok((missing, stopped))
+}
+
+/// One round's slice of the prefilter list: its index, and its one data file.
+struct Slice {
+    entries: HashMap<u32, (u64, u64)>,
+    file: File,
+}
+
+/// Every round's slice under `prog-seed`, in round order; none where the
+/// arm was not seeded prog.
+fn slices(dir: &Path) -> anyhow::Result<Vec<Slice>> {
+    if !dir.is_dir() {
+        return Ok(Vec::new());
+    }
+    let mut rounds: Vec<(u32, PathBuf)> = std::fs::read_dir(dir)
+        .with_context(|| format!("failed to read {}", dir.display()))?
+        .filter_map(|e| e.ok().map(|e| e.path()))
+        .filter_map(|p| Some((p.file_name()?.to_str()?.parse().ok()?, p)))
+        .collect();
+    rounds.sort_unstable();
+
+    let mut out = Vec::with_capacity(rounds.len());
+    for (_, round) in rounds {
+        let pdb = round.join("pdb");
+        out.push(Slice {
+            entries: index(&round.join("pdb.index"))?
+                .into_iter()
+                .map(|(key, off, len)| (key, (off, len)))
+                .collect(),
+            file: File::open(&pdb).with_context(|| format!("failed to open {}", pdb.display()))?,
+        });
+    }
+    Ok(out)
+}
+
+/// The target keys mmseqs was asked to align for one query, over every round.
+fn sliced(rounds: &[Slice], key: u32) -> anyhow::Result<HashSet<u32>> {
+    let mut keys = HashSet::new();
+    for round in rounds {
+        let Some(&(off, len)) = round.entries.get(&key) else {
+            continue;
+        };
+        let mut entry = vec![0u8; len as usize];
+        round.file.read_exact_at(&mut entry, off)?;
+        for line in entry.split(|&b| b == b'\n') {
+            let Some(field) = line.split(|&b| b == b'\t').next() else {
+                continue;
+            };
+            if field.is_empty() || field == b"\0" {
+                continue;
+            }
+            keys.insert(
+                std::str::from_utf8(field)?.parse().with_context(|| {
+                    format!("bad target key in a prog-seed slice for query {key}")
+                })?,
+            );
+        }
+    }
+    Ok(keys)
 }
 
 // ---

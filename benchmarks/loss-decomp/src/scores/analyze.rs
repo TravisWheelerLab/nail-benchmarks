@@ -14,6 +14,9 @@ use std::path::{Path, PathBuf};
 
 use anyhow::{Context, ensure};
 
+use util::domains::{self, Domain};
+use util::manifest;
+
 use crate::scores::Tool;
 use crate::scores::depth;
 use crate::scores::runs::Reader as Runs;
@@ -65,14 +68,31 @@ struct Tally {
     truth: usize,
     /// Not in the arm's prefilter list at any rank.
     lost_prefilter: Vec<usize>,
-    /// In the prefilter list, and not in the seed list: mmseqs' alignment
-    /// dropped it.
-    lost_seed: Vec<usize>,
+    /// In the prefilter list, past the rank where prog seeding stopped for
+    /// the query, so mmseqs never aligned it.
+    lost_stopped: Vec<usize>,
+    /// In the prefilter list and aligned by mmseqs, whose alignment dropped
+    /// it from the seed list.
+    lost_mmseqs: Vec<usize>,
     lost_cloud_align: Vec<usize>,
     /// Scored, and below the family's cutoff. nail found the pair and would
     /// not return it, which is a loss like any other.
     lost_cutoff: Vec<usize>,
+    /// Of `lost_cutoff`, the pairs one of hmmer's domains clears the cutoff
+    /// on by itself.
+    cutoff_domain: Vec<usize>,
+    /// Of `lost_cutoff`, the pairs none of hmmer's domains clears the cutoff
+    /// on by itself: hmmer's sequence score reaches it, no one domain does.
+    cutoff_nodomain: Vec<usize>,
+    /// Of `cutoff_nodomain`, the pairs hmmer reported one domain for.
+    nodomain_single: Vec<usize>,
+    /// Of `cutoff_nodomain`, the pairs hmmer reported more than one domain
+    /// for.
+    nodomain_multi: Vec<usize>,
     kept: Vec<usize>,
+    /// Pairs the run reported at or above the cutoff, whether or not hmmer
+    /// found them.
+    over: Vec<usize>,
 }
 
 impl Tally {
@@ -80,10 +100,16 @@ impl Tally {
         Tally {
             truth: 0,
             lost_prefilter: vec![0; runs],
-            lost_seed: vec![0; runs],
+            lost_stopped: vec![0; runs],
+            lost_mmseqs: vec![0; runs],
             lost_cloud_align: vec![0; runs],
             lost_cutoff: vec![0; runs],
+            cutoff_domain: vec![0; runs],
+            cutoff_nodomain: vec![0; runs],
+            nodomain_single: vec![0; runs],
+            nodomain_multi: vec![0; runs],
             kept: vec![0; runs],
+            over: vec![0; runs],
         }
     }
 }
@@ -163,18 +189,44 @@ pub fn stages(path: &Path, root: &Path, out: &Path) -> anyhow::Result<()> {
     // list once the table has been read
     let mut unseeded: HashMap<(String, usize), Vec<(String, String, bool)>> = HashMap::new();
 
+    // every pair a run scored under the cutoff, for the per-pair table:
+    // what hmmer and the run scored it, and how hmmer's domains add up
+    let mut under: Vec<Under> = Vec::new();
+
     scores.each(|row| {
         rows += 1;
+
+        let unit = row.row().shard().to_string();
+        let single = row.domain_count() == 1;
+        let (best_domain, cutoff) = (row.best_domain(), row.row().cutoff(hmmer));
+        let domain_clears = match (best_domain, cutoff) {
+            (Some(best), Some(cutoff)) => best >= cutoff,
+            _ => false,
+        };
+        let reported = row.domains_reported();
+        let tallies = at
+            .entry(unit.clone())
+            .or_insert_with(|| std::array::from_fn(|_| Tally::new(runs)));
+
+        // the single and multi tables are hmmer's split, so a pair hmmer
+        // never reported is counted in the whole table alone
+        for (set, tally) in Domains::EACH.iter().zip(tallies.iter_mut()) {
+            if *set != Domains::All && !row.present(hmmer) {
+                continue;
+            }
+            if !set.holds(single) {
+                continue;
+            }
+            for run in 0..runs {
+                if row.row().passed(run) {
+                    tally.over[run] += 1;
+                }
+            }
+        }
 
         if !row.row().passed(hmmer) {
             return Ok(());
         }
-
-        let unit = row.row().shard().to_string();
-        let single = row.domain_count() == 1;
-        let tallies = at
-            .entry(unit.clone())
-            .or_insert_with(|| std::array::from_fn(|_| Tally::new(runs)));
 
         for (set, tally) in Domains::EACH.iter().zip(tallies.iter_mut()) {
             if !set.holds(single) {
@@ -191,9 +243,43 @@ pub fn stages(path: &Path, root: &Path, out: &Path) -> anyhow::Result<()> {
                 // arm its own seed list, so whether the pair was ever offered
                 // is the arm's answer and not the pipeline's
                 match (row.seeded(run), row.present(run), row.row().passed(run)) {
-                    (false, _, _) => tally.lost_seed[run] += 1,
+                    (false, _, _) => tally.lost_mmseqs[run] += 1,
                     (_, false, _) => tally.lost_cloud_align[run] += 1,
-                    (_, _, false) => tally.lost_cutoff[run] += 1,
+                    (_, _, false) => {
+                        tally.lost_cutoff[run] += 1;
+                        match (domain_clears, reported) {
+                            (true, _) => tally.cutoff_domain[run] += 1,
+                            (false, 1) => {
+                                tally.cutoff_nodomain[run] += 1;
+                                tally.nodomain_single[run] += 1;
+                            }
+                            (false, _) => {
+                                tally.cutoff_nodomain[run] += 1;
+                                tally.nodomain_multi[run] += 1;
+                            }
+                        }
+                        if *set == Domains::All
+                            && let (Some(cutoff), Some(best), Some(score), Some(seq)) =
+                                (cutoff, best_domain, row.score(run), row.score(hmmer))
+                        {
+                            under.push(Under {
+                                unit: unit.clone(),
+                                run,
+                                query: String::from_utf8_lossy(row.row().field(0)).into_owned(),
+                                target: String::from_utf8_lossy(row.row().field(1)).into_owned(),
+                                cutoff,
+                                hmmer: seq,
+                                domain: best,
+                                nail: score,
+                                reported,
+                                kind: match (domain_clears, reported) {
+                                    (true, _) => "domain",
+                                    (false, 1) => "single",
+                                    (false, _) => "multi",
+                                },
+                            });
+                        }
+                    }
                     (_, _, true) => tally.kept[run] += 1,
                 }
             }
@@ -217,9 +303,9 @@ pub fn stages(path: &Path, root: &Path, out: &Path) -> anyhow::Result<()> {
         "hmmer found nothing that clears a cutoff; there is nothing to measure against"
     );
 
-    // a pair the prefilter never returned could not have been seeded, so
-    // the pairs no seed list held split on the prefilter list: not there at
-    // all, or there and dropped by mmseqs' alignment
+    // the pairs no seed list held split three ways on the prefilter list:
+    // not there at all, there past where prog seeding stopped so never
+    // aligned, or there, aligned, and dropped by mmseqs' alignment
     for ((unit, run), pairs) in unseeded {
         let column = &scores.meta().runs[run];
         let arm = column
@@ -231,21 +317,25 @@ pub fn stages(path: &Path, root: &Path, out: &Path) -> anyhow::Result<()> {
             .iter()
             .map(|(q, t, _)| (q.clone(), t.clone()))
             .collect();
-        let missing: HashSet<(String, String)> = depth::beyond(root, arm, &unit, &mut names)?
-            .into_iter()
-            .collect();
+        let (missing, stopped) = depth::unseeded(root, arm, &unit, &mut names)?;
+        let missing: HashSet<(String, String)> = missing.into_iter().collect();
+        let stopped: HashSet<(String, String)> = stopped.into_iter().collect();
 
         let tallies = at
             .get_mut(&unit)
             .expect("every unit with pairs was tallied");
         for (q, t, single) in pairs {
-            if !missing.contains(&(q, t)) {
-                continue;
-            }
+            let pair = (q, t);
             for (set, tally) in Domains::EACH.iter().zip(tallies.iter_mut()) {
-                if set.holds(single) {
+                if !set.holds(single) {
+                    continue;
+                }
+                if missing.contains(&pair) {
                     tally.lost_prefilter[run] += 1;
-                    tally.lost_seed[run] -= 1;
+                    tally.lost_mmseqs[run] -= 1;
+                } else if stopped.contains(&pair) {
+                    tally.lost_stopped[run] += 1;
+                    tally.lost_mmseqs[run] -= 1;
                 }
             }
         }
@@ -260,10 +350,16 @@ pub fn stages(path: &Path, root: &Path, out: &Path) -> anyhow::Result<()> {
         "run",
         "truth",
         "lost_prefilter",
-        "lost_seed",
+        "lost_stopped",
+        "lost_mmseqs",
         "lost_align",
         "lost_cutoff",
+        "cutoff_domain",
+        "cutoff_nodomain",
+        "nodomain_single",
+        "nodomain_multi",
         "kept",
+        "over",
         "sens",
     ]
     .map(str::to_string)
@@ -284,10 +380,16 @@ pub fn stages(path: &Path, root: &Path, out: &Path) -> anyhow::Result<()> {
                     column.name.clone(),
                     tally.truth.to_string(),
                     tally.lost_prefilter[run].to_string(),
-                    tally.lost_seed[run].to_string(),
+                    tally.lost_stopped[run].to_string(),
+                    tally.lost_mmseqs[run].to_string(),
                     tally.lost_cloud_align[run].to_string(),
                     tally.lost_cutoff[run].to_string(),
+                    tally.cutoff_domain[run].to_string(),
+                    tally.cutoff_nodomain[run].to_string(),
+                    tally.nodomain_single[run].to_string(),
+                    tally.nodomain_multi[run].to_string(),
                     tally.kept[run].to_string(),
+                    tally.over[run].to_string(),
                     format!("{:.4}", frac(tally.kept[run], tally.truth)),
                 ]);
             }
@@ -313,7 +415,121 @@ pub fn stages(path: &Path, root: &Path, out: &Path) -> anyhow::Result<()> {
             .with_context(|| format!("failed to write {}", path.display()))?;
     }
 
+    // one row per pair a run scored under the cutoff, beside stages.tbl:
+    // the scores either side of the cutoff, how many domains hmmer
+    // reported, and the paper's class for how they add up to its score,
+    // read off hmmer's domtbl for the unit
+    let classes = classify(root, &scores.meta().runs[hmmer].name, &under)?;
+    let mut table = toil::Table::new(toil::Schema::new(
+        [
+            "unit", "run", "query", "target", "cutoff", "hmmer", "domain", "nail", "reported",
+            "kind", "class",
+        ]
+        .map(str::to_string)
+        .to_vec(),
+    ));
+    for (pair, class) in under.iter().zip(classes) {
+        table.row(vec![
+            pair.unit.clone(),
+            scores.meta().runs[pair.run].name.clone(),
+            pair.query.clone(),
+            pair.target.clone(),
+            format!("{:.1}", pair.cutoff),
+            format!("{:.1}", pair.hmmer),
+            format!("{:.1}", pair.domain),
+            format!("{:.1}", pair.nail),
+            pair.reported.to_string(),
+            pair.kind.to_string(),
+            class,
+        ]);
+    }
+    let path = out.with_file_name("cutoff-pairs.tbl");
+    table
+        .write(&path)
+        .with_context(|| format!("failed to write {}", path.display()))?;
+
     Ok(())
+}
+
+/// One pair a run scored under the cutoff.
+struct Under {
+    unit: String,
+    run: usize,
+    query: String,
+    target: String,
+    cutoff: f32,
+    /// hmmer's sequence score.
+    hmmer: f32,
+    /// hmmer's best domain score.
+    domain: f32,
+    /// The run's score.
+    nail: f32,
+    /// How many domains hmmer reported.
+    reported: usize,
+    /// `domain` where one domain clears the cutoff alone, else `single` or
+    /// `multi` by how many hmmer reported.
+    kind: &'static str,
+}
+
+/// The paper's class for each pair's domains against its cutoff, from the
+/// domtbl hmmer wrote for the pair's unit: `strong_match`, a `pileup`,
+/// `colinear_match`, `shuffled_match` or `weak_match`, and `-` for a pair the
+/// domtbl has no positive domain for.
+fn classify(root: &Path, hmmer: &str, under: &[Under]) -> anyhow::Result<Vec<String>> {
+    // the pairs wanted out of each unit's domtbl, which is read once through
+    let mut wanted: HashMap<&str, HashMap<&str, HashMap<&str, (Vec<Domain>, u32)>>> =
+        HashMap::new();
+    for pair in under {
+        wanted
+            .entry(pair.unit.as_str())
+            .or_default()
+            .entry(pair.query.as_str())
+            .or_default()
+            .insert(pair.target.as_str(), (Vec::new(), 0));
+    }
+
+    for (unit, pairs) in &mut wanted {
+        let path = manifest::dom_path(&root.join("results"), hmmer, unit);
+        let file = std::fs::File::open(&path)
+            .with_context(|| format!("failed to open {}", path.display()))?;
+        for line in std::io::BufRead::lines(std::io::BufReader::new(file)) {
+            let line = line?;
+            if line.starts_with('#') {
+                continue;
+            }
+            // target, acc, tlen, query, acc, qlen, E, score, bias, #, of,
+            // c-E, i-E, domain score, bias, hmm from, to, ali from, to, ...
+            let f: Vec<&str> = line.split_whitespace().collect();
+            if f.len() < 22 {
+                continue;
+            }
+            let Some((domains, hmm_len)) = pairs.get_mut(f[3]).and_then(|q| q.get_mut(f[0])) else {
+                continue;
+            };
+            *hmm_len = f[5]
+                .parse()
+                .with_context(|| format!("bad qlen in {}", path.display()))?;
+            domains.push(Domain {
+                score: f[13].parse()?,
+                hmm_from: f[15].parse()?,
+                hmm_to: f[16].parse()?,
+                ali_from: f[17].parse()?,
+                ali_to: f[18].parse()?,
+            });
+        }
+    }
+
+    Ok(under
+        .iter()
+        .map(|pair| {
+            let (domains, hmm_len) =
+                &wanted[pair.unit.as_str()][pair.query.as_str()][pair.target.as_str()];
+            match domains::measure(domains, *hmm_len) {
+                Some(m) => domains::classify(&m, pair.cutoff).0.name().to_string(),
+                None => "-".to_string(),
+            }
+        })
+        .collect())
 }
 
 fn frac(n: usize, of: usize) -> f64 {

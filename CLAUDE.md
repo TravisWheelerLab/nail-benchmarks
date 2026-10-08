@@ -500,10 +500,11 @@ wrote a ledger by hand.
 - `clean` measures a list of directories, shows what is in them, asks, and
   deletes.
 - `domains` classifies how a profile's HMMER domain hits on one sequence make
-  up its score: one domain, overlapping copies of one model region, domains in
-  order, or domains out of order. `measure` takes no cutoff and keeps every
-  candidate score; `classify` holds a measure against a per-family cutoff and
-  returns the May 2026 analysis's seven categories exactly; `pattern` names
+  up its score: one domain, a pileup of overlapping copies on one model
+  region, domains in order, or domains out of order. `measure` takes no cutoff
+  and keeps every candidate score; `classify` holds a measure against a
+  per-family cutoff and returns the paper's seven classes under its names,
+  strong, pileup:full|mid|fragment, colinear, shuffled and weak; `pattern` names
   the arrangement that scores most, for results with no cutoff, and adds
   `diffuse` for a pair with no domain of 4 bits or more.
 
@@ -521,16 +522,13 @@ MMseqs2's prefilter sensitivity. `cloud-search` seeds once, then searches every
 only thing moving. The grid is run twice, at `-a 5` and at `-a 1`, because a
 surface at one `-a` cannot say whether a hard-pruning cell found its hits or
 recovered them. `loss-decomp` asks where nail loses the hits HMMER finds,
-and how far down the prefilter list the hits it does find sit. Its arms are
-sensitivities, `--s 12.0,10.0,7.5`, each seeded static with
-`--mmseqs-max-seqs` unbounded, so an arm aligns everything the prefilter
-returned and its seed list is the most nail could get at that sensitivity.
-An arm is one `nail search`, seeding and alignment together, with the seed
-list written beside its table so `parse` can tell a pair the seeding never
-offered from one it offered and nail dropped; hmmer runs once outside the
-sweep, because the truth set is the same for all of them and is most of the
-wall clock. An arm leaves mmseqs' databases under
-`results/prefilter.<arm>.<unit>/`, which is part of the record: `parse depth`
+and how far down the prefilter list the hits it does find sit. It runs
+nail once, seeded `prog` the way nail runs by default, at `--s 12.0`: one
+`nail search`, seeding and alignment together, with the seed list written
+beside its table so `parse` can tell a pair the seeding never offered from
+one it offered and nail dropped; hmmer runs once beside it, and is most of
+the wall clock. nail leaves mmseqs' databases under
+`results/prefilter.nail.<unit>/`, which is part of the record: `parse depth`
 reads a pair's rank in its query's prefilter list out of it.
 
 There are two table grammars, and which one a pipeline gets is settled by
@@ -598,16 +596,22 @@ both. Hits over prefilter pairs is what a stopping rule is betting on. A last
 row per run counts hmmer's pairs the prefilter never returned.
 
 `stages` writes one row per (unit, run) with a column per checkpoint: not in
-the mmseqs prefilter list, in it but dropped by mmseqs' alignment, seeded
-but dropped by nail's cloud search or forward filter, and scored under the
-family's cutoff. The first needs each arm's prefilter database, which is why
-`parse stages` takes the run directory as well as the table. It writes the
-table three times: `stages.tbl` over every hmmer hit, `stages-single.tbl`
-over the hits hmmer resolved as one domain, and `stages-multi.tbl` over the
-rest, by the domain rule recall's `sens_sd` uses. The figure reads the first
-alone. That is the shape a figure reads. loss-decomp's figure shows where in nail's
-pipeline the hits were lost; a point per arm that gives the total without
-saying which stage took it is not that figure.
+the mmseqs prefilter list, in it but past the rank where prog seeding
+stopped for the query so never aligned, aligned by mmseqs and dropped,
+seeded but dropped by nail's cloud search or forward filter, and scored
+under the family's cutoff; then `cutoff_domain` and `cutoff_nodomain`,
+splitting the last by whether one of hmmer's domains clears the cutoff on
+its own, and an `over` column of every pair the run reported at or above
+the cutoff, hmmer-found or not. The first two checkpoints need the arm's
+prefilter database and the per-round slices prog seeding leaves under
+`prog-seed/<round>/`, which is why `parse stages` takes the run directory
+as well as the table. It writes the table three times: `stages.tbl` over every
+hmmer hit, `stages-single.tbl` over the hits hmmer resolved as one domain,
+and `stages-multi.tbl` over the rest, by the domain rule recall's `sens_sd`
+uses; a pair hmmer never reported is in the first alone. The figure reads
+the first alone, and on 7 October 2026 it starts over as a Venn diagram of
+the pairs over the cutoff, hmmer's `truth` against nail's `over` with `kept`
+as the overlap; what it grows into is open.
 
 ## benchmarks/cutoffs
 

@@ -1,9 +1,8 @@
 //! Which stage of the nail pipeline drops the hits hmmer finds.
 //!
-//! Runs hmmer once, then one nail per sensitivity, each seeded static with no
-//! cap so it aligns everything its prefilter returned. There is no grid here
-//! the way there is in cloud-search: an arm is the most nail could get at that
-//! sensitivity, and the question is where the hits hmmer found fall out of it.
+//! Runs hmmer once and nail once, seeded `prog` at one sensitivity, the way
+//! nail runs by default, and the question is where the hits hmmer found fall
+//! out of it.
 //!
 //! nail's own -E is set far above its default (10.0) rather than left alone.
 //! `parse` tells "seeded but unreported" apart from "reported" by whether a
@@ -31,8 +30,8 @@ use util::split::Kind;
 /// The column hmmer's run becomes, which every arm is measured against.
 const HMMER: &str = "hmmer";
 
-/// nail's own unbounded `--mmseqs-max-seqs`, the default it uses in prog mode.
-const UNBOUNDED: u32 = i32::MAX as u32;
+/// The column nail's run becomes.
+const NAIL: &str = "nail";
 
 #[derive(Parser, Debug)]
 pub struct Args {
@@ -46,22 +45,12 @@ pub struct Args {
     #[arg(long, default_value_t = 1e6, value_name = "X")]
     nail_evalue: f64,
 
-    /// `--mmseqs-s` values to sweep, each seeded static and unbounded
-    #[arg(
-        long = "s",
-        value_delimiter = ',',
-        default_value = "12.0,10.0,7.5",
-        value_name = "X,X,..."
-    )]
-    sensitivities: Vec<f64>,
+    /// nail's `--mmseqs-s`
+    #[arg(long = "s", default_value_t = 12.0, value_name = "X")]
+    sensitivity: f64,
 
-    /// Sensitivities to add a full-DP arm at: `s<X>-full` replays `s<X>`'s
-    /// seed list with `--full-dp`, so the only thing moving is the cloud
-    #[arg(long = "full-dp", value_delimiter = ',', value_name = "X,X,...")]
-    full_dp: Vec<f64>,
-
-    /// Run only these arms, and add them to the ledger of a run that has
-    /// finished rather than starting the record over. `hmmer` names hmmer
+    /// Run only these, `hmmer` or `nail`, and add them to the ledger of a
+    /// run that has finished rather than starting the record over
     #[arg(long, value_delimiter = ',', value_name = "name,...")]
     only: Vec<String>,
 
@@ -101,31 +90,17 @@ pub fn main(args: Args, paths: &crate::Paths) -> anyhow::Result<()> {
         .pool(threads)
         .step(dirs.mkdir().path(dirs.tmp.join("align")));
 
-    // an arm is its name, its sensitivity, and whether it replays the
-    // static arm's seed list under --full-dp
-    let mut arms: Vec<(String, String, bool)> = args
-        .sensitivities
-        .iter()
-        .map(|s| (format!("s{s}"), format!("{s}"), false))
-        .collect();
-    arms.extend(
-        args.full_dp
-            .iter()
-            .map(|s| (format!("s{s}-full"), format!("{s}"), true)),
-    );
-
-    ensure!(!arms.is_empty(), "the sweep has no arms");
+    let s = args.sensitivity.to_string();
 
     let wanted = |name: &str| args.only.is_empty() || args.only.iter().any(|o| o == name);
     for name in &args.only {
         ensure!(
-            name == HMMER || arms.iter().any(|(arm, _, _)| arm == name),
-            "--only names {name:?}, which is not an arm of this run"
+            name == HMMER || name == NAIL,
+            "--only names {name:?}, which is neither {HMMER} nor {NAIL}"
         );
     }
     println!(
-        "{} arms over {} {}",
-        arms.len(),
+        "hmmer and nail over {} {}",
         set.units().count(),
         if set.units().count() == 1 {
             "unit"
@@ -134,7 +109,7 @@ pub fn main(args: Args, paths: &crate::Paths) -> anyhow::Result<()> {
         }
     );
 
-    // every unit gets every arm. On a `fixed` set that is the one shard the
+    // every unit gets both runs. On a `fixed` set that is the one shard the
     // label names; on a `cross` it is each target source in turn
     for unit in set.units() {
         let shard = unit.name().to_string();
@@ -168,60 +143,37 @@ pub fn main(args: Args, paths: &crate::Paths) -> anyhow::Result<()> {
             pl = pl.step(hmmer.search).step(hmmer.cat);
         }
 
-        // one nail per arm: static seeding with no cap aligns everything
-        // the prefilter returned, so there is no list to replay. the seed
-        // list is written beside the table for parse to read which pairs
-        // the seeding offered, and mmseqs' databases stay in the tmp dir
-        // for depth to read a pair's rank
-        for (name, s, full) in &arms {
-            if !wanted(name) {
-                continue;
-            }
-
+        // nail seeds itself, prog mode at nail's own --prog-n and --prog-f.
+        // the seed list is written beside the table for parse to read which
+        // pairs the seeding offered, and mmseqs' databases stay in the tmp
+        // dir for depth to read a pair's rank
+        if wanted(NAIL) {
             let cmd = Cmd::new(&bins.nail)
                 .sub("search")
-                // nail looks for mmseqs at startup even when it replays
-                // seeds and never calls it
                 .arg("--mmseqs-path", &bins.mmseqs)
-                .arg("-t", threads);
-
-            // the seeding it replays is the static arm at the same -s; a
-            // static arm seeds itself and writes the list the full arm reads
-            let seeding = format!("s{s}");
-            let cmd = match full {
-                true => cmd
-                    .arg("--seeds", dirs.seeds(&seeding, &shard))
-                    .flag("--full-dp")
-                    .arg("--tmp-dir", dirs.tmp.join("full"))
-                    .field("dp", "full"),
-                false => cmd
-                    .arg(
-                        "--tmp-dir",
-                        crate::scores::depth::prefilter_dir(&dirs.root, name, &shard),
-                    )
-                    .arg("--mmseqs-s", s)
-                    .arg("--mmseqs-max-seqs", UNBOUNDED)
-                    .arg("--seed-mode", "static")
-                    .arg("--seeds-out", dirs.seeds(name, &shard)),
-            };
-
-            let cmd = cmd
+                .arg("-t", threads)
+                .arg(
+                    "--tmp-dir",
+                    crate::scores::depth::prefilter_dir(&dirs.root, NAIL, &shard),
+                )
+                .arg("--mmseqs-s", &s)
+                .arg("--seed-mode", "prog")
+                .arg("--seeds-out", dirs.seeds(NAIL, &shard))
                 .arg("-E", args.nail_evalue)
-                .arg("--tbl-out", dirs.table(name, &shard))
+                .arg("--tbl-out", dirs.table(NAIL, &shard))
                 .flag("--allow-overwrite")
                 .path(&query_hmm)
                 .path(&target)
-                .field(manifest::NAME, name)
+                .field(manifest::NAME, NAIL)
                 .field(manifest::TOOL, "nail")
-                // the list it aligned: its own, or the static arm's
-                .field(manifest::SEEDS, &seeding)
+                .field(manifest::SEEDS, NAIL)
                 .field(manifest::SHARD, &shard)
-                .field("s", s)
+                .field("s", &s)
                 .field("E", args.nail_evalue);
 
             pl = pl.step(
                 Step::serial([cmd])
-                    .name(format!("{name}.{shard}"))
+                    .name(format!("{NAIL}.{shard}"))
                     .cores(threads),
             );
         }

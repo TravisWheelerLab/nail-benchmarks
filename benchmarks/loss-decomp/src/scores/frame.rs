@@ -341,6 +341,15 @@ impl<'a> Row<'a> {
         &self.state.shard
     }
 
+    /// The cutoff one run's score of this pair is held to: its family's for
+    /// the run's tool, or `None` where the family has none.
+    pub fn cutoff(&self, run: usize) -> Option<f32> {
+        match self.meta.runs[run].tool {
+            Tool::Nail | Tool::Hmmer => self.state.cutoff.0,
+            Tool::Mmseqs => self.state.cutoff.1,
+        }
+    }
+
     /// Whether one run reported this pair at or above its family's cutoff.
     pub fn passed(&self, run: usize) -> bool {
         let verdict = self
@@ -353,11 +362,6 @@ impl<'a> Row<'a> {
             return false;
         };
 
-        let cutoff = match self.meta.runs[run].tool {
-            Tool::Nail | Tool::Hmmer => self.state.cutoff.0,
-            Tool::Mmseqs => self.state.cutoff.1,
-        };
-
-        cutoff.is_some_and(|cutoff| score >= cutoff)
+        self.cutoff(run).is_some_and(|cutoff| score >= cutoff)
     }
 }

@@ -404,6 +404,16 @@ impl RunsRow<'_, '_> {
         super::scan::score(self.row.field(self.scores + run)).is_some()
     }
 
+    /// The best of hmmer's domain scores for the pair, or `None` where hmmer
+    /// reported none.
+    pub fn best_domain(&self) -> Option<f32> {
+        self.row
+            .field(self.dom)
+            .split(|byte| *byte == b',')
+            .filter_map(super::scan::score)
+            .reduce(f32::max)
+    }
+
     /// How many of the pair's domains carry enough of hmmer's hit to count
     /// as their own: those scoring at least [`SIGNIFICANT`] of the best.
     pub fn domain_count(&self) -> usize {
@@ -427,8 +437,17 @@ impl RunsRow<'_, '_> {
         }
     }
 
+    /// How many domains hmmer reported for the pair: every row its domtbl
+    /// listed, whatever each scored.
+    pub fn domains_reported(&self) -> usize {
+        self.row
+            .field(self.dom)
+            .split(|byte| *byte == b',')
+            .filter_map(super::scan::score)
+            .count()
+    }
+
     /// What one run scored the pair.
-    #[cfg(test)]
     pub fn score(&self, run: usize) -> Option<f32> {
         super::scan::score(self.row.field(self.scores + run))
     }
