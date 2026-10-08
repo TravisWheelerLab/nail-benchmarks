@@ -7,7 +7,7 @@
 //! - [`measure`] scores every arrangement of a pair's domains and takes no
 //!   cutoff.
 //! - [`classify`] holds a measure against a per-family cutoff and returns the
-//!   May analysis's seven categories, exactly as its code did.
+//!   paper's seven categories under the paper's names, exactly as its code did.
 //! - [`pattern`] reports which arrangement scores the most, for results that
 //!   have no per-family cutoff. It adds [`Pattern::Diffuse`], which has no
 //!   counterpart in [`Category`].
@@ -103,32 +103,41 @@ impl Coverage {
 /// What a pair's score comes to against a per-family cutoff.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub enum Category {
+    /// One domain alone exceeds the cutoff.
     Strong,
-    Clustered(Coverage),
-    Ordered,
+    /// Overlapping copies piled on one region of the model, none over the
+    /// cutoff.
+    Pileup(Coverage),
+    /// Sub-threshold domains chained in model and sequence order to about
+    /// the cutoff.
+    Colinear,
+    /// Sub-threshold domains that add up to about the cutoff only with their
+    /// order ignored.
     Shuffled,
+    /// None of the above: the cutoff is reached from many domains under
+    /// [`MIN_SCORE`].
     Weak,
 }
 
 impl Category {
     pub const ALL: [Category; 7] = [
         Category::Strong,
-        Category::Clustered(Coverage::Fragment),
-        Category::Clustered(Coverage::Mid),
-        Category::Clustered(Coverage::Full),
-        Category::Ordered,
+        Category::Pileup(Coverage::Fragment),
+        Category::Pileup(Coverage::Mid),
+        Category::Pileup(Coverage::Full),
+        Category::Colinear,
         Category::Shuffled,
         Category::Weak,
     ];
 
-    /// The name the May analysis's tables used.
+    /// The name the paper gives it.
     pub fn name(self) -> &'static str {
         match self {
             Category::Strong => "strong_match",
-            Category::Clustered(Coverage::Fragment) => "clustered:fragment",
-            Category::Clustered(Coverage::Mid) => "clustered:mid",
-            Category::Clustered(Coverage::Full) => "clustered:full",
-            Category::Ordered => "ordered_match",
+            Category::Pileup(Coverage::Fragment) => "pileup:fragment",
+            Category::Pileup(Coverage::Mid) => "pileup:mid",
+            Category::Pileup(Coverage::Full) => "pileup:full",
+            Category::Colinear => "colinear_match",
             Category::Shuffled => "shuffled_match",
             Category::Weak => "weak_match",
         }
@@ -144,10 +153,10 @@ pub enum Pattern {
     Diffuse,
     /// No arrangement scores above the best single domain.
     Single,
-    /// Overlapping copies of one region of the model.
-    Clustered(Coverage),
+    /// Overlapping copies piled on one region of the model.
+    Pileup(Coverage),
     /// Domains in the same order in the model and the sequence.
-    Ordered,
+    Colinear,
     /// Domains that only add up with their order ignored.
     Shuffled,
 }
@@ -156,10 +165,10 @@ impl Pattern {
     pub const ALL: [Pattern; 7] = [
         Pattern::Diffuse,
         Pattern::Single,
-        Pattern::Clustered(Coverage::Fragment),
-        Pattern::Clustered(Coverage::Mid),
-        Pattern::Clustered(Coverage::Full),
-        Pattern::Ordered,
+        Pattern::Pileup(Coverage::Fragment),
+        Pattern::Pileup(Coverage::Mid),
+        Pattern::Pileup(Coverage::Full),
+        Pattern::Colinear,
         Pattern::Shuffled,
     ];
 
@@ -167,8 +176,8 @@ impl Pattern {
         match self {
             Pattern::Diffuse => "diffuse".to_string(),
             Pattern::Single => "single".to_string(),
-            Pattern::Clustered(c) => format!("clustered:{}", c.name()),
-            Pattern::Ordered => "ordered".to_string(),
+            Pattern::Pileup(c) => format!("pileup:{}", c.name()),
+            Pattern::Colinear => "colinear".to_string(),
             Pattern::Shuffled => "shuffled".to_string(),
         }
     }
@@ -252,11 +261,11 @@ pub fn classify(m: &Measure, h_cut: f32) -> (Category, bool) {
     if let Some(c) = m.cluster
         && c.score >= m.chain
     {
-        return (Category::Clustered(c.band()), false);
+        return (Category::Pileup(c.band()), false);
     }
 
     let category = match () {
-        _ if m.chain >= h_cut - SLACK => Category::Ordered,
+        _ if m.chain >= h_cut - SLACK => Category::Colinear,
         _ if m.unordered >= h_cut - SLACK => Category::Shuffled,
         _ => Category::Weak,
     };
@@ -280,10 +289,10 @@ pub fn pattern(m: &Measure) -> Pattern {
     if let Some(c) = m.cluster
         && c.score > best.1
     {
-        best = (Pattern::Clustered(c.band()), c.score);
+        best = (Pattern::Pileup(c.band()), c.score);
     }
     if m.chain > best.1 {
-        best = (Pattern::Ordered, m.chain);
+        best = (Pattern::Colinear, m.chain);
     }
     if m.unordered > best.1 {
         best = (Pattern::Shuffled, m.unordered);
@@ -538,26 +547,26 @@ mod tests {
 
         assert_eq!(
             category(&full, H_CUT),
-            (Category::Clustered(Coverage::Full), false)
+            (Category::Pileup(Coverage::Full), false)
         );
         assert_eq!(
             category(&mid, H_CUT),
-            (Category::Clustered(Coverage::Mid), false)
+            (Category::Pileup(Coverage::Mid), false)
         );
         assert_eq!(
             category(&fragment, H_CUT),
-            (Category::Clustered(Coverage::Fragment), false)
+            (Category::Pileup(Coverage::Fragment), false)
         );
     }
 
     #[test]
-    fn order_decides_ordered_from_shuffled() {
-        let ordered = [d(12.0, (1, 40), (1, 40)), d(12.0, (50, 95), (100, 145))];
+    fn order_decides_colinear_from_shuffled() {
+        let colinear = [d(12.0, (1, 40), (1, 40)), d(12.0, (50, 95), (100, 145))];
         let shuffled = [d(12.0, (1, 40), (200, 240)), d(12.0, (50, 95), (10, 55))];
 
-        let m = measure(&ordered, HMM_LEN).unwrap();
+        let m = measure(&colinear, HMM_LEN).unwrap();
         assert_eq!((m.chain, m.unordered), (24.0, 24.0));
-        assert_eq!(classify(&m, H_CUT), (Category::Ordered, false));
+        assert_eq!(classify(&m, H_CUT), (Category::Colinear, false));
 
         let m = measure(&shuffled, HMM_LEN).unwrap();
         assert_eq!((m.chain, m.unordered), (12.0, 24.0));
@@ -576,31 +585,31 @@ mod tests {
     #[test]
     fn one_outlier_away_from_a_cluster_is_flagged() {
         // the chain through the outlier outscores the two overlapping copies,
-        // so this is ordered; without the outlier the rest would all overlap
+        // so this is colinear; without the outlier the rest would all overlap
         let doms = [
             d(6.0, (10, 50), (10, 50)),
             d(5.0, (12, 48), (300, 340)),
             d(10.0, (80, 95), (100, 115)),
         ];
-        assert_eq!(category(&doms, 18.0), (Category::Ordered, true));
+        assert_eq!(category(&doms, 18.0), (Category::Colinear, true));
     }
 
     #[test]
     fn pattern_takes_the_arrangement_that_scores_most() {
         let copies = [d(12.0, (1, 40), (1, 40)), d(12.0, (1, 40), (1, 40))];
         let lone = [d(12.0, (1, 40), (1, 40))];
-        let ordered = [d(12.0, (1, 40), (1, 40)), d(12.0, (50, 95), (100, 145))];
+        let colinear = [d(12.0, (1, 40), (1, 40)), d(12.0, (50, 95), (100, 145))];
         let shuffled = [d(12.0, (1, 40), (200, 240)), d(12.0, (50, 95), (10, 55))];
         let full = [d(15.0, (10, 90), (1, 80)), d(14.0, (12, 88), (200, 280))];
 
         let p = |doms: &[Domain]| pattern(&measure(doms, HMM_LEN).unwrap());
         assert_eq!(p(&lone), Pattern::Single);
-        assert_eq!(p(&ordered), Pattern::Ordered);
+        assert_eq!(p(&colinear), Pattern::Colinear);
         assert_eq!(p(&shuffled), Pattern::Shuffled);
-        assert_eq!(p(&full), Pattern::Clustered(Coverage::Full));
+        assert_eq!(p(&full), Pattern::Pileup(Coverage::Full));
 
         // two identical copies cluster to twice one of them
-        assert_eq!(p(&copies), Pattern::Clustered(Coverage::Fragment));
+        assert_eq!(p(&copies), Pattern::Pileup(Coverage::Fragment));
     }
 
     #[test]
@@ -619,7 +628,7 @@ mod tests {
         let doms = [d(12.0, (1, 40), (1, 40)), d(12.0, (50, 95), (100, 145))];
         let m = measure(&doms, HMM_LEN).unwrap();
 
-        assert_eq!(classify(&m, 20.0).0, Category::Ordered);
+        assert_eq!(classify(&m, 20.0).0, Category::Colinear);
         assert_eq!(classify(&m, 40.0).0, Category::Weak);
         assert_eq!(classify(&m, 10.0).0, Category::Strong);
     }
