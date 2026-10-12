@@ -110,78 +110,77 @@ impl Prefilter {
         Ok(out)
     }
 
-    /// Each target key in one query's list and its rank there, from 1.
-    fn ranks(&self, key: u32) -> anyhow::Result<HashMap<u32, u32>> {
-        let entry = self.entry(key)?;
-        let mut ranks = HashMap::new();
-        for (i, line) in entry.split(|&b| b == b'\n').enumerate() {
-            let Some(field) = line.split(|&b| b == b'\t').next() else {
-                continue;
-            };
-            if field.is_empty() || field == b"\0" {
-                continue;
-            }
-            let target: u32 = std::str::from_utf8(field)?
-                .parse()
-                .with_context(|| format!("bad target key in prefilter entry {key}"))?;
-            ranks.insert(target, i as u32 + 1);
-        }
-        Ok(ranks)
-    }
+    /// Every query in `keys` read once, on `threads`: how many lines its
+    /// list holds, and the rank, from 1, of each target `wanted` asks about
+    /// for it that the list holds.
+    ///
+    /// One pass rather than a map of the whole list: a list at -s 12 runs to
+    /// millions of lines, and what is asked about it is a few thousand
+    /// targets at most. A query `wanted` does not name is only counted.
+    fn scan(
+        &self,
+        keys: &[u32],
+        wanted: &HashMap<u32, HashSet<u32>>,
+        threads: usize,
+    ) -> anyhow::Result<Vec<(u32, Found)>> {
+        use rayon::prelude::*;
 
-    /// How many targets each query's list holds, by key, by reading the
-    /// data once through.
-    fn lengths(&self) -> anyhow::Result<Vec<(u32, u64)>> {
-        let mut spans: Vec<(u64, u64, u32)> = self
-            .entries
-            .iter()
-            .map(|(&key, &(off, len))| (off, len, key))
-            .collect();
-        spans.sort_unstable();
+        let pool = rayon::ThreadPoolBuilder::new()
+            .num_threads(threads.max(1))
+            .build()
+            .context("failed to build a thread pool")?;
 
-        let mut lengths = Vec::with_capacity(spans.len());
-        let mut buf = vec![0u8; 8 << 20];
+        pool.install(|| {
+            keys.par_iter()
+                .map(|&key| {
+                    let entry = self.entry(key)?;
+                    let want = wanted.get(&key);
+                    let mut found = Found {
+                        len: memchr::memchr_iter(b'\n', &entry).count() as u64,
+                        ranks: Vec::new(),
+                    };
 
-        for (file, start, flen) in &self.files {
-            let mut reader = BufReader::with_capacity(buf.len(), file);
-            let mut at = *start;
-            let end = start + flen;
-
-            while at < end {
-                let n = reader.read(&mut buf)?;
-                if n == 0 {
-                    break;
-                }
-                let chunk = &buf[..n];
-
-                // count the newlines of every span this chunk touches
-                let mut i = spans.partition_point(|&(off, len, _)| off + len <= at);
-                while i < spans.len() && spans[i].0 < at + n as u64 {
-                    let (off, len, _) = spans[i];
-                    let lo = off.max(at) - at;
-                    let hi = (off + len).min(at + n as u64) - at;
-                    let count = chunk[lo as usize..hi as usize]
-                        .iter()
-                        .filter(|&&b| b == b'\n')
-                        .count() as u64;
-                    if lengths.len() <= i {
-                        lengths.resize(i + 1, 0);
+                    if let Some(want) = want {
+                        // rank i + 1 for the i-th line, counting the ones
+                        // after the data too, as the map of the whole list
+                        // did: they come last, so no data line moves
+                        for (i, line) in entry.split(|&b| b == b'\n').enumerate() {
+                            if let Some(target) = leading_number(line)
+                                && want.contains(&target)
+                            {
+                                found.ranks.push((target, i as u32 + 1));
+                            }
+                        }
                     }
-                    lengths[i] += count;
-                    i += 1;
-                }
 
-                at += n as u64;
-            }
-        }
-
-        lengths.resize(spans.len(), 0);
-        Ok(spans
-            .iter()
-            .zip(lengths)
-            .map(|(&(_, _, key), len)| (key, len))
-            .collect())
+                    Ok((key, found))
+                })
+                .collect()
+        })
     }
+}
+
+/// What one scan of a query's list found.
+struct Found {
+    /// How many lines the list holds.
+    len: u64,
+    /// Each target asked about that the list holds, and its rank there.
+    ranks: Vec<(u32, u32)>,
+}
+
+/// The number a prefilter line opens with, which is its target key, or
+/// `None` for a line that opens with anything else: the `\0` that ends an
+/// entry, or nothing.
+fn leading_number(line: &[u8]) -> Option<u32> {
+    let digits = line.iter().take_while(|b| b.is_ascii_digit()).count();
+    if digits == 0 {
+        return None;
+    }
+    let mut n: u32 = 0;
+    for &b in &line[..digits] {
+        n = n.checked_mul(10)?.checked_add((b - b'0') as u32)?;
+    }
+    Some(n)
 }
 
 /// An mmseqs index: key, offset, length per line.
@@ -235,6 +234,7 @@ pub fn unseeded(
     arm: &str,
     shard: &str,
     pairs: &mut [(String, String)],
+    threads: usize,
 ) -> anyhow::Result<(Vec<(String, String)>, Vec<(String, String)>)> {
     let dir = prefilter_dir(root, arm, shard);
     let pf = Prefilter::open(&dir)
@@ -244,15 +244,30 @@ pub fn unseeded(
     // by query, so each query's entry is read once for all of its pairs
     pairs.sort_unstable();
 
+    // which targets to look for in each query's list; a target the
+    // database never keyed is missing before any list is read
+    let mut wanted: HashMap<u32, HashSet<u32>> = HashMap::new();
+    for (query, target) in pairs.iter() {
+        let Some(&key) = pf.query_key.get(query) else {
+            bail!("query {query:?} is not in {}", dir.display());
+        };
+        if let Some(&t) = pf.target_key.get(target) {
+            wanted.entry(key).or_default().insert(t);
+        }
+    }
+    let mut keys: Vec<u32> = wanted.keys().copied().collect();
+    keys.sort_unstable();
+    let listed: HashMap<u32, HashSet<u32>> = pf
+        .scan(&keys, &wanted, threads)?
+        .into_iter()
+        .map(|(key, found)| (key, found.ranks.into_iter().map(|(t, _)| t).collect()))
+        .collect();
+
     let (mut missing, mut stopped) = (Vec::new(), Vec::new());
     let mut at = 0;
     while at < pairs.len() {
         let query = pairs[at].0.as_str();
-        let key = match pf.query_key.get(query) {
-            Some(&key) => key,
-            None => bail!("query {query:?} is not in {}", dir.display()),
-        };
-        let ranks = pf.ranks(key)?;
+        let key = pf.query_key[query];
         let aligned = match rounds.is_empty() {
             true => None,
             false => Some(sliced(&rounds, key)?),
@@ -261,7 +276,7 @@ pub fn unseeded(
         while at < pairs.len() && pairs[at].0 == query {
             let target = pf.target_key.get(&pairs[at].1);
             match target {
-                Some(k) if ranks.contains_key(k) => {
+                Some(k) if listed.get(&key).is_some_and(|l| l.contains(k)) => {
                     if aligned.as_ref().is_some_and(|a| !a.contains(k)) {
                         stopped.push(pairs[at].clone());
                     }
@@ -409,6 +424,7 @@ pub fn depth(
     out: &Path,
     hits_out: &Path,
     lists_out: &Path,
+    threads: usize,
 ) -> anyhow::Result<()> {
     ensure!(width > 0, "--bin must be at least 1");
 
@@ -494,34 +510,6 @@ pub fn depth(
 
         let mut tally = Tally::default();
 
-        // the prefilter pairs per bin come from the length of every
-        // query's list: a list of L holds min(L, hi) - lo + 1 of each bin
-        // the name each key was given, for the per-query list
-        let name_of: HashMap<u32, &str> = pf
-            .query_key
-            .iter()
-            .map(|(name, &key)| (key, name.as_str()))
-            .collect();
-
-        for (key, len) in pf.lengths()? {
-            lists_table.row([
-                toil::Cell::from(shard.as_str()),
-                runs[run].name.as_str().into(),
-                (*name_of.get(&key).unwrap_or(&"?")).into(),
-                len.into(),
-            ]);
-            let mut bin = 0;
-            loop {
-                let (lo, hi) = range(bin, width);
-                if len < lo {
-                    break;
-                }
-                Tally::bump(&mut tally.prefilter, bin);
-                tally.prefilter[bin] += len.min(hi) - lo;
-                bin += 1;
-            }
-        }
-
         // the seeds are what mmseqs aligned and kept, read from the list
         // the run replayed
         let seeds = util::manifest::seeds_path(&root.join("results"), arm, &shard);
@@ -547,12 +535,68 @@ pub fn depth(
         queries.sort_unstable();
         queries.dedup();
 
+        // every list is read once, for its length, and the targets the
+        // seeds and the pairs name are looked up on the way through
+        let mut wanted: HashMap<u32, HashSet<u32>> = HashMap::new();
+        for query in &queries {
+            let Some(&key) = pf.query_key.get(*query) else {
+                bail!("query {query:?} is not in {}", dir.display());
+            };
+            let want = wanted.entry(key).or_default();
+            for target in by_query.get(*query).map(Vec::as_slice).unwrap_or_default() {
+                want.extend(pf.target_key.get(target));
+            }
+        }
+        for p in &pairs {
+            if let (Some(&key), Some(&t)) =
+                (pf.query_key.get(&p.query), pf.target_key.get(&p.target))
+            {
+                wanted.entry(key).or_default().insert(t);
+            }
+        }
+
+        // in the order the data holds the lists, which is how they are
+        // read fastest and how the per-query table has always run
+        let mut keys: Vec<(u64, u64, u32)> = pf
+            .entries
+            .iter()
+            .map(|(&key, &(off, len))| (off, len, key))
+            .collect();
+        keys.sort_unstable();
+        let keys: Vec<u32> = keys.into_iter().map(|(_, _, key)| key).collect();
+
+        let name_of: HashMap<u32, &str> = pf
+            .query_key
+            .iter()
+            .map(|(name, &key)| (key, name.as_str()))
+            .collect();
+
+        let mut found: HashMap<u32, HashMap<u32, u32>> = HashMap::new();
+        for (key, list) in pf.scan(&keys, &wanted, threads)? {
+            // the prefilter pairs per bin come from the length of every
+            // query's list: a list of L holds min(L, hi) - lo + 1 of each bin
+            lists_table.row([
+                toil::Cell::from(shard.as_str()),
+                runs[run].name.as_str().into(),
+                (*name_of.get(&key).unwrap_or(&"?")).into(),
+                list.len.into(),
+            ]);
+            let mut bin = 0;
+            loop {
+                let (lo, hi) = range(bin, width);
+                if list.len < lo {
+                    break;
+                }
+                Tally::bump(&mut tally.prefilter, bin);
+                tally.prefilter[bin] += list.len.min(hi) - lo;
+                bin += 1;
+            }
+            found.insert(key, list.ranks.into_iter().collect());
+        }
+
         let mut at = 0;
         for query in queries {
-            let ranks = match pf.query_key.get(query) {
-                Some(&key) => pf.ranks(key)?,
-                None => bail!("query {query:?} is not in {}", dir.display()),
-            };
+            let ranks = &found[&pf.query_key[query]];
             let rank = |target: &str| -> Option<u64> {
                 pf.target_key
                     .get(target)

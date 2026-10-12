@@ -70,11 +70,12 @@ struct State {
     layout: Option<Layout>,
     verdict: Option<Verdict>,
 
-    /// The nail and mmseqs cutoffs of the family the row in hand names.
+    /// The cutoffs of the family the row in hand names, as [`Named`] orders
+    /// them.
     //
     // a query's rows are adjacent, so this is one lookup per family
     // rather than one per cell, which at 164 runs is 164 times fewer
-    cutoff: (Option<f32>, Option<f32>),
+    cutoff: super::Family,
     /// Which family those are for.
     cutoff_for: Vec<u8>,
 
@@ -163,7 +164,7 @@ impl<R: Read> Frame<R> {
                 file: file.to_string(),
                 layout: None,
                 verdict: None,
-                cutoff: (None, None),
+                cutoff: [None; 4],
                 cutoff_for: Vec::new(),
                 seen: HashSet::from([shard_at.clone()]),
                 shard: shard_at,
@@ -296,8 +297,8 @@ impl State {
             self.cutoff_for.extend_from_slice(query);
 
             self.cutoff = match std::str::from_utf8(query) {
-                Ok(family) => cutoffs.pair(family),
-                Err(_) => (None, None),
+                Ok(family) => cutoffs.family(family),
+                Err(_) => [None; 4],
             };
         }
 
@@ -345,9 +346,15 @@ impl<'a> Row<'a> {
     /// the run's tool, or `None` where the family has none.
     pub fn cutoff(&self, run: usize) -> Option<f32> {
         match self.meta.runs[run].tool {
-            Tool::Nail | Tool::Hmmer => self.state.cutoff.0,
-            Tool::Mmseqs => self.state.cutoff.1,
+            Tool::Nail => self.state.cutoff[0],
+            Tool::Mmseqs => self.state.cutoff[1],
+            Tool::Hmmer => self.state.cutoff[2],
         }
+    }
+
+    /// The cutoff hmmer's best domain is held to on this pair's family.
+    pub fn domain_cutoff(&self) -> Option<f32> {
+        self.state.cutoff[3]
     }
 
     /// Whether one run reported this pair at or above its family's cutoff.

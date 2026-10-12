@@ -118,12 +118,7 @@ impl Inputs {
             None => util::tools::mgy_cutoffs()?,
         };
 
-        let threads = match args.threads {
-            Some(threads) => threads,
-            None => std::thread::available_parallelism()
-                .map(|n| n.get())
-                .unwrap_or(1),
-        };
+        let threads = threads(args.threads);
 
         let mem = match args.mem {
             Some(gb) => (gb * (1u64 << 30) as f64) as u64,
@@ -208,6 +203,11 @@ pub struct TableArgs {
 
     #[arg(short, long, value_name = "out.tbl")]
     out: Option<PathBuf>,
+
+    /// How many prefilter lists to read at once. Defaults to the machine's
+    /// cores
+    #[arg(long, value_name = "N")]
+    threads: Option<usize>,
 }
 
 #[derive(Parser, Debug)]
@@ -230,6 +230,21 @@ pub struct DepthArgs {
 
     #[arg(short, long, value_name = "out.tbl")]
     out: Option<PathBuf>,
+
+    /// How many prefilter lists to read at once. Defaults to the machine's
+    /// cores
+    #[arg(long, value_name = "N")]
+    threads: Option<usize>,
+}
+
+/// The thread count a flag asked for, or every core.
+fn threads(asked: Option<usize>) -> usize {
+    match asked {
+        Some(threads) => threads,
+        None => std::thread::available_parallelism()
+            .map(|n| n.get())
+            .unwrap_or(1),
+    }
 }
 
 fn depth(args: DepthArgs) -> anyhow::Result<()> {
@@ -238,13 +253,22 @@ fn depth(args: DepthArgs) -> anyhow::Result<()> {
         run: args.run.clone(),
         analysis: args.analysis,
         out: None,
+        threads: None,
     };
     let path = table_at(&table, &["runs.tbl"])?;
     let out = beside(&path, args.out, "depth.tbl")?;
     let hits = beside(&out, None, "hits.tbl")?;
     let lists = beside(&out, None, "lists.tbl")?;
 
-    crate::scores::depth::depth(&path, &args.run, args.bin, &out, &hits, &lists)?;
+    crate::scores::depth::depth(
+        &path,
+        &args.run,
+        args.bin,
+        &out,
+        &hits,
+        &lists,
+        threads(args.threads),
+    )?;
 
     println!("wrote {}", out.display());
     println!("wrote {}", hits.display());
@@ -256,9 +280,10 @@ fn stages(args: TableArgs) -> anyhow::Result<()> {
     let path = table_at(&args, &["runs.tbl"])?;
     let out = beside(&path, args.out, "stages.tbl")?;
 
-    analyze::stages(&path, &args.run, &out)?;
+    analyze::stages(&path, &args.run, &out, threads(args.threads))?;
 
-    println!("wrote {} and its -single and -multi tables", out.display());
+    println!("wrote {}", out.display());
+    println!("wrote {}", out.with_file_name("cutoff-pairs.tbl").display());
     Ok(())
 }
 

@@ -325,20 +325,19 @@ impl Queries {
 // ------------------------------------------------------------------ cutoffs
 
 /// The score each family's hits are held to, by query id.
-///
-/// hmmer takes nail's: nail approximates hmmer's model, and the calibration
-/// learns no threshold of hmmer's own that anything reads.
 pub struct Cutoffs {
     nail: Vec<Option<f32>>,
     mmseqs: Vec<Option<f32>>,
+    hmmer: Vec<Option<f32>>,
 }
 
 impl Cutoffs {
     /// The threshold a run of `tool` is held to on one family.
     pub fn get(&self, tool: Tool, query: u32) -> Option<f32> {
         let column = match tool {
-            Tool::Nail | Tool::Hmmer => &self.nail,
+            Tool::Nail => &self.nail,
             Tool::Mmseqs => &self.mmseqs,
+            Tool::Hmmer => &self.hmmer,
         };
 
         column.get(query as usize).copied().flatten()
@@ -359,18 +358,22 @@ impl Cutoffs {
         let mut out = Cutoffs {
             nail: vec![None; queries.len()],
             mmseqs: vec![None; queries.len()],
+            hmmer: vec![None; queries.len()],
         };
 
-        parse(path, c, |family, nail, mmseqs| {
+        parse(path, c, |family, scores| {
             // a family the calibration knows and this query set does not is
             // not an error: the calibration covers every family Pfam has
             if let Some(id) = queries.id(family) {
+                let [nail, mmseqs, hmmer, _] = scores;
                 out.nail[id as usize] = nail;
                 out.mmseqs[id as usize] = mmseqs;
+                out.hmmer[id as usize] = hmmer;
             }
         })?;
 
-        if out.nail.iter().all(Option::is_none) && out.mmseqs.iter().all(Option::is_none) {
+        let learned = [&out.nail, &out.mmseqs, &out.hmmer];
+        if learned.iter().all(|col| col.iter().all(Option::is_none)) {
             bail!(
                 "no usable cutoffs at index {c} in {} for any of the {} families searched",
                 path.display(),
@@ -382,29 +385,32 @@ impl Cutoffs {
     }
 }
 
+/// One family's thresholds at one index: nail, mmseqs, hmmer's sequence
+/// score and hmmer's best domain, in that order.
+pub type Family = [Option<f32>; 4];
+
 /// The same table keyed by the family name a row carries.
 ///
 /// A reader has the names the table was written with and not the query set
 /// the search numbered them by, so it cannot index [`Cutoffs`].
-pub struct Named(HashMap<String, (Option<f32>, Option<f32>)>);
+pub struct Named(HashMap<String, Family>);
 
 impl Named {
-    /// Both tools' thresholds on one family, for a reader that asks once per
-    /// family and then answers per run.
-    pub fn pair(&self, family: &str) -> (Option<f32>, Option<f32>) {
-        self.0.get(family).copied().unwrap_or((None, None))
+    /// Every threshold on one family, for a reader that asks once per family
+    /// and then answers per run.
+    pub fn family(&self, family: &str) -> Family {
+        self.0.get(family).copied().unwrap_or([None; 4])
     }
 
     pub fn read(path: &Path, c: usize) -> anyhow::Result<Named> {
         let mut out = HashMap::new();
 
-        parse(path, c, |family, nail, mmseqs| {
-            out.insert(family.to_string(), (nail, mmseqs));
+        parse(path, c, |family, scores| {
+            out.insert(family.to_string(), scores);
         })?;
 
         ensure!(
-            out.values()
-                .any(|(nail, mmseqs)| nail.is_some() || mmseqs.is_some()),
+            out.values().flatten().any(Option::is_some),
             "no usable cutoffs at index {c} in {}",
             path.display()
         );
@@ -413,16 +419,12 @@ impl Named {
     }
 }
 
-/// Read `cutoffs.tbl`, handing each family its two thresholds at index `c`.
+/// Read `cutoffs.tbl`, handing each family its thresholds at index `c`.
 ///
 /// `cutoffs.tbl` names its columns `<tool>_1..<tool>_5` and `<tool>_n`, so the
 /// column to read is found by name rather than by counting -- which is what
 /// lets the calibration add a tool without moving anything here.
-fn parse(
-    path: &Path,
-    c: usize,
-    mut row: impl FnMut(&str, Option<f32>, Option<f32>),
-) -> anyhow::Result<()> {
+fn parse(path: &Path, c: usize, mut row: impl FnMut(&str, Family)) -> anyhow::Result<()> {
     let table =
         toil::Table::read(path).with_context(|| format!("failed to read {}", path.display()))?;
 
@@ -433,7 +435,12 @@ fn parse(
             .with_context(|| format!("{} has no {name} column", path.display()))
     };
 
-    let (nail_at, mmseqs_at) = (column("nail")?, column("mmseqs")?);
+    let at = [
+        column("nail")?,
+        column("mmseqs")?,
+        column("hmmer")?,
+        column("hmmer_dom")?,
+    ];
 
     for cells in table.rows() {
         let Some(family) = cells.get(0) else {
@@ -448,7 +455,7 @@ fn parse(
                 .filter(|s| *s > 0.0)
         };
 
-        row(family, score(nail_at), score(mmseqs_at));
+        row(family, at.map(score));
     }
 
     Ok(())

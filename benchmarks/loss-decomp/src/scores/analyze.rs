@@ -10,7 +10,7 @@
 //! is a re-run of this, not of the benchmark.
 
 use std::collections::{HashMap, HashSet};
-use std::path::{Path, PathBuf};
+use std::path::Path;
 
 use anyhow::{Context, ensure};
 
@@ -23,7 +23,16 @@ use crate::scores::runs::Reader as Runs;
 
 /// What was searched, what the fractions are fractions of, and the two times
 /// the figures use as reference lines.
-fn preamble(table: &mut toil::Table, meta: &crate::scores::Meta, truth: usize, rows: u64) {
+///
+/// `domain_only` is the pairs where hmmer's best domain cleared its cutoff and
+/// the sequence score did not, which are in no fraction.
+fn preamble(
+    table: &mut toil::Table,
+    meta: &crate::scores::Meta,
+    truth: usize,
+    domain_only: usize,
+    rows: u64,
+) {
     let (mut count, mut residues, mut bytes) = (0usize, 0u64, 0u64);
     for (_, size) in &meta.targets {
         count += size.count;
@@ -58,6 +67,7 @@ fn preamble(table: &mut toil::Table, meta: &crate::scores::Meta, truth: usize, r
             meta.runs.len()
         ))
         .comment(format!("hmmer  {truth:>9} hits      {hmmer:>12.4} wall_s"))
+        .comment(format!("       {domain_only:>9} domain only"))
         .comment(format!("seed   {:>9}           {seed:>12} wall_s", ""))
         .comment("");
 }
@@ -78,11 +88,11 @@ struct Tally {
     /// Scored, and below the family's cutoff. nail found the pair and would
     /// not return it, which is a loss like any other.
     lost_cutoff: Vec<usize>,
-    /// Of `lost_cutoff`, the pairs one of hmmer's domains clears the cutoff
-    /// on by itself.
+    /// Of `lost_cutoff`, the pairs hmmer's best domain clears the domain
+    /// cutoff on by itself.
     cutoff_domain: Vec<usize>,
-    /// Of `lost_cutoff`, the pairs none of hmmer's domains clears the cutoff
-    /// on by itself: hmmer's sequence score reaches it, no one domain does.
+    /// Of `lost_cutoff`, the pairs no domain of hmmer's clears the domain
+    /// cutoff: hmmer's sequence score reaches its own, no one domain does.
     cutoff_nodomain: Vec<usize>,
     /// Of `cutoff_nodomain`, the pairs hmmer reported one domain for.
     nodomain_single: Vec<usize>,
@@ -93,6 +103,9 @@ struct Tally {
     /// Pairs the run reported at or above the cutoff, whether or not hmmer
     /// found them.
     over: Vec<usize>,
+    /// Pairs hmmer's best domain cleared its cutoff on and its sequence
+    /// score did not, which are no part of `truth`.
+    domain_only: usize,
 }
 
 impl Tally {
@@ -110,63 +123,16 @@ impl Tally {
             nodomain_multi: vec![0; runs],
             kept: vec![0; runs],
             over: vec![0; runs],
+            domain_only: 0,
         }
     }
 }
 
-/// Which of hmmer's hits a table is held to, by how many domains hmmer
-/// resolved each into.
-#[derive(Clone, Copy, PartialEq, Eq)]
-enum Domains {
-    All,
-    Single,
-    Multi,
-}
-
-impl Domains {
-    const EACH: [Domains; 3] = [Domains::All, Domains::Single, Domains::Multi];
-
-    fn holds(self, single: bool) -> bool {
-        match self {
-            Domains::All => true,
-            Domains::Single => single,
-            Domains::Multi => !single,
-        }
-    }
-
-    fn name(self) -> &'static str {
-        match self {
-            Domains::All => "all",
-            Domains::Single => "single",
-            Domains::Multi => "multi",
-        }
-    }
-
-    /// Where this set's table goes, beside the one `out` names: `x.tbl`,
-    /// `x-single.tbl`, `x-multi.tbl`.
-    fn path(self, out: &Path) -> PathBuf {
-        match self {
-            Domains::All => out.to_path_buf(),
-            set => {
-                let stem = out.file_stem().unwrap_or_default().to_string_lossy();
-                let ext = out
-                    .extension()
-                    .map(|e| e.to_string_lossy())
-                    .unwrap_or_default();
-                out.with_file_name(format!("{stem}-{}.{ext}", set.name()))
-            }
-        }
-    }
-}
-
-/// Where the hits hmmer found are lost, per unit and per run, three times
-/// over: for every hit, for the hits hmmer resolved as one domain, and for
-/// the rest.
+/// Where the hits hmmer found are lost, per unit and per run.
 ///
 /// `root` is the run directory, for the prefilter databases under its
-/// `results/`. `out` names the table of every hit, and the other two go
-/// beside it.
-pub fn stages(path: &Path, root: &Path, out: &Path) -> anyhow::Result<()> {
+/// `results/`. `out` names the table, and `cutoff-pairs.tbl` goes beside it.
+pub fn stages(path: &Path, root: &Path, out: &Path, threads: usize) -> anyhow::Result<()> {
     let mut scores = Runs::open(path)?;
 
     let hmmer = scores.meta().hmmer()?;
@@ -181,13 +147,12 @@ pub fn stages(path: &Path, root: &Path, out: &Path) -> anyhow::Result<()> {
     // several kinds of target, and what hmmer found in one is not the truth
     // set for another: summed, the two corpora make a sensitivity that
     // describes neither
-    let mut at: indexmap::IndexMap<String, [Tally; 3]> = indexmap::IndexMap::new();
+    let mut at: indexmap::IndexMap<String, Tally> = indexmap::IndexMap::new();
     let mut rows = 0u64;
 
-    // the pairs no seed list held, per unit and run, with whether hmmer
-    // resolved each as one domain, to be looked up in the arm's prefilter
-    // list once the table has been read
-    let mut unseeded: HashMap<(String, usize), Vec<(String, String, bool)>> = HashMap::new();
+    // the pairs no seed list held, per unit and run, to be looked up in the
+    // arm's prefilter list once the table has been read
+    let mut unseeded: HashMap<(String, usize), Vec<(String, String)>> = HashMap::new();
 
     // every pair a run scored under the cutoff, for the per-pair table:
     // what hmmer and the run scored it, and how hmmer's domains add up
@@ -197,91 +162,82 @@ pub fn stages(path: &Path, root: &Path, out: &Path) -> anyhow::Result<()> {
         rows += 1;
 
         let unit = row.row().shard().to_string();
-        let single = row.domain_count() == 1;
-        let (best_domain, cutoff) = (row.best_domain(), row.row().cutoff(hmmer));
-        let domain_clears = match (best_domain, cutoff) {
+        let best_domain = row.best_domain();
+        let dom_cutoff = row.row().domain_cutoff();
+        let domain_clears = match (best_domain, dom_cutoff) {
             (Some(best), Some(cutoff)) => best >= cutoff,
             _ => false,
         };
         let reported = row.domains_reported();
-        let tallies = at
+        let tally = at
             .entry(unit.clone())
-            .or_insert_with(|| std::array::from_fn(|_| Tally::new(runs)));
+            .or_insert_with(|| Tally::new(runs));
 
-        // the single and multi tables are hmmer's split, so a pair hmmer
-        // never reported is counted in the whole table alone
-        for (set, tally) in Domains::EACH.iter().zip(tallies.iter_mut()) {
-            if *set != Domains::All && !row.present(hmmer) {
-                continue;
-            }
-            if !set.holds(single) {
-                continue;
-            }
-            for run in 0..runs {
-                if row.row().passed(run) {
-                    tally.over[run] += 1;
-                }
+        for run in 0..runs {
+            if row.row().passed(run) {
+                tally.over[run] += 1;
             }
         }
 
         if !row.row().passed(hmmer) {
+            tally.domain_only += usize::from(domain_clears);
             return Ok(());
         }
 
-        for (set, tally) in Domains::EACH.iter().zip(tallies.iter_mut()) {
-            if !set.holds(single) {
+        tally.truth += 1;
+
+        for run in 0..runs {
+            if run == hmmer {
                 continue;
             }
-            tally.truth += 1;
 
-            for run in 0..runs {
-                if run == hmmer {
-                    continue;
-                }
-
-                // per run rather than per pair: a seeding sweep gives every
-                // arm its own seed list, so whether the pair was ever offered
-                // is the arm's answer and not the pipeline's
-                match (row.seeded(run), row.present(run), row.row().passed(run)) {
-                    (false, _, _) => tally.lost_mmseqs[run] += 1,
-                    (_, false, _) => tally.lost_cloud_align[run] += 1,
-                    (_, _, false) => {
-                        tally.lost_cutoff[run] += 1;
-                        match (domain_clears, reported) {
-                            (true, _) => tally.cutoff_domain[run] += 1,
-                            (false, 1) => {
-                                tally.cutoff_nodomain[run] += 1;
-                                tally.nodomain_single[run] += 1;
-                            }
-                            (false, _) => {
-                                tally.cutoff_nodomain[run] += 1;
-                                tally.nodomain_multi[run] += 1;
-                            }
+            // per run rather than per pair: a seeding sweep gives every
+            // arm its own seed list, so whether the pair was ever offered
+            // is the arm's answer and not the pipeline's
+            match (row.seeded(run), row.present(run), row.row().passed(run)) {
+                (false, _, _) => tally.lost_mmseqs[run] += 1,
+                (_, false, _) => tally.lost_cloud_align[run] += 1,
+                (_, _, false) => {
+                    tally.lost_cutoff[run] += 1;
+                    match (domain_clears, reported) {
+                        (true, _) => tally.cutoff_domain[run] += 1,
+                        (false, 1) => {
+                            tally.cutoff_nodomain[run] += 1;
+                            tally.nodomain_single[run] += 1;
                         }
-                        if *set == Domains::All
-                            && let (Some(cutoff), Some(best), Some(score), Some(seq)) =
-                                (cutoff, best_domain, row.score(run), row.score(hmmer))
-                        {
-                            under.push(Under {
-                                unit: unit.clone(),
-                                run,
-                                query: String::from_utf8_lossy(row.row().field(0)).into_owned(),
-                                target: String::from_utf8_lossy(row.row().field(1)).into_owned(),
-                                cutoff,
-                                hmmer: seq,
-                                domain: best,
-                                nail: score,
-                                reported,
-                                kind: match (domain_clears, reported) {
-                                    (true, _) => "domain",
-                                    (false, 1) => "single",
-                                    (false, _) => "multi",
-                                },
-                            });
+                        (false, _) => {
+                            tally.cutoff_nodomain[run] += 1;
+                            tally.nodomain_multi[run] += 1;
                         }
                     }
-                    (_, _, true) => tally.kept[run] += 1,
+                    if let (Some(cutoff), Some(hmmer_cutoff), Some(best), Some(score), Some(seq)) = (
+                        row.row().cutoff(run),
+                        row.row().cutoff(hmmer),
+                        best_domain,
+                        row.score(run),
+                        row.score(hmmer),
+                    ) {
+                        under.push(Under {
+                            unit: unit.clone(),
+                            run,
+                            query: String::from_utf8_lossy(row.row().field(0)).into_owned(),
+                            target: String::from_utf8_lossy(row.row().field(1)).into_owned(),
+                            cutoff,
+                            hmmer_cutoff,
+                            dom_cutoff,
+                            hmmer: seq,
+                            domain: best,
+                            nail: score,
+                            reported,
+                            kind: match (domain_clears, reported) {
+                                (true, _) => "domain",
+                                (false, 1) => "single",
+                                (false, _) => "multi",
+                            },
+                        });
+                    }
                 }
+                (_, _, true) => tally.kept[run] += 1,
             }
         }
 
@@ -290,7 +246,6 @@ pub fn stages(path: &Path, root: &Path, out: &Path) -> anyhow::Result<()> {
                 unseeded.entry((unit.clone(), run)).or_default().push((
                     String::from_utf8_lossy(row.row().field(0)).into_owned(),
                     String::from_utf8_lossy(row.row().field(1)).into_owned(),
-                    single,
                 ));
             }
         }
@@ -299,7 +254,7 @@ pub fn stages(path: &Path, root: &Path, out: &Path) -> anyhow::Result<()> {
     })?;
 
     ensure!(
-        at.values().any(|t| t[0].truth > 0),
+        at.values().any(|t| t.truth > 0),
         "hmmer found nothing that clears a cutoff; there is nothing to measure against"
     );
 
@@ -313,30 +268,21 @@ pub fn stages(path: &Path, root: &Path, out: &Path) -> anyhow::Result<()> {
             .as_deref()
             .with_context(|| format!("run {:?} kept no seed list", column.name))?;
 
-        let mut names: Vec<(String, String)> = pairs
-            .iter()
-            .map(|(q, t, _)| (q.clone(), t.clone()))
-            .collect();
-        let (missing, stopped) = depth::unseeded(root, arm, &unit, &mut names)?;
+        let mut names = pairs.clone();
+        let (missing, stopped) = depth::unseeded(root, arm, &unit, &mut names, threads)?;
         let missing: HashSet<(String, String)> = missing.into_iter().collect();
         let stopped: HashSet<(String, String)> = stopped.into_iter().collect();
 
-        let tallies = at
+        let tally = at
             .get_mut(&unit)
             .expect("every unit with pairs was tallied");
-        for (q, t, single) in pairs {
-            let pair = (q, t);
-            for (set, tally) in Domains::EACH.iter().zip(tallies.iter_mut()) {
-                if !set.holds(single) {
-                    continue;
-                }
-                if missing.contains(&pair) {
-                    tally.lost_prefilter[run] += 1;
-                    tally.lost_mmseqs[run] -= 1;
-                } else if stopped.contains(&pair) {
-                    tally.lost_stopped[run] += 1;
-                    tally.lost_mmseqs[run] -= 1;
-                }
+        for pair in pairs {
+            if missing.contains(&pair) {
+                tally.lost_prefilter[run] += 1;
+                tally.lost_mmseqs[run] -= 1;
+            } else if stopped.contains(&pair) {
+                tally.lost_stopped[run] += 1;
+                tally.lost_mmseqs[run] -= 1;
             }
         }
     }
@@ -365,11 +311,10 @@ pub fn stages(path: &Path, root: &Path, out: &Path) -> anyhow::Result<()> {
     .map(str::to_string)
     .to_vec();
 
-    for (i, set) in Domains::EACH.iter().enumerate() {
+    {
         let mut cells: Vec<Vec<String>> = Vec::new();
 
-        for (unit, tallies) in &at {
-            let tally = &tallies[i];
+        for (unit, tally) in &at {
             for (run, column) in scores.meta().runs.iter().enumerate() {
                 if run == hmmer {
                     continue;
@@ -400,30 +345,40 @@ pub fn stages(path: &Path, root: &Path, out: &Path) -> anyhow::Result<()> {
             "nothing but hmmer ran, so there is no pipeline to trace"
         );
 
-        let truth: usize = at.values().map(|tallies| tallies[i].truth).sum();
+        let truth: usize = at.values().map(|tally| tally.truth).sum();
+        let domain_only: usize = at.values().map(|tally| tally.domain_only).sum();
 
         let mut table = toil::Table::new(toil::Schema::new(headers.clone()));
-        preamble(&mut table, scores.meta(), truth, rows);
-        table.meta("domains", [set.name()]);
+        preamble(&mut table, scores.meta(), truth, domain_only, rows);
         for row in cells {
             table.row(row);
         }
 
-        let path = set.path(out);
         table
-            .write(&path)
-            .with_context(|| format!("failed to write {}", path.display()))?;
+            .write(out)
+            .with_context(|| format!("failed to write {}", out.display()))?;
     }
 
     // one row per pair a run scored under the cutoff, beside stages.tbl:
-    // the scores either side of the cutoff, how many domains hmmer
+    // the scores and the cutoffs each was held to, how many domains hmmer
     // reported, and the paper's class for how they add up to its score,
     // read off hmmer's domtbl for the unit
     let classes = classify(root, &scores.meta().runs[hmmer].name, &under)?;
     let mut table = toil::Table::new(toil::Schema::new(
         [
-            "unit", "run", "query", "target", "cutoff", "hmmer", "domain", "nail", "reported",
-            "kind", "class",
+            "unit",
+            "run",
+            "query",
+            "target",
+            "cutoff",
+            "hmmer_cutoff",
+            "dom_cutoff",
+            "hmmer",
+            "domain",
+            "nail",
+            "reported",
+            "kind",
+            "class",
         ]
         .map(str::to_string)
         .to_vec(),
@@ -435,6 +390,11 @@ pub fn stages(path: &Path, root: &Path, out: &Path) -> anyhow::Result<()> {
             pair.query.clone(),
             pair.target.clone(),
             format!("{:.1}", pair.cutoff),
+            format!("{:.1}", pair.hmmer_cutoff),
+            match pair.dom_cutoff {
+                Some(cutoff) => format!("{cutoff:.1}"),
+                None => "-".to_string(),
+            },
             format!("{:.1}", pair.hmmer),
             format!("{:.1}", pair.domain),
             format!("{:.1}", pair.nail),
@@ -457,7 +417,12 @@ struct Under {
     run: usize,
     query: String,
     target: String,
+    /// What the run's score was held to.
     cutoff: f32,
+    /// What hmmer's sequence score was held to.
+    hmmer_cutoff: f32,
+    /// What hmmer's best domain was held to, where the family has one.
+    dom_cutoff: Option<f32>,
     /// hmmer's sequence score.
     hmmer: f32,
     /// hmmer's best domain score.
@@ -466,8 +431,8 @@ struct Under {
     nail: f32,
     /// How many domains hmmer reported.
     reported: usize,
-    /// `domain` where one domain clears the cutoff alone, else `single` or
-    /// `multi` by how many hmmer reported.
+    /// `domain` where the best domain clears its cutoff alone, else `single`
+    /// or `multi` by how many hmmer reported.
     kind: &'static str,
 }
 
@@ -525,7 +490,10 @@ fn classify(root: &Path, hmmer: &str, under: &[Under]) -> anyhow::Result<Vec<Str
             let (domains, hmm_len) =
                 &wanted[pair.unit.as_str()][pair.query.as_str()][pair.target.as_str()];
             match domains::measure(domains, *hmm_len) {
-                Some(m) => domains::classify(&m, pair.cutoff).0.name().to_string(),
+                Some(m) => domains::classify(&m, pair.hmmer_cutoff)
+                    .0
+                    .name()
+                    .to_string(),
                 None => "-".to_string(),
             }
         })

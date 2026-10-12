@@ -605,18 +605,19 @@ the mmseqs prefilter list, in it but past the rank where prog seeding
 stopped for the query so never aligned, aligned by mmseqs and dropped,
 seeded but dropped by nail's cloud search or forward filter, and scored
 under the family's cutoff; then `cutoff_domain` and `cutoff_nodomain`,
-splitting the last by whether one of hmmer's domains clears the cutoff on
-its own, and an `over` column of every pair the run reported at or above
-the cutoff, hmmer-found or not. The first two checkpoints need the arm's
-prefilter database and the per-round slices prog seeding leaves under
-`prog-seed/<round>/`, which is why `parse stages` takes the run directory
-as well as the table. It writes the table three times: `stages.tbl` over every
-hmmer hit, `stages-single.tbl` over the hits hmmer resolved as one domain,
-and `stages-multi.tbl` over the rest, by a tenth-of-the-best-domain rule
-loss-decomp keeps a copy of; a pair hmmer never reported is in the first alone. The figure reads
-the first alone, and on 7 October 2026 it starts over as a Venn diagram of
-the pairs over the cutoff, hmmer's `truth` against nail's `over` with `kept`
-as the overlap; what it grows into is open.
+splitting the last by whether hmmer's best domain clears the `hmmer_dom`
+cutoff on its own, and an `over` column of every pair the run reported at or
+above the cutoff, hmmer-found or not. hmmer's truth is its sequence score
+against the `hmmer` cutoff, nail's and mmseqs' their own, all at `--c 2`;
+a pair whose best domain clears and whose sequence score does not is in no
+count but the header's `domain only` line. The first two checkpoints need
+the arm's prefilter database and the per-round slices prog seeding leaves
+under `prog-seed/<round>/`, which is why `parse stages` takes the run
+directory as well as the table. Beside it goes `cutoff-pairs.tbl`, one row
+per pair a run scored under its cutoff: the scores and the three cutoffs,
+how many domains hmmer reported, and the paper's class for how they add up
+against hmmer's cutoff. The figure is a letter page of eight panels off
+those two tables, each handed its pairs by the one before it.
 
 ## benchmarks/cutoffs
 

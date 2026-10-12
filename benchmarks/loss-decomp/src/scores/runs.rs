@@ -74,13 +74,6 @@ pub const SCORES_AT: usize = 2;
 /// The cell of a run whose seeding never offered the pair.
 const NEVER: &str = ".";
 
-/// How much of the best domain's score a domain needs to count as one of
-/// its own.
-//
-// recall's sens_sd column counts domains by this rule, and the
-// single-domain stages table has to read against it
-const SIGNIFICANT: f32 = 0.1;
-
 pub struct Args<'a> {
     /// The pipeline directory: `ledger.tbl` and `results/`.
     pub dir: &'a Path,
@@ -414,29 +407,6 @@ impl RunsRow<'_, '_> {
             .reduce(f32::max)
     }
 
-    /// How many of the pair's domains carry enough of hmmer's hit to count
-    /// as their own: those scoring at least [`SIGNIFICANT`] of the best.
-    pub fn domain_count(&self) -> usize {
-        let scores = self
-            .row
-            .field(self.dom)
-            .split(|byte| *byte == b',')
-            .filter_map(super::scan::score);
-
-        let best = scores.clone().fold(f32::NEG_INFINITY, f32::max);
-        if best == f32::NEG_INFINITY {
-            return 0;
-        }
-
-        // against the best domain rather than an absolute score: the
-        // question is whether the hit is one region or several, and a
-        // weak family's several are still several
-        match best > 0.0 {
-            true => scores.filter(|score| score / best >= SIGNIFICANT).count(),
-            false => scores.count(),
-        }
-    }
-
     /// How many domains hmmer reported for the pair: every row its domtbl
     /// listed, whatever each scored.
     pub fn domains_reported(&self) -> usize {
@@ -475,11 +445,11 @@ mod tests {
             let path = dir.join("cutoffs.tbl");
             std::fs::write(
                 &path,
-                "# family nail_1 mmseqs_1\n\
-                 # ------ ------ --------\n\
-                   alpha  24.5   30.0\n\
-                   beta   20.0   30.0\n\
-                   gamma  20.0   30.0\n",
+                "# family nail_1 mmseqs_1 hmmer_1 hmmer_dom_1\n\
+                 # ------ ------ -------- ------- -----------\n\
+                   alpha  24.5   30.0     24.5    20.0\n\
+                   beta   20.0   30.0     20.0    15.0\n\
+                   gamma  20.0   30.0     20.0    15.0\n",
             )
             .unwrap();
 
