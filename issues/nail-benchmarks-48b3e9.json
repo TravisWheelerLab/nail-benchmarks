@@ -13,11 +13,20 @@
   "lease_expires": "2026-10-12T21:02:43.916532607Z",
   "defer_until": null,
   "created_at": "2026-10-12T20:47:34.066177593Z",
-  "updated_at": "2026-10-12T20:47:43.916532607Z",
+  "updated_at": "2026-10-12T20:49:09.653961676Z",
   "closed_at": null,
   "close_reason": null,
   "resolution": null,
-  "notes": [],
+  "notes": [
+    {
+      "id": "e4ef40cf",
+      "at": "2026-10-12T20:49:09.653960784Z",
+      "author": "jackroddy/0d39a02d",
+      "text": "committed as 123b712; real cutoffs.tbl relearned 12 Oct with the hmmer_dom block, old columns byte-identical",
+      "commit": "123b712",
+      "branch": "claude-refactor"
+    }
+  ],
   "stamps": {
     "created": {
       "commit": "260160a",
