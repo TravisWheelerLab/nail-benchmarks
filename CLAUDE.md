@@ -564,8 +564,13 @@ padding on every row.
 Both are collected the same way: each shard on its own, written as a block in
 shard order, so the file comes out the same bytes however many threads it ran.
 `--threads` and `--mem` size that. `summary` asks only whether each run
-cleared its family's cutoff and what the domain list says, which recall's copy
-reads out of the pass string and the sweeps' out of the score columns.
+cleared its family's cutoff, which recall's copy reads out of the pass string
+and the sweeps' out of the score columns. recall's pass string spends two
+letters on hmmer, its best domain against the `hmmer_dom` cutoff and then its
+sequence score against `hmmer`, and its summary splits hmmer's hits by the
+first: `sens_dom` over the hits a domain carried alone, `sens_seq` over the
+hits only the sequence score cleared. Every tool is held to the third decoy's
+score, `--c 2`, by default.
 `stages` reads `runs.tbl` alone, because where a pair was dropped is a
 question about a run rather than about a tool, and it counts a pair as found
 only if nail kept it over the family's cutoff. `summary` still counts what a
@@ -607,8 +612,8 @@ prefilter database and the per-round slices prog seeding leaves under
 `prog-seed/<round>/`, which is why `parse stages` takes the run directory
 as well as the table. It writes the table three times: `stages.tbl` over every
 hmmer hit, `stages-single.tbl` over the hits hmmer resolved as one domain,
-and `stages-multi.tbl` over the rest, by the domain rule recall's `sens_sd`
-uses; a pair hmmer never reported is in the first alone. The figure reads
+and `stages-multi.tbl` over the rest, by a tenth-of-the-best-domain rule
+loss-decomp keeps a copy of; a pair hmmer never reported is in the first alone. The figure reads
 the first alone, and on 7 October 2026 it starts over as a Venn diagram of
 the pairs over the cutoff, hmmer's `truth` against nail's `over` with `kept`
 as the overlap; what it grows into is open.

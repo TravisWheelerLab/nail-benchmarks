@@ -25,13 +25,13 @@ use anyhow::{Context, bail};
 
 use libsail::tbl::HitColumns;
 use libsail::tbl::blast::BlastTable;
-use libsail::tbl::hmmer::{HmmerDomTable, HmmerTable};
+use libsail::tbl::hmmer::HmmerTable;
 use libsail::tbl::nail::NailTable;
 
 use util::manifest;
 
 use crate::scores::scan;
-use crate::scores::{Column, Cutoffs, Queries, Tool};
+use crate::scores::{Column, Cutoffs, Queries, Slots, Tool};
 use libsail::lines::Rows as TableRows;
 
 /// How many bits of a key the target holds.
@@ -42,34 +42,26 @@ struct Hit {
     key: u64,
     score: f32,
     run: u16,
-    /// hmmer's inclusion count. Zero for every other tool, which do not break
-    /// a hit into domains and so have nothing to include.
-    inc: u16,
-}
-
-/// One domain of one hmmer hit, in the order the domtbl listed it.
-struct Dom {
-    key: u64,
-    score: f32,
-    ord: u32,
+    /// The score of hmmer's best single domain, which no other tool reports.
+    domain: f32,
 }
 
 /// One pair, and everything a row could say about it.
 pub struct Pair<'a> {
     pub query: u32,
     pub target: &'a [u8],
-    /// One character per run, in ledger order: the tool's letter, uppercase
-    /// where that run reported the pair at or above its family's cutoff, and
-    /// `-` where the pair was not in that run's seed list at all. Not seeded
-    /// and seeded but unreported are different answers.
+    /// One letter per run, in ledger order, and two for hmmer's: the tool's
+    /// letter, uppercase where that run reported the pair at or above its
+    /// family's cutoff, and `-` where the pair was not in that run's seed
+    /// list at all. Not seeded and seeded but unreported are different
+    /// answers. [`Slots`] says where each run's letters sit.
     pub pass: &'a [u8],
     /// One per run, in ledger order, `None` where that run did not report
     /// the pair.
     pub scores: &'a [Option<f32>],
-    /// hmmer's inclusion count, `None` where hmmer did not report the pair.
-    pub inc: Option<u16>,
-    /// hmmer's domain scores, in domtbl order.
-    pub doms: &'a [f32],
+    /// The score of hmmer's best single domain, `None` where hmmer did not
+    /// report the pair.
+    pub domain: Option<f32>,
 }
 
 /// What one shard came to.
@@ -95,11 +87,9 @@ impl Count {
 #[derive(Default)]
 pub struct Scratch {
     hits: Vec<Hit>,
-    doms: Vec<Dom>,
     pass: Vec<u8>,
     scores: Vec<Option<f32>>,
     seeds: Vec<Vec<u64>>,
-    dom_scores: Vec<f32>,
     name: Vec<u8>,
 }
 
@@ -109,8 +99,7 @@ pub struct Shard<'a> {
     pub runs: &'a [Column],
     pub queries: &'a Queries,
     pub cutoffs: &'a Cutoffs,
-    /// Which run's `.domtbl` carries the domain breakdown, and the run whose
-    /// pairs are kept regardless of cutoff.
+    /// Which run is hmmer's, whose pairs are kept regardless of cutoff.
     pub hmmer: Option<usize>,
     /// Which seed list each run replayed, as an index into [`Self::lists`],
     /// and `None` for a run that replayed none.
@@ -155,7 +144,6 @@ impl Shard<'_> {
         render: &mut impl FnMut(&Pair<'_>) -> anyhow::Result<()>,
     ) -> anyhow::Result<Option<Count>> {
         scratch.hits.clear();
-        scratch.doms.clear();
         scratch.seeds.clear();
 
         // before the hit tables rather than after: the seed list holds every
@@ -194,13 +182,6 @@ impl Shard<'_> {
             if !read {
                 return Ok(None);
             }
-
-            if self.hmmer == Some(at) {
-                let path = manifest::dom_path(self.results, &column.run.name, shard);
-                if !doms(&path, &mut keys, self.queries, &mut scratch.doms)? {
-                    return Ok(None);
-                }
-            }
         }
 
         if let Keys::Named(names) = &mut keys {
@@ -209,9 +190,6 @@ impl Shard<'_> {
             let rank = names.order();
             for hit in &mut scratch.hits {
                 hit.key = rerank(hit.key, &rank);
-            }
-            for dom in &mut scratch.doms {
-                dom.key = rerank(dom.key, &rank);
             }
             for list in &mut scratch.seeds {
                 for key in list.iter_mut() {
@@ -232,16 +210,13 @@ impl Shard<'_> {
     ) -> anyhow::Result<Count> {
         let Scratch {
             hits,
-            doms,
             pass,
             scores,
             seeds,
-            dom_scores,
             name,
         } = scratch;
 
         hits.sort_unstable_by_key(|hit| (hit.key, hit.run));
-        doms.sort_unstable_by_key(|dom| (dom.key, dom.ord));
         for list in seeds.iter_mut() {
             list.sort_unstable();
         }
@@ -251,14 +226,9 @@ impl Shard<'_> {
             ..Count::default()
         };
 
-        let letters: Vec<u8> = self
-            .runs
-            .iter()
-            .map(|column| column.run.tool.letter())
-            .collect();
+        let slots = Slots::of(self.runs.iter().map(|column| column.run.tool));
 
         let mut at = 0usize;
-        let mut dom_at = 0usize;
 
         // one cursor per list rather than per run: several runs replay one
         // seeding, and advancing per run would walk a shared list twice
@@ -270,7 +240,7 @@ impl Shard<'_> {
             let query = (key >> TID) as u32;
 
             pass.clear();
-            pass.extend_from_slice(&letters);
+            pass.extend_from_slice(&slots.letters);
 
             // cleared rather than resized: `resize` on a vector that already
             // has the length leaves the previous pair's scores in it, which
@@ -278,7 +248,7 @@ impl Shard<'_> {
             scores.clear();
             scores.resize(self.runs.len(), None);
 
-            let mut inc: Option<u16> = None;
+            let mut domain: Option<f32> = None;
 
             while at < hits.len() && hits[at].key == key {
                 let run = hits[at].run;
@@ -286,28 +256,40 @@ impl Shard<'_> {
                 // a run can report a pair more than once; the best of them is
                 // the one a threshold would see
                 let mut best = f32::NEG_INFINITY;
-                let mut included = 0u16;
+                let mut best_domain = f32::NEG_INFINITY;
 
                 while at < hits.len() && hits[at].key == key && hits[at].run == run {
                     best = best.max(hits[at].score);
-                    included = included.max(hits[at].inc);
+                    best_domain = best_domain.max(hits[at].domain);
                     at += 1;
                 }
 
                 let tool = self.runs[run as usize].run.tool;
+                let seq = slots.seq[run as usize];
 
                 if self
                     .cutoffs
                     .get(tool, query)
                     .is_some_and(|cutoff| best >= cutoff)
                 {
-                    pass[run as usize] = pass[run as usize].to_ascii_uppercase();
+                    pass[seq] = pass[seq].to_ascii_uppercase();
                 }
 
                 scores[run as usize] = Some(best);
 
                 if tool == Tool::Hmmer {
-                    inc = Some(included);
+                    domain = Some(best_domain);
+
+                    // the second verdict hmmer's slot carries: its best
+                    // domain against the cutoff learned from best domains
+                    if let Some(at) = slots.domain[run as usize]
+                        && self
+                            .cutoffs
+                            .domain(query)
+                            .is_some_and(|cutoff| best_domain >= cutoff)
+                    {
+                        pass[at] = pass[at].to_ascii_uppercase();
+                    }
                 }
             }
 
@@ -325,18 +307,11 @@ impl Shard<'_> {
             // the character says so rather than a column shared by every run
             for (run, list) in self.seeds.iter().enumerate() {
                 if list.is_some_and(|li| !holds[li]) {
-                    pass[run] = b'-';
+                    pass[slots.seq[run]] = b'-';
+                    if let Some(at) = slots.domain[run] {
+                        pass[at] = b'-';
+                    }
                 }
-            }
-
-            // every domain of this pair, in the order the domtbl listed them
-            dom_scores.clear();
-            while dom_at < doms.len() && doms[dom_at].key < key {
-                dom_at += 1;
-            }
-            while dom_at < doms.len() && doms[dom_at].key == key {
-                dom_scores.push(doms[dom_at].score);
-                dom_at += 1;
             }
 
             // read off `hmmer` rather than off the tool: a table
@@ -354,8 +329,7 @@ impl Shard<'_> {
                 target: &name[..],
                 pass: &pass[..],
                 scores: &scores[..],
-                inc,
-                doms: &dom_scores[..],
+                domain,
             })?;
 
             count.rows += 1;
@@ -400,7 +374,7 @@ impl Rows<'_> {
                 bail!("{}:{at} is short of fields", path.display());
             };
 
-            if !self.push(query, target, score, 0, path, at)? {
+            if !self.push(query, target, score, f32::NEG_INFINITY, path, at)? {
                 return Ok(false);
             }
         }
@@ -427,22 +401,19 @@ impl Rows<'_> {
                 checked = true;
             }
 
-            let Some([query, target, score, inc]) = scan::hmmer_hit(line) else {
+            let Some([query, target, score, domain]) = scan::hmmer_hit(line) else {
                 bail!("{}:{at} is short of fields", path.display());
             };
 
-            let count: u16 = std::str::from_utf8(inc)
-                .ok()
-                .and_then(|text| text.parse().ok())
-                .with_context(|| {
-                    format!(
-                        "{}:{at} has an inc column of {:?}",
-                        path.display(),
-                        String::from_utf8_lossy(inc)
-                    )
-                })?;
+            let domain = scan::score(domain).with_context(|| {
+                format!(
+                    "{}:{at} has a best domain score of {:?}",
+                    path.display(),
+                    String::from_utf8_lossy(domain)
+                )
+            })?;
 
-            if !self.push(query, target, score, count, path, at)? {
+            if !self.push(query, target, score, domain, path, at)? {
                 return Ok(false);
             }
         }
@@ -455,7 +426,7 @@ impl Rows<'_> {
         query: &[u8],
         target: &[u8],
         score: &[u8],
-        inc: u16,
+        domain: f32,
         path: &Path,
         line: u64,
     ) -> anyhow::Result<bool> {
@@ -500,7 +471,7 @@ impl Rows<'_> {
             key: (qid as u64) << TID | tid,
             score,
             run: self.at,
-            inc,
+            domain,
         });
 
         Ok(true)
@@ -556,79 +527,6 @@ fn seeds(
         };
 
         out.push((qid as u64) << TID | tid);
-    }
-
-    Ok(true)
-}
-
-/// Every domain of every hit in one `--domtblout`, in the order it listed them.
-fn doms(
-    path: &Path,
-    keys: &mut Keys,
-    queries: &Queries,
-    out: &mut Vec<Dom>,
-) -> anyhow::Result<bool> {
-    let mut lines = open(path)?;
-    let mut checked = false;
-    let mut last: Option<(Vec<u8>, u32)> = None;
-    let mut ord = 0u32;
-
-    while lines.advance()? {
-        let (at, line) = (lines.line(), lines.row());
-        if !checked {
-            if !scan::fits::<HmmerDomTable>(line) {
-                bail!(
-                    "{}:{at} has {} fields, hmmer's --domtblout writes {}",
-                    path.display(),
-                    scan::count(line),
-                    HmmerDomTable::N_COLUMNS
-                );
-            }
-            checked = true;
-        }
-
-        let Some([query, target, score]) = scan::hit::<HmmerDomTable>(line) else {
-            bail!("{}:{at} is short of fields", path.display());
-        };
-
-        let Some(tid) = keys.tid(target) else {
-            return Ok(false);
-        };
-
-        let qid = match &last {
-            Some((name, id)) if name == query => *id,
-            _ => {
-                let name = std::str::from_utf8(query).with_context(|| {
-                    format!("{}:{at} has a query name that is not text", path.display())
-                })?;
-
-                let id = queries.id(name).with_context(|| {
-                    format!(
-                        "{}:{at} reports family {name:?}, which is not in the query set",
-                        path.display()
-                    )
-                })?;
-
-                last = Some((query.to_vec(), id));
-                id
-            }
-        };
-
-        let score = scan::score(score).with_context(|| {
-            format!(
-                "{}:{at} has a domain score of {:?}",
-                path.display(),
-                String::from_utf8_lossy(score)
-            )
-        })?;
-
-        out.push(Dom {
-            key: (qid as u64) << TID | tid,
-            score,
-            ord,
-        });
-
-        ord += 1;
     }
 
     Ok(true)

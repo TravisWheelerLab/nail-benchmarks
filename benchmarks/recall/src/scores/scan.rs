@@ -3,7 +3,7 @@
 //!
 //! The framing and the field split are `libsail::lines::Rows` and
 //! `libsail::tbl::fields`. What is left here is what libsail has no business
-//! knowing: hmmer's inclusion column, and the shapes of the target names this
+//! knowing: hmmer's best domain column, and the shapes of the target names this
 //! repository searches.
 
 use libsail::tbl::HitColumns;
@@ -23,15 +23,17 @@ pub fn hit<C: HitColumns>(line: &[u8]) -> Option<[&[u8]; 3]> {
 }
 
 /// hmmer's `--tblout`, for the one column `libsail`'s layout does not carry:
-/// how many of a pair's domains fall inside the inclusion threshold.
+/// the score of the pair's best single domain.
 ///
 /// ```text
-/// |  0   | 1 |   2  | 3 |  4   |  5  |  6 | ... | 15 | 16 | 17 |   18
-/// # target acc query acc e-value score bias ... dom  rep  inc  description
+/// |  0   | 1 |   2  | 3 |  4   |  5  |  6 |  7    |  8  |  9 | ...
+/// # target acc query acc e-value score bias e-value score bias ...
+/// |      full sequence            |   best 1 domain    |
 /// ```
-const INC: usize = 17;
+const DOMAIN: usize = 8;
 
-/// The query, target, score and `inc` of one `--tblout` row.
+/// The query, target, sequence score and best domain score of one `--tblout`
+/// row.
 pub fn hmmer_hit(line: &[u8]) -> Option<[&[u8]; 4]> {
     fields(
         line,
@@ -39,7 +41,7 @@ pub fn hmmer_hit(line: &[u8]) -> Option<[&[u8]; 4]> {
             HmmerTable::QUERY,
             HmmerTable::TARGET,
             HmmerTable::SCORE,
-            INC,
+            DOMAIN,
         ],
     )
 }
@@ -117,7 +119,7 @@ mod tests {
         assert!(fits::<HmmerTable>(hmmer));
         assert_eq!(
             hmmer_hit(hmmer).unwrap(),
-            [&b"2_5_RNA_ligase2"[..], b"MGYP003392859013", b"54.0", b"1"]
+            [&b"2_5_RNA_ligase2"[..], b"MGYP003392859013", b"54.0", b"53.7"]
         );
 
         let dom = b"MGYP000987338150     -            178 2-oxoacid_dh         PF00198.27   232   9.3e-44  145.5   0.5   1   1   1.1e-46   1.1e-43  145.2   0.5     5   143    42   178    39   178 0.97 FL=0";

@@ -6,7 +6,6 @@
 //! The shards themselves are collected by [`super::collect`], which serves
 //! every table here and knows what none of them look like.
 
-use std::fmt::Write as _;
 use std::io::{BufWriter, Write};
 use std::path::Path;
 
@@ -19,7 +18,7 @@ use util::set::Set;
 
 use crate::scores::collect::{self, Job};
 use crate::scores::shard::{Count, Pair, Scratch, Shard};
-use crate::scores::{Cutoffs, Meta, Queries, Tool, runs, tools};
+use crate::scores::{Cutoffs, Meta, Queries, Slots, Tool, runs, tools};
 
 /// How wide a target name is written. MGnify's are sixteen characters, and a
 /// wider one overruns rather than widening the column, since the header has
@@ -78,12 +77,13 @@ pub fn collect(args: Args<'_>) -> anyhow::Result<Count> {
         tools: ran.tools().to_vec(),
     };
 
-    // recall holds every tool to what hmmer found, and the domain breakdown is
-    // hmmer's alone, so which run is hmmer's has to be a single answer
+    // recall holds every tool to what hmmer found, so which run is hmmer's
+    // has to be a single answer
     let hmmer = meta.hmmer()?;
 
     let tools = tools(&meta.runs);
-    let schema = schema(meta.runs.len(), &tools);
+    let slots = Slots::of(meta.runs.iter().map(|run| run.tool));
+    let schema = schema(slots.letters.len(), &tools);
     let widths = schema.widths();
 
     let file = std::fs::File::create(args.out)
@@ -146,7 +146,6 @@ fn block(
     let mut out = Stream::continued(schema.clone(), widths.clone(), Vec::new());
     out.meta("shard", [shard])?;
 
-    let mut doms = String::new();
     let mut by_tool = ByTool::default();
 
     let mut count = work.collect(shard, scratch, &mut |pair: &Pair<'_>| {
@@ -165,25 +164,9 @@ fn block(
             };
         }
 
-        match pair.inc {
-            Some(inc) => line.num(inc as f64)?,
+        match pair.domain {
+            Some(score) => line.num(score as f64)?,
             None => line.missing()?,
-        };
-
-        match pair.doms {
-            [] => line.missing()?,
-            scores => {
-                doms.clear();
-                for (i, score) in scores.iter().enumerate() {
-                    let separator = match i {
-                        0 => "",
-                        _ => ",",
-                    };
-                    write!(doms, "{separator}{score:.1}").expect("a String takes what it is given");
-                }
-
-                line.text(&doms)?
-            }
         };
 
         line.end()?;
@@ -229,13 +212,13 @@ impl ByTool {
 
 /// The table's columns, which are fixed before a row is read: a stream cannot
 /// widen a column once the header is out.
-fn schema(runs: usize, tools: &[Tool]) -> Schema {
+fn schema(letters: usize, tools: &[Tool]) -> Schema {
     let mut columns = vec![
         // a query's rows are adjacent, so they line up with each other without
         // the column being padded to the widest family name in Pfam
         Column::new("query").ragged(),
         Column::new("target").min_width(TARGET),
-        Column::new("pass").min_width(runs),
+        Column::new("pass").min_width(letters),
     ];
 
     columns.extend(
@@ -244,8 +227,7 @@ fn schema(runs: usize, tools: &[Tool]) -> Schema {
             .map(|tool| Column::new(tool.to_string()).fixed(1).min_width(SCORE)),
     );
 
-    columns.push(Column::new("inc").min_width(3));
-    columns.push(Column::new("dom").ragged());
+    columns.push(Column::new("hmmer_dom").fixed(1).min_width(SCORE));
 
     Schema::new(columns)
 }
@@ -292,17 +274,11 @@ mod tests {
         format!("{query} {target} 31.0 100 60 2 1 10 1 10 1e-10 {score:.1}\n")
     }
 
-    /// One row of hmmer's `--tblout`, whose eighteenth field is `inc`.
-    fn hmmer(query: &str, target: &str, score: f32, inc: u32) -> String {
+    /// One row of hmmer's `--tblout`: the sequence score, then the best
+    /// domain's.
+    fn hmmer(query: &str, target: &str, score: f32, domain: f32) -> String {
         format!(
-            "{target} - {query} - 1e-10 {score:.1} 0.5 1e-10 {score:.1} 0.5 1.1 1 0 0 1 1 1 {inc} FL=0\n"
-        )
-    }
-
-    /// One row of hmmer's `--domtblout`, one per domain.
-    fn dom(query: &str, target: &str, score: f32) -> String {
-        format!(
-            "{target} - 100 {query} - 50 1e-10 99.9 0.5 1 1 1e-12 1e-10 {score:.1} 0.5 1 40 1 40 1 40 0.97 FL=0\n"
+            "{target} - {query} - 1e-10 {score:.1} 0.5 1e-10 {domain:.1} 0.5 1.1 1 0 0 1 1 1 1 FL=0\n"
         )
     }
 
@@ -344,20 +320,15 @@ mod tests {
         write(
             results.join("hmmer.1.tbl"),
             &format!(
-                "{}{}",
-                hmmer("alpha", t1, 24.0, 1),
+                "{}{}{}{}",
+                // over both of alpha's hmmer cutoffs: HH
+                hmmer("alpha", t1, 24.0, 24.0),
                 // hmmer alone, and under the cutoff: a row all the same
-                hmmer("alpha", t2, 5.0, 0),
-            ),
-        );
-
-        write(
-            results.join("hmmer.1.domtbl"),
-            &format!(
-                "{}{}{}",
-                dom("alpha", t1, 24.0),
-                dom("alpha", t2, 3.0),
-                dom("alpha", t2, 2.0),
+                hmmer("alpha", t2, 5.0, 3.0),
+                // the best domain clears beta's and the sequence does not: Hh
+                hmmer("beta", t1, 9.0, 8.5),
+                // the sequence clears and no domain does: hH
+                hmmer("beta", t2, 12.0, 5.0),
             ),
         );
 
@@ -375,15 +346,7 @@ mod tests {
         write(results.join("mm.2.tbl"), "");
         write(
             results.join("hmmer.2.tbl"),
-            &hmmer("gamma", "seqA", 100.0, 2),
-        );
-        write(
-            results.join("hmmer.2.domtbl"),
-            &format!(
-                "{}{}",
-                dom("gamma", "seqA", 60.0),
-                dom("gamma", "seqA", 40.0)
-            ),
+            &hmmer("gamma", "seqA", 100.0, 60.0),
         );
 
         let rows: Vec<Row> = RUNS
@@ -446,11 +409,11 @@ mod tests {
 
         write(
             dir.join("cutoffs.tbl"),
-            "# family nail_1 mmseqs_1\n\
-             # ------ ------ --------\n\
-               alpha  20.0   30.0\n\
-               beta   10.0   0.0\n\
-               gamma  0.0    0.0\n",
+            "# family nail_1 mmseqs_1 hmmer_1 hmmer_dom_1\n\
+             # ------ ------ -------- ------- -----------\n\
+               alpha  20.0   30.0     20.0    15.0\n\
+               beta   10.0   0.0      10.0    8.0\n\
+               gamma  0.0    0.0      0.0     0.0\n",
         );
     }
 
@@ -487,21 +450,22 @@ mod tests {
         assert_eq!(
             rows,
             "\
-# query target           pass nail   mmseqs hmmer  inc dom
-# ----- ---------------- ---- ------ ------ ------ --- ---
+# query target           pass  nail   mmseqs hmmer  hmmer_dom
+# ----- ---------------- ----- ------ ------ ------ ---------
 #= shard 1
-alpha MGYP000000000001 NNMH 25.0   35.0   24.0   1   24.0
-alpha MGYP000000000002 nnmh -      -      5.0    0   3.0,2.0
-beta MGYP000000000001 Nnmh 15.0   50.0   -      -   -
+alpha MGYP000000000001 NNMHH 25.0   35.0   24.0   24.0
+alpha MGYP000000000002 nnmhh -      -      5.0    3.0
+beta MGYP000000000001 NnmHh 15.0   50.0   9.0    8.5
+beta MGYP000000000002 nnmhH -      -      12.0   5.0
 #= shard 2
-beta seqB             Nnmh 11.0   -      -      -   -
-gamma seqA             nnmh 100.0  -      100.0  2   60.0,40.0
-#= end 5
+beta seqB             Nnmhh 11.0   -      -      -
+gamma seqA             nnmhh 100.0  -      100.0  60.0
+#= end 6
 "
         );
 
         // the preamble says what was searched and what it was judged by
-        assert!(text.starts_with("#= format scores 2\n#= query 3 18 "));
+        assert!(text.starts_with("#= format scores 3\n#= query 3 18 "));
         assert!(text.contains("\n#= target 1 3 12 "));
         assert!(text.contains("\n#= run nail-a nail 3.0000 s=9.0\n"));
         assert!(text.contains("\n#= pass nail-a nail-b mm hmmer\n"));

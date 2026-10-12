@@ -25,7 +25,7 @@ use std::path::Path;
 
 use anyhow::{Context, bail, ensure};
 
-use crate::scores::{Meta, Preamble, SIGNIFICANT, Tool};
+use crate::scores::{Meta, Preamble, Slots};
 
 /// How much of the file is held at once.
 const BUFFER: usize = 4 << 20;
@@ -40,7 +40,8 @@ pub struct Layout {
     pub fields: usize,
     /// Where the pass string sits.
     pub pass: usize,
-    pub dom: usize,
+    /// Where each run's letters sit inside it.
+    pub slots: Slots,
 }
 
 pub struct Frame<R: Read> {
@@ -260,13 +261,15 @@ impl State {
         );
 
         let pass = field(cells, layout.pass);
+        let want = &layout.slots.letters;
         ensure!(
-            pass.len() == meta.runs.len(),
-            "{}:{} has a pass string of {} for {} runs",
+            pass.len() == want.len(),
+            "{}:{} has a pass string of {} letters for {} runs, which spend {}",
             self.file,
             self.line,
             pass.len(),
-            meta.runs.len()
+            meta.runs.len(),
+            want.len()
         );
 
         for (at, letter) in pass.iter().enumerate() {
@@ -277,15 +280,13 @@ impl State {
                 continue;
             }
 
-            let tool = Tool::of_letter(*letter);
             ensure!(
-                tool == Some(meta.runs[at].tool),
-                "{}:{} has {:?} where run {} is {}",
+                letter.to_ascii_lowercase() == want[at],
+                "{}:{} has {:?} at letter {at} of its pass string, which is {:?}'s",
                 self.file,
                 self.line,
                 *letter as char,
-                meta.runs[at].name,
-                meta.runs[at].tool
+                want[at] as char
             );
         }
 
@@ -326,53 +327,28 @@ impl<'a> Row<'a> {
         field(&self.cells, at)
     }
 
-    /// One character per run, in the order `#= pass` names them.
-    pub fn pass(&self) -> &'a [u8] {
-        let layout = self
-            .state
+    fn layout(&self) -> &'a Layout {
+        self.state
             .layout
             .as_ref()
-            .expect("a frame is given its layout before its first row");
+            .expect("a frame is given its layout before its first row")
+    }
 
-        self.field(layout.pass)
+    /// The run letters, in the order `#= pass` names the runs.
+    pub fn pass(&self) -> &'a [u8] {
+        self.field(self.layout().pass)
     }
 
     /// Whether one run reported this pair at or above its family's cutoff.
     pub fn passed(&self, run: usize) -> bool {
-        self.pass().get(run).is_some_and(u8::is_ascii_uppercase)
+        let at = self.layout().slots.seq[run];
+        self.pass().get(at).is_some_and(u8::is_ascii_uppercase)
     }
 
-    /// hmmer's domain scores, in the order the domtbl listed them.
-    pub fn domains(&self) -> impl Iterator<Item = f32> + 'a {
-        let layout = self
-            .state
-            .layout
-            .as_ref()
-            .expect("a frame is given its layout before its first row");
-
-        self.field(layout.dom)
-            .split(|byte| *byte == b',')
-            .filter_map(super::scan::score)
-    }
-
-    /// How many of the pair's domains carry enough of the hit to count as
-    /// their own.
-    pub fn domain_count(&self) -> usize {
-        let best = self.domains().fold(f32::NEG_INFINITY, f32::max);
-        if best == f32::NEG_INFINITY {
-            return 0;
-        }
-
-        // against the best domain rather than an absolute score:
-        // the question is whether the hit is one region of the
-        // sequence or several, and a weak family's several are
-        // still several
-        match best > 0.0 {
-            true => self
-                .domains()
-                .filter(|score| score / best >= SIGNIFICANT)
-                .count(),
-            false => self.domains().count(),
-        }
+    /// Whether one run's best domain cleared the cutoff learned from best
+    /// domains, which only a run of hmmer has a letter for.
+    pub fn domain_passed(&self, run: usize) -> bool {
+        self.layout().slots.domain[run]
+            .is_some_and(|at| self.pass().get(at).is_some_and(u8::is_ascii_uppercase))
     }
 }

@@ -11,8 +11,8 @@
 //! one -- a summary asks only what the `pass` string says. One that wanted a
 //! tool's score would add the accessor then, against this layout.
 
-use crate::scores::Meta;
 use crate::scores::frame::Layout;
+use crate::scores::{Meta, Slots};
 
 /// Where recall's score columns start: after query, target and pass.
 const SCORES: usize = 3;
@@ -20,15 +20,15 @@ const SCORES: usize = 3;
 /// Where the pass string sits.
 pub const PASS: usize = 2;
 
-/// Where this table's columns sit: query, target, pass, one per tool, inc,
-/// dom.
+/// Where this table's columns sit: query, target, pass, one per tool,
+/// hmmer_dom.
 pub fn layout(meta: &Meta) -> Layout {
     let tools = meta.tools().len();
 
     Layout {
-        fields: SCORES + tools + 2,
+        fields: SCORES + tools + 1,
         pass: PASS,
-        dom: SCORES + tools + 1,
+        slots: Slots::of(meta.runs.iter().map(|run| run.tool)),
     }
 }
 
@@ -41,18 +41,18 @@ mod tests {
 
     /// Two runs, two rows, and a pair hmmer never reported.
     const FILE: &str = "\
-#= format scores 2
+#= format scores 3
 #= query 3 18 120
 #= target 1 3 12 40
 #= cutoffs /x/cutoffs.tbl c=0
 #= run nail-a nail 3.0000 s=9.0
 #= run hmmer hmmer 2.0000
 #= pass nail-a hmmer
-# query target           pass nail   hmmer  inc dom
-# ----- ---------------- ---- ------ ------ --- ---
+# query target           pass nail   hmmer  hmmer_dom
+# ----- ---------------- ---- ------ ------ ---------
 #= shard 1
-alpha MGYP000000000001 NH 25.0   24.0   1   -3.0,2.0
-beta MGYP000000000002 Nh 11.0   -      -   -
+alpha MGYP000000000001 NHH 25.0   24.0   24.0
+beta MGYP000000000002 nhH 11.0   12.0   5.0
 #= end 2
 ";
 
@@ -77,7 +77,7 @@ beta MGYP000000000002 Nh 11.0   -      -   -
                 String::from_utf8_lossy(row.field(1)),
                 String::from_utf8_lossy(row.pass()),
                 String::from_utf8_lossy(row.field(SCORES)),
-                row.domain_count(),
+                row.domain_passed(1),
             ));
             Ok(())
         })?;
@@ -90,16 +90,10 @@ beta MGYP000000000002 Nh 11.0   -      -   -
         assert_eq!(
             read(FILE).unwrap(),
             [
-                "alpha MGYP000000000001 NH 25.0 1",
-                "beta MGYP000000000002 Nh 11.0 0",
+                "alpha MGYP000000000001 NHH 25.0 true",
+                "beta MGYP000000000002 nhH 11.0 false",
             ]
         );
-    }
-
-    #[test]
-    fn the_domain_count_does_not_depend_on_the_order() {
-        let swapped = FILE.replace("-3.0,2.0", "2.0,-3.0");
-        assert_eq!(read(&swapped).unwrap(), read(FILE).unwrap());
     }
 
     #[test]
@@ -113,7 +107,7 @@ beta MGYP000000000002 Nh 11.0   -      -   -
             })
             .unwrap();
 
-        assert_eq!(passed, [(true, true), (true, false)]);
+        assert_eq!(passed, [(true, true), (false, true)]);
     }
 
     /// Every way the file can be wrong that would otherwise be read as an
@@ -121,10 +115,10 @@ beta MGYP000000000002 Nh 11.0   -      -   -
     #[test]
     fn a_broken_file_is_refused() {
         let cases = [
-            ("an older format", FILE.replace("#= format scores 2\n", "")),
+            ("an older format", FILE.replace("#= format scores 3\n", "")),
             (
                 "another table's format",
-                FILE.replace("#= format scores 2", "#= format runs 1"),
+                FILE.replace("#= format scores 3", "#= format runs 1"),
             ),
             (
                 "a legend that names another run",
@@ -132,15 +126,19 @@ beta MGYP000000000002 Nh 11.0   -      -   -
             ),
             (
                 "a pass string of the wrong length",
-                FILE.replace(" NH ", " N "),
+                FILE.replace(" NHH ", " NH "),
             ),
             (
                 "a letter that is not the run's tool",
-                FILE.replace(" NH ", " NM "),
+                FILE.replace(" NHH ", " NMH "),
+            ),
+            (
+                "a domain letter that is not hmmer's",
+                FILE.replace(" NHH ", " NNH "),
             ),
             (
                 "a row of the wrong width",
-                FILE.replace("11.0   -      -   -", "11.0   -      -"),
+                FILE.replace("11.0   12.0   5.0", "11.0   12.0"),
             ),
             (
                 "a shard opened twice",
@@ -149,8 +147,8 @@ beta MGYP000000000002 Nh 11.0   -      -   -
             (
                 "rows out of order",
                 FILE.replace(
-                    "alpha MGYP000000000001 NH 25.0   24.0   1   -3.0,2.0\nbeta MGYP000000000002 Nh 11.0   -      -   -",
-                    "beta MGYP000000000002 Nh 11.0   -      -   -\nalpha MGYP000000000001 NH 25.0   24.0   1   -3.0,2.0",
+                    "alpha MGYP000000000001 NHH 25.0   24.0   24.0\nbeta MGYP000000000002 nhH 11.0   12.0   5.0",
+                    "beta MGYP000000000002 nhH 11.0   12.0   5.0\nalpha MGYP000000000001 NHH 25.0   24.0   24.0",
                 ),
             ),
             ("no trailer", FILE.replace("#= end 2\n", "")),

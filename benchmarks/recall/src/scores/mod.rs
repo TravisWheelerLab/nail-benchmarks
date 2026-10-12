@@ -8,19 +8,19 @@
 //! [`collect`] turns shards into a file; [`frame`] reads one back.
 //!
 //! ```text
-//! #= format scores 2
+//! #= format scores 3
 //! #= query <count> <residues> <bytes>
 //! #= target <shard> <count> <residues> <bytes>
 //! #= seed <shard> <wall_s>
 //! #= cutoffs <path> c=<n>
 //! #= run <name> <tool> <wall_s> [k=v ...]
 //! #= pass <run name> ...
-//! # query target           pass   nail   mmseqs hmmer  inc dom
-//! # ----- ---------------- ------ ------ ------ ------ --- ---
+//! # query target           pass    nail   mmseqs hmmer  hmmer_dom
+//! # ----- ---------------- ------- ------ ------ ------ ---------
 //! #= shard 1
-//! 2-Hacid_dh_C MGYP000522683479 NNNMMH 98.8   94.0   98.7   1   98.1
-//! 2-Hacid_dh_C MGYP000715666710 nnnmmh -      -      13.7   0   9.3,2.8
-//! 2-oxoacid_dh MGYP000987338150 NNNMMH 145.6  140.0  145.5  1   145.2
+//! 2-Hacid_dh_C MGYP000522683479 NNNMMHH 98.8   94.0   98.7   98.1
+//! 2-Hacid_dh_C MGYP000715666710 nnnmmhh -      -      13.7   9.3
+//! 2-oxoacid_dh MGYP000987338150 NNNMMhH 145.6  140.0  145.5  20.2
 //! #= shard 2
 //! ...
 //! #= end <rows>
@@ -37,19 +37,21 @@
 //! A sequence lives in exactly one shard, so the blocks partition the pairs
 //! and nothing has to sort the whole file at once.
 //!
-//! `pass` holds one character per run: `n`, `m` or `h` for the tool, uppercase
+//! `pass` holds one letter per run: `n`, `m` or `h` for the tool, uppercase
 //! where that run reported the pair at or above its family's cutoff and
-//! lowercase otherwise, so a pair no run passed reads `nnnmmh`. hmmer is held
-//! to nail's cutoff, as it is in the calibration.
+//! lowercase otherwise. hmmer's run spends two letters, its best domain's
+//! verdict and then its sequence score's, each against the cutoff the
+//! calibration learned from that score: `HH` clears both, `hH` clears the
+//! sequence cutoff with no domain clearing its own, `Hh` the reverse. A pair
+//! no run passed reads `nnnmmhh`.
 //!
 //! Which axis the score columns run along is the one thing the two tables
 //! disagree about, and [`write`] and [`runs`] each say why. `-` means no score:
 //! absent is not one, and a zero or a NaN would compare against a threshold
 //! and look like one.
 //!
-//! `inc` is hmmer's tblout inclusion count and `dom` its per-domain scores in
-//! domtbl order, so the k-th score is the k-th row of
-//! `results/<run>.<shard>.domtbl` and the coordinates stay there.
+//! `hmmer_dom` is the score of hmmer's best single domain, out of the same
+//! tblout row as its sequence score.
 //!
 //! A pair earns a row by clearing some run's cutoff, or by hmmer having
 //! reported it at all. hmmer's whole reported set is kept because it is what
@@ -57,8 +59,7 @@
 //! pair they can be asked about.
 //!
 //! Every column is padded to its width except `query`, which is unpadded
-//! because a query's rows are adjacent and so line up without it, and `dom`,
-//! which is as wide as the pair has domains.
+//! because a query's rows are adjacent and so line up without it.
 
 pub mod analyze;
 pub mod collect;
@@ -83,11 +84,7 @@ use util::ledger::{self, Ledger};
 use util::set::Set;
 
 /// What recall's table opens with. The sweeps' is [`runs::FORMAT`].
-pub const FORMAT: &str = "scores 2";
-
-/// A tenth of the best domain, which is mgnify's threshold for a domain
-/// carrying enough of a hit to count as its own.
-pub const SIGNIFICANT: f32 = 0.1;
+pub const FORMAT: &str = "scores 3";
 
 /// How many runs a `scores.tbl` can hold, which is the length of its pass
 /// string.
@@ -126,16 +123,6 @@ impl Tool {
             Tool::Nail => b'n',
             Tool::Mmseqs => b'm',
             Tool::Hmmer => b'h',
-        }
-    }
-
-    /// The tool a `pass` character names, whichever case it is in.
-    pub fn of_letter(letter: u8) -> Option<Tool> {
-        match letter.to_ascii_lowercase() {
-            b'n' => Some(Tool::Nail),
-            b'm' => Some(Tool::Mmseqs),
-            b'h' => Some(Tool::Hmmer),
-            _ => None,
         }
     }
 
@@ -269,6 +256,45 @@ pub fn tools(runs: &[Run]) -> Vec<Tool> {
         .collect()
 }
 
+/// Where each run's letters sit in a `pass` string.
+pub struct Slots {
+    /// The string with every run under its cutoff: each run's tool letter,
+    /// lowercase, once per letter the run spends.
+    pub letters: Vec<u8>,
+    /// Where each run's cutoff letter sits.
+    pub seq: Vec<usize>,
+    /// Where each run's domain letter sits, which only a run of hmmer has.
+    pub domain: Vec<Option<usize>>,
+}
+
+impl Slots {
+    pub fn of(tools: impl IntoIterator<Item = Tool>) -> Slots {
+        let mut out = Slots {
+            letters: Vec::new(),
+            seq: Vec::new(),
+            domain: Vec::new(),
+        };
+
+        for tool in tools {
+            // the domain letter before the sequence letter, so hmmer's
+            // slot reads as the row's `hmmer_dom` and `hmmer` columns do
+            // in reverse: the stricter verdict first
+            let domain = match tool {
+                Tool::Hmmer => {
+                    out.letters.push(tool.letter());
+                    Some(out.letters.len() - 1)
+                }
+                Tool::Nail | Tool::Mmseqs => None,
+            };
+            out.domain.push(domain);
+            out.seq.push(out.letters.len());
+            out.letters.push(tool.letter());
+        }
+
+        out
+    }
+}
+
 // -------------------------------------------------------------------- query
 
 /// The query families, numbered in the order their names sort.
@@ -366,30 +392,37 @@ impl Queries {
 // ------------------------------------------------------------------ cutoffs
 
 /// The score each family's hits are held to, by query id.
-///
-/// hmmer takes nail's: nail approximates hmmer's model, and the calibration
-/// learns no threshold of hmmer's own that anything reads.
 pub struct Cutoffs {
     nail: Vec<Option<f32>>,
     mmseqs: Vec<Option<f32>>,
+    hmmer: Vec<Option<f32>>,
+    /// What hmmer's best single domain is held to, learned from the decoys'
+    /// best domains the way `hmmer` is from their sequence scores.
+    hmmer_dom: Vec<Option<f32>>,
 }
 
 impl Cutoffs {
     /// The threshold a run of `tool` is held to on one family.
     pub fn get(&self, tool: Tool, query: u32) -> Option<f32> {
         let column = match tool {
-            Tool::Nail | Tool::Hmmer => &self.nail,
+            Tool::Nail => &self.nail,
             Tool::Mmseqs => &self.mmseqs,
+            Tool::Hmmer => &self.hmmer,
         };
 
         column.get(query as usize).copied().flatten()
+    }
+
+    /// The threshold hmmer's best domain is held to on one family.
+    pub fn domain(&self, query: u32) -> Option<f32> {
+        self.hmmer_dom.get(query as usize).copied().flatten()
     }
 
     /// One score per family per tool, out of the decoys the calibration scored
     /// it against.
     ///
     /// A zero means the family had fewer decoys than the file has slots, so
-    /// that tool learned nothing about it and gets no cutoff. The two tools are
+    /// that tool learned nothing about it and gets no cutoff. The tools are
     /// kept apart rather than dropped together: a family nail has a threshold
     /// for is still measurable against nail, whatever mmseqs made of it.
     ///
@@ -400,18 +433,24 @@ impl Cutoffs {
         let mut out = Cutoffs {
             nail: vec![None; queries.len()],
             mmseqs: vec![None; queries.len()],
+            hmmer: vec![None; queries.len()],
+            hmmer_dom: vec![None; queries.len()],
         };
 
-        parse(path, c, |family, nail, mmseqs| {
+        parse(path, c, |family, scores| {
             // a family the calibration knows and this query set does not is
             // not an error: the calibration covers every family Pfam has
             if let Some(id) = queries.id(family) {
+                let [nail, mmseqs, hmmer, hmmer_dom] = scores;
                 out.nail[id as usize] = nail;
                 out.mmseqs[id as usize] = mmseqs;
+                out.hmmer[id as usize] = hmmer;
+                out.hmmer_dom[id as usize] = hmmer_dom;
             }
         })?;
 
-        if out.nail.iter().all(Option::is_none) && out.mmseqs.iter().all(Option::is_none) {
+        let learned = [&out.nail, &out.mmseqs, &out.hmmer, &out.hmmer_dom];
+        if learned.iter().all(|col| col.iter().all(Option::is_none)) {
             bail!(
                 "no usable cutoffs at index {c} in {} for any of the {} families searched",
                 path.display(),
@@ -423,16 +462,13 @@ impl Cutoffs {
     }
 }
 
-/// Read `cutoffs.tbl`, handing each family its two thresholds at index `c`.
+/// Read `cutoffs.tbl`, handing each family its thresholds at index `c`: nail,
+/// mmseqs, hmmer's sequence score and hmmer's best domain, in that order.
 ///
 /// `cutoffs.tbl` names its columns `<tool>_1..<tool>_5` and `<tool>_n`, so the
 /// column to read is found by name rather than by counting -- which is what
 /// lets the calibration add a tool without moving anything here.
-fn parse(
-    path: &Path,
-    c: usize,
-    mut row: impl FnMut(&str, Option<f32>, Option<f32>),
-) -> anyhow::Result<()> {
+fn parse(path: &Path, c: usize, mut row: impl FnMut(&str, [Option<f32>; 4])) -> anyhow::Result<()> {
     let table =
         toil::Table::read(path).with_context(|| format!("failed to read {}", path.display()))?;
 
@@ -443,7 +479,12 @@ fn parse(
             .with_context(|| format!("{} has no {name} column", path.display()))
     };
 
-    let (nail_at, mmseqs_at) = (column("nail")?, column("mmseqs")?);
+    let at = [
+        column("nail")?,
+        column("mmseqs")?,
+        column("hmmer")?,
+        column("hmmer_dom")?,
+    ];
 
     for cells in table.rows() {
         let Some(family) = cells.get(0) else {
@@ -458,7 +499,7 @@ fn parse(
                 .filter(|s| *s > 0.0)
         };
 
-        row(family, score(nail_at), score(mmseqs_at));
+        row(family, at.map(score));
     }
 
     Ok(())

@@ -19,11 +19,12 @@ use crate::scores::{Tool, read};
 /// What every run found, and what it cost.
 ///
 /// One pass over the table, counting per run: what it reported over the
-/// cutoff, how much of that hmmer also found, and how much of that hmmer read
-/// as one domain rather than several. Nothing is held but the counters.
+/// cutoff, how much of that hmmer also found, and that split by whether one
+/// of hmmer's domains cleared its own cutoff or only the sequence score did.
+/// Nothing is held but the counters.
 ///
 /// This reads either table. A summary asks only whether each run cleared its
-/// family's cutoff and what the domain list says, and the two tables answer
+/// family's cutoff and what hmmer's domain letter says, and the two tables answer
 /// the first differently -- recall's out of its `pass` string, a sweep's out
 /// of the run's own score column. So it works over the frame, which is given
 /// the verdict its format calls for, rather than over either reader.
@@ -44,22 +45,32 @@ pub fn summary(path: &Path, out: &Path) -> anyhow::Result<()> {
 
     let mut found = vec![0usize; runs];
     let mut hits = vec![0usize; runs];
-    let mut hits_sd = vec![0usize; runs];
-    let (mut truth, mut truth_sd) = (0usize, 0usize);
+    let mut hits_dom = vec![0usize; runs];
+    let mut hits_seq = vec![0usize; runs];
+    let (mut truth, mut truth_dom, mut truth_seq) = (0usize, 0usize, 0usize);
+    // pairs whose best domain cleared while the sequence score did not,
+    // which are no part of the truth and are counted to say how rare
+    let mut domain_only = 0usize;
     let mut rows = 0u64;
 
     scores.each(|row| {
         rows += 1;
 
         let true_hit = row.passed(hmmer);
+        let by_domain = row.domain_passed(hmmer);
 
-        // a hit hmmer breaks into one region is a different question from one
-        // it breaks into several: the tools disagree most about the second
-        let single = true_hit && row.domain_count() == 1;
+        // a hit one of hmmer's domains carries on its own is a different
+        // question from one only the whole sequence adds up to: the tools
+        // disagree most about the second
+        let dom = true_hit && by_domain;
+        let seq = true_hit && !by_domain;
 
         if true_hit {
             truth += 1;
-            truth_sd += usize::from(single);
+            truth_dom += usize::from(dom);
+            truth_seq += usize::from(seq);
+        } else if by_domain {
+            domain_only += 1;
         }
 
         for run in 0..runs {
@@ -73,7 +84,8 @@ pub fn summary(path: &Path, out: &Path) -> anyhow::Result<()> {
             // with rather than for everything it scored highly
             if true_hit {
                 hits[run] += 1;
-                hits_sd[run] += usize::from(single);
+                hits_dom[run] += usize::from(dom);
+                hits_seq[run] += usize::from(seq);
             }
         }
 
@@ -98,9 +110,11 @@ pub fn summary(path: &Path, out: &Path) -> anyhow::Result<()> {
     let mut headers = vec!["name".to_string(), "tool".to_string()];
     headers.extend(keys.iter().map(|k| k.to_string()));
     headers.extend(
-        ["wall_s", "found", "hits", "sens", "hits_sd", "sens_sd"]
-            .iter()
-            .map(|h| h.to_string()),
+        [
+            "wall_s", "found", "hits", "sens", "hits_dom", "sens_dom", "hits_seq", "sens_seq",
+        ]
+        .iter()
+        .map(|h| h.to_string()),
     );
 
     let cells: Vec<Vec<String>> = scores
@@ -119,8 +133,10 @@ pub fn summary(path: &Path, out: &Path) -> anyhow::Result<()> {
                 found[i].to_string(),
                 hits[i].to_string(),
                 format!("{:.4}", frac(hits[i], truth)),
-                hits_sd[i].to_string(),
-                format!("{:.4}", frac(hits_sd[i], truth_sd)),
+                hits_dom[i].to_string(),
+                format!("{:.4}", frac(hits_dom[i], truth_dom)),
+                hits_seq[i].to_string(),
+                format!("{:.4}", frac(hits_seq[i], truth_seq)),
             ]);
 
             cells
@@ -128,7 +144,12 @@ pub fn summary(path: &Path, out: &Path) -> anyhow::Result<()> {
         .collect();
 
     let mut table = toil::Table::new(toil::Schema::new(headers));
-    preamble(&mut table, &scores.meta, truth, rows);
+    preamble(
+        &mut table,
+        &scores.meta,
+        [truth, truth_dom, truth_seq, domain_only],
+        rows,
+    );
     for row in cells {
         table.row(row);
     }
@@ -140,7 +161,12 @@ pub fn summary(path: &Path, out: &Path) -> anyhow::Result<()> {
 
 /// What was searched, what the fractions are fractions of, and the two times
 /// the figures use as reference lines.
-fn preamble(table: &mut toil::Table, meta: &crate::scores::Meta, truth: usize, rows: u64) {
+///
+/// `truth` is hmmer's hits, then how many a domain carried, how many only the
+/// sequence score did, and the pairs where a domain cleared and the sequence
+/// score did not, which are in none of the fractions.
+fn preamble(table: &mut toil::Table, meta: &crate::scores::Meta, truth: [usize; 4], rows: u64) {
+    let [truth, dom, seq, domain_only] = truth;
     let (mut count, mut residues, mut bytes) = (0usize, 0u64, 0u64);
     for (_, size) in &meta.targets {
         count += size.count;
@@ -175,6 +201,9 @@ fn preamble(table: &mut toil::Table, meta: &crate::scores::Meta, truth: usize, r
             meta.runs.len()
         ))
         .comment(format!("hmmer  {truth:>9} hits      {hmmer:>12.4} wall_s"))
+        .comment(format!(
+            "       {dom:>9} by domain {seq:>12} by sequence only {domain_only:>12} domain only"
+        ))
         .comment(format!("seed   {:>9}           {seed:>12} wall_s", ""))
         .comment("");
 }
