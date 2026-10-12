@@ -19,6 +19,7 @@
   "resolution": "done",
   "notes": [
     {
+      "id": "9e47e283",
       "at": "2026-10-06T22:13:00.631262506Z",
       "author": "jackroddy/21204bf1",
       "text": "cutoffs-toy done 6 Oct: recipe raised to 1000 families over 2 shards of 50,000, builds in 18 s, every stage finds something (13 rejects, 2,084 decoys, cutoffs for 235 nail / 672 mmseqs / 263 hmmer families), all five stages in about a minute at -t 48 -j 48. recall-toy and long-seqs-toy still unchecked.",
@@ -26,6 +27,7 @@
       "branch": "claude-refactor"
     },
     {
+      "id": "63e397ba",
       "at": "2026-10-06T23:00:40.214358235Z",
       "author": "jackroddy/0d39a02d",
       "text": "recall-toy scaled to fams 1000, seqs 50000, shards 2 (commit after d3f18ab): summary rows for all 6 runs, hmmer 6,299 hits over cutoff, nail 5,286-5,634, mmseqs 4,479-4,924. long-seqs has no toy any more: six pairs, nail only, real label runs end to end in 26 s.",

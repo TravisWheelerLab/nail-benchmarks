@@ -19,6 +19,7 @@
   "resolution": null,
   "notes": [
     {
+      "id": "f7e70a51",
       "at": "2026-09-29T04:43:12.354796673Z",
       "author": "jackroddy/01dd6c44",
       "text": "Design agreed 28 Sep: three nail runs, -s 12.0/10.0/7.5, each --max-seqs unbounded. Map every nail hit to its depth, its rank in its query's mmseqs prefilter list. Bin depth in widening non-overlapping ranges like prog's doubling n_take. Per bin and per -s: of the prefilter pairs at that depth, the fraction that are true nail hits, where true means kept over the family cutoff AND in hmmer's truth set (reading 2; may change). First version to run overnight.",
@@ -26,6 +27,7 @@
       "branch": "claude-refactor"
     },
     {
+      "id": "454da53b",
       "at": "2026-09-29T04:53:45.832388083Z",
       "author": "jackroddy/01dd6c44",
       "text": "Built and committed. run: arms s12, s10, s7.5, static, --mmseqs-max-seqs 2147483647, each seeding into results/prefilter.<arm>.<unit>/ (kept, ~30 GB per unit at s12). parse depth: reads runs.tbl, ranks every kept or truth pair in its prefilter entry (pdb.N files joined under pdb.index in numeric order; qdb_h/tdb_h give names), bins doubling from --bin 200, writes depth.tbl with prefilter/seeds/kept/truth/hits/frac per bin and a last row of truth pairs the prefilter never returned. Toy verified in the sandbox. Real run started 28 Sep evening at 48 threads in the real tree; a watcher parses runs, stages and depth when it finishes. Tables land in sets/loss-decomp/analysis/.",
@@ -33,6 +35,7 @@
       "branch": "claude-refactor"
     },
     {
+      "id": "d41c9d86",
       "at": "2026-09-29T05:20:17.241469636Z",
       "author": "jackroddy/01dd6c44",
       "text": "Corrected 28 Sep late: the seeding pass plus replay was wrong; an arm is now one nail search (static, unbounded, --seeds-out beside the table). Commit a3a6c9c. Real run restarted; log tmp-claude/2026-09-28-loss-decomp/run-real2.log, watcher parses into sets/loss-decomp/analysis/ and logs to after-run2.log.",
@@ -40,6 +43,7 @@
       "branch": "claude-refactor"
     },
     {
+      "id": "fbc3e991",
       "at": "2026-09-29T17:34:36.509918569Z",
       "author": "jackroddy/01dd6c44",
       "text": "Real run done 28 Sep 23:30, 69 min. depth.tbl and stages.tbl in sets/loss-decomp/analysis/. s12 unbounded: sens 0.912 mgnify, 0.904 swissprot. Cumulative by rank ceiling on mgnify: 200 0.625, 800 0.828, 1600 0.877, 3200 0.897, 6400 0.907. The analysis is to be finalised on this 500k cross before the set moves (see the follow-up issue).",
@@ -47,6 +51,7 @@
       "branch": "claude-refactor"
     },
     {
+      "id": "1bfa210e",
       "at": "2026-10-01T02:07:48.827858572Z",
       "author": "jackroddy/01dd6c44",
       "text": "30 Sep, state. The real run (28 Sep, 69 min) stands: s12, s10, s7.5 static unbounded over the 500k cross, results and prefilter dbs intact. Its ledger.tbl and manifest.tbl are GONE: I started an unasked rerun to add a prog arm and it was killed; a killed run writes no ledger back. runs.tbl, stages.tbl, depth.tbl, hits.tbl and lists.tbl in analysis/ are intact and were made from these results. The --prog n:f flag and the prog Arm in run.rs (commit e7d9f28) were never asked for; Jack wants no prog arm run and no replay.",
@@ -54,6 +59,7 @@
       "branch": "claude-refactor"
     },
     {
+      "id": "851b0f0f",
       "at": "2026-10-01T02:07:48.856104529Z",
       "author": "jackroddy/01dd6c44",
       "text": "30 Sep, figures. figures/loss-decomp-depth-cumulative.pdf: per unit, columns square on log rank, each column the distribution across families of good seeds (kept over cutoff AND in hmmer truth) among the first R prefilter pairs over R; one cell per reachable k/R up to 100; colour = family count, log scale bent so 10,000 sits at 0.7, 20,795 at full, cells coloured directly (FuncNorm paints NaN cells, so alpha 0 by hand), rasterised. figures/loss-decomp-depth-binned.pdf: bins of doubling width 1-200, 201-600, 601-1,400 ... as equal columns, labels at 45 degrees; rows are good seeds per family in the bin: 0,1,2,3,4 then ranges widening by 1.5. Jack: okayish for now. Rejected on the way: min-max band, 1% cells with log y, percent-of-families colour, linear colour, log y on the cumulative. Script: benchmarks/loss-decomp/scripts/plot_depth.py; plot.rs runs it when hits.tbl and lists.tbl exist.",
@@ -61,6 +67,7 @@
       "branch": "claude-refactor"
     },
     {
+      "id": "6f7df8b7",
       "at": "2026-10-01T02:07:48.885613193Z",
       "author": "jackroddy/01dd6c44",
       "text": "30 Sep, decided next. (1) Top-level figure first: per unit and arm, hmmer's lost hits split by stage (seeding / cloud+align / cutoff) as a stacked 100% bar, from stages.tbl, with count lost and sensitivity beside. (2) No synthetic result tables. Instead one toil table per -s arm and unit: nail's tblout rows plus rank (prefilter rank) and gate_f (prefix MIN over the rounds before the row's own of seeds-in-round / round width, prog-n fixed at 200; first round 1). Static cap M = rows with rank <= M; prog at f = rows with gate_f >= f. Prefix-min, not the row's own round fraction, or a late round with a high fraction would pull hits prog never reached. Before building: check in nail seed_stage.rs whether the per-round count is seeds in the round or seeds so far, and that rounds are 200, 400, 800 from rank 1. Seeded-not-reported pairs are not in a tblout and stay with the seed lists. (3) Then the set moves to mgy one recall shard + swissprot + pid (issue 31b742).",
@@ -68,6 +75,7 @@
       "branch": "claude-refactor"
     },
     {
+      "id": "6f383d07",
       "at": "2026-10-01T02:07:48.916866914Z",
       "author": "jackroddy/01dd6c44",
       "text": "30 Sep, facts from the real run. s12 unbounded sens 0.912 mgnify / 0.904 swissprot; cumulative by rank ceiling on mgnify 200 0.625, 800 0.828, 1600 0.877, 3200 0.897, 6400 0.907. ABC_tran has 9,596 hmmer hits in 500k MGnify and its first 5,000 prefilter pairs are all hits; AAA_21, HATPase_c, Response_reg similar at 2,000+. 53% of mgnify families and 25% of swissprot families have no hit in ranks 1-200. The s12 prefilter returns ~23% of targets per query (lists ~115k); align keeps 1.2M seeds of 2.4G pairs on mgnify.",
@@ -75,6 +83,7 @@
       "branch": "claude-refactor"
     },
     {
+      "id": "ab109d5a",
       "at": "2026-10-01T02:09:59.642502097Z",
       "author": "jackroddy/01dd6c44",
       "text": "released at session end",
@@ -82,6 +91,7 @@
       "branch": "claude-refactor"
     },
     {
+      "id": "c7f8df84",
       "at": "2026-10-01T02:26:58.316188343Z",
       "author": "jackroddy/924b3ec0",
       "text": "30 Sep evening: binned depth figure committed, prog arm removed, stages figure done (issue 68e851 closed), ledger restore dropped (db5b20). Next is (2) of the 30 Sep plan: the per-arm hit tables with rank and gate_f, after checking nail's seed_stage.rs for the per-round count. When those exist the stages figure can grow a bar per synthetic cap or prog f from the same tables, and its never-seeded segment splits into never-in-the-prefilter-list and beyond-the-cap; the script already takes its segments from whatever lost_ columns stages.tbl carries.",
@@ -89,6 +99,7 @@
       "branch": "claude-refactor"
     },
     {
+      "id": "215834a2",
       "at": "2026-10-01T03:51:15.512407706Z",
       "author": "jackroddy/924b3ec0",
       "text": "30 Sep late: hmmer removed from loss-decomp (commit after 25dc076); the s12 unbounded arm is the ceiling and a lost hit is one of its kept pairs another arm did not keep. Set rebuilt as Pfam x one recall shard of MGnify. Real run started at 48 threads about 20:45 on 30 Sep, log tmp-claude/2026-09-30-loss-decomp-stages/run-real.log; when it finishes: parse runs, parse stages, parse depth, plot. The old figures and the 500k results are gone.",
@@ -96,6 +107,7 @@
       "branch": "claude-refactor"
     },
     {
+      "id": "6bcd6169",
       "at": "2026-10-01T04:42:47.827513309Z",
       "author": "jackroddy/924b3ec0",
       "text": "Real run on the one-unit set finished 30 Sep 21:42: 57 min at 48 threads; s12 2,511 s at 149 GiB peak, s10 750 s at 33 GiB, s7.5 145 s at 7 GiB; outputs 185 GB. Parse and plot started right after, log tmp-claude/2026-09-30-loss-decomp-stages/parse-real.log.",
@@ -103,6 +115,7 @@
       "branch": "claude-refactor"
     },
     {
+      "id": "afdb53de",
       "at": "2026-10-01T05:01:22.039950435Z",
       "author": "jackroddy/924b3ec0",
       "text": "Parsed and plotted 30 Sep 22:01. Ceiling s12: 2,146,055 hits over 2.46M MGnify. s10 sens 0.9724 (59,187 lost), s7.5 0.8208 (384,481 lost); lost_align and lost_cutoff are 0 in both, so every loss between the arms is seeding. s12 depth: ranks 1-200 hold 703,732 hits of 4.16M prefilter pairs (17%), 801-1600 295k, 6401-12800 64k, past 100k rank still 8,226. Prefilter lists run to 1.6M per query. depth took 18 min, parse runs 7 s. Figures in figures/loss-decomp-*.pdf.",
@@ -110,6 +123,7 @@
       "branch": "claude-refactor"
     },
     {
+      "id": "e085891b",
       "at": "2026-10-01T08:37:58.467533897Z",
       "author": "jackroddy/924b3ec0",
       "text": "1 Oct: Jack reversed the hmmer removal; a6abba0 reverted as 96a3954, hmmer is the baseline again. Real run restarted at 48 threads about 01:40, nail arms and hmmer together so there is one ledger; log tmp-claude/2026-09-30-loss-decomp-stages/run-real3.log. Expect about two hours. The ceiling-only tables and figures from 30 Sep are superseded.",
@@ -117,6 +131,7 @@
       "branch": "claude-refactor"
     },
     {
+      "id": "4c0ba8e7",
       "at": "2026-10-01T10:16:49.927937024Z",
       "author": "jackroddy/924b3ec0",
       "text": "Real run with hmmer finished 1 Oct 03:19: 99 min at 48 threads, 31 steps, 0 failed. hmmer 2,448 s; s12 2,526 s at 149 GiB; s10 745 s; s7.5 147 s. Parse and plot started, log tmp-claude/2026-09-30-loss-decomp-stages/parse-real3.log.",
@@ -124,6 +139,7 @@
       "branch": "claude-refactor"
     },
     {
+      "id": "e3f69243",
       "at": "2026-10-01T10:35:33.0854464Z",
       "author": "jackroddy/924b3ec0",
       "text": "Parsed and plotted 1 Oct 03:35. hmmer 2,325,460 hits over 2.46M MGnify. s12: sens 0.9114, lost 78,857 seeding / 147 align / 127,054 cutoff. s10: 0.8883, 142,110 / 123 / 117,405. s7.5: 0.7516, 498,027 / 57 / 79,586. hmmer hits the s12 prefilter never returned: 19,416 (0.8%); s10 92,677; s7.5 470,519. runs.tbl 5.1M rows. Figures in figures/loss-decomp-*.pdf. The cutoff stage is the larger loss at s12 and s10, as on the 500k set.",
@@ -131,6 +147,7 @@
       "branch": "claude-refactor"
     },
     {
+      "id": "89a06df9",
       "at": "2026-10-01T18:46:13.6962302Z",
       "author": "jackroddy/924b3ec0",
       "text": "1 Oct: stages split four ways (commit 6aa4d43), real parse 3.5 min. s12 of 2,325,460 hmmer hits: pre-filtered 19,416 / not seeded 59,441 / nail filtered 147 / under cutoff 127,054 / kept 2,119,402 (0.9114). s10: 92,677 / 49,433 / 123 / 117,405 (0.8883). s7.5: 470,519 / 27,508 / 57 / 79,586 (0.7516). Jack: no full-dp replay and no nail change to split the 147; four categories are the analysis. The 0.91 vs recall's 0.96 is sens vs sens_sd (single-domain); same rule, same cutoffs; by recall's rule this shard gives sens 0.913 and sens_sd 0.971 at s12.",
@@ -138,6 +155,7 @@
       "branch": "claude-refactor"
     },
     {
+      "id": "0fda8f47",
       "at": "2026-10-01T19:41:50.228387229Z",
       "author": "jackroddy/924b3ec0",
       "text": "1 Oct: stages split by hmmer domain count (commit 16e677b): stages.tbl, stages-single.tbl, stages-multi.tbl. Single (2,009,039 hits) s12: pre-filtered 8,335 / not seeded 28,236 / nail 20 / cutoff 26,544 / sens 0.9686. Multi (316,421): 11,081 / 31,205 / 127 / 100,510 / sens 0.5483. Multi-domain hits are 14% of hmmer's and 49% of what s12 loses; 79% of the cutoff loss is multi-domain. Single-domain sens 0.9686 sits beside recall's sens_sd 0.9604 on all of MGnify.",
@@ -145,6 +163,7 @@
       "branch": "claude-refactor"
     },
     {
+      "id": "8ef21776",
       "at": "2026-10-01T20:54:54.082728495Z",
       "author": "jackroddy/924b3ec0",
       "text": "1 Oct: s12-full arm added (run --full-dp 12.0 --only s12-full, commit after 16e677b): replays s12's seeds with --full-dp, joins the existing ledger via ledger::add. Real run started ~13:10 at 48 threads, log tmp-claude/2026-09-30-loss-decomp-stages/run-real-full.log. Then parse runs, stages, depth. Cutoff-miss analysis so far: single-domain at s12, 57% identical coordinates scored lower, 40 bad anchors, the rest a continuum of end differences; per-pair table tmp-claude/2026-09-30-loss-decomp-stages/cutoff-misses.s12.tsv (script cutoff-misses.py).",
@@ -152,6 +171,7 @@
       "branch": "claude-refactor"
     },
     {
+      "id": "bb9dcedb",
       "at": "2026-10-01T21:19:08.661705754Z",
       "author": "jackroddy/924b3ec0",
       "text": "s12-full finished 1 Oct 14:19: 1,433 s at 48 threads, 7.7 GiB peak, 4,661,144 rows against s12's 4,625,764. In the ledger via ledger::add. Parse of the five-run table started.",
@@ -159,6 +179,7 @@
       "branch": "claude-refactor"
     },
     {
+      "id": "7582541b",
       "at": "2026-10-02T19:55:31.261854725Z",
       "author": "jackroddy/924b3ec0",
       "text": "2 Oct: reports/2026-10-01-loss-decomp-cutoff/: found.fa (25,426 seqs), missed-single.fa (24,548), missed-multi.fa (59,291), pairs.tbl (153,707 rows: 18,325 found/hmmer-under, 8,328 found/hmmer-absent, 26,544 missed/single, 100,510 missed/multi) with scores, bias, s12-full score, hmmer domain coords, nail coords, seed coords. Script cutoff-report.py copied beside it. Jack chose a script over a parse subcommand.",
@@ -166,6 +187,7 @@
       "branch": "claude-refactor"
     },
     {
+      "id": "356cef70",
       "at": "2026-10-02T22:44:43.969664933Z",
       "author": "jackroddy/924b3ec0",
       "text": "2 Oct: Jack's definition: single-domain = hmmer reports exactly one domain, no score ratio. Crate, scripts and report redone (commit after 167ac35). s12 misses single 25,811 / multi 101,243. In the 25,811, nail is within 0.5 bits of hmmer's domain score for 22,379; the gap to the cutoff is between hmmer's full-sequence score and its own domain score. Report regenerated in reports/2026-10-01-loss-decomp-cutoff/.",
@@ -173,6 +195,7 @@
       "branch": "claude-refactor"
     },
     {
+      "id": "8daed8ef",
       "at": "2026-10-02T22:48:47.158352242Z",
       "author": "jackroddy/924b3ec0",
       "text": "2 Oct: fb864f4 reverted. The pipeline's single/multi split stays on recall's 0.1-of-best rule; the one-reported-domain definition is only for the cutoff investigation scripts and reports/2026-10-01-loss-decomp-cutoff/. stages-single/multi.tbl re-parsed on the pipeline's rule.",
@@ -180,6 +203,7 @@
       "branch": "claude-refactor"
     },
     {
+      "id": "d78e7fc6",
       "at": "2026-10-04T19:40:50.379190219Z",
       "author": "jackroddy/924b3ec0",
       "text": "4 Oct: reports/2026-10-04-loss-decomp-single-misses/pairs.tbl, 25,811 rows: the pairs hmmer reports one domain for and scores over the cutoff that nail at s12 reports under it, with cutoff, hmmer seq and dom scores, nail score, hmmer ali and hmm coordinates, nail target and profile coordinates. report.py beside it. Finding behind it (seqdom-table.py in tmp-claude): 91% of these have hmmer's seq score more than 1 bit over its domain score while nail scores the domain 0.2-0.85 bits over hmmer's domain score, same as where it clears the cutoff; the 2,324 under 1 bit are where nail scores the domain lower (-0.5 to -2.7) with coverage 0.88-0.94.",

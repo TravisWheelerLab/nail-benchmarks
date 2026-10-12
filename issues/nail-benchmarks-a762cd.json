@@ -19,6 +19,7 @@
   "resolution": "done",
   "notes": [
     {
+      "id": "a7304df0",
       "at": "2026-10-06T18:20:15.057671099Z",
       "author": "jackroddy/21204bf1",
       "text": "The judge change (0d3a91) sets -Z on the one search that decides rejection, hmmsearch over the originals, at the shard's seqs from set.tbl. nail and mmseqs no longer judge, so their E-values no longer set any bar. Close when 0d3a91 is committed.",

@@ -21,6 +21,7 @@
   "resolution": "done",
   "notes": [
     {
+      "id": "90d8e971",
       "at": "2026-10-01T03:35:55.504427837Z",
       "author": "jackroddy/924b3ec0",
       "text": "Jack 30 Sep: the set is Pfam x one recall shard's worth of MGnify (2,455,940 seqs) and nothing else; no swissprot, no pid unit. The 500k cross and its runs (105 GB) were deleted and loss-decomp-real rebuilt under the new recipe; the toy follows the same shape at 50,000 seqs.",

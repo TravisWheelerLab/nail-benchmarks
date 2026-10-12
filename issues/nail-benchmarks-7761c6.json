@@ -19,6 +19,7 @@
   "resolution": null,
   "notes": [
     {
+      "id": "4d2e41b3",
       "at": "2026-09-28T22:03:17.52249604Z",
       "author": "jackroddy/01dd6c44",
       "text": "The serial/parallel split is being built as its own tool, hmph, at ~/hmph (its own repo, its own foam). It watches a process tree and writes concurrency per process per tick, integrated into serial seconds and parallel work. Once it runs, wrap thread-scaling's searches in it rather than instrumenting the tools.",

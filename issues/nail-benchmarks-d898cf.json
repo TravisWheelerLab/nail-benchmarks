@@ -19,6 +19,7 @@
   "resolution": "dropped",
   "notes": [
     {
+      "id": "abd612ea",
       "at": "2026-10-06T22:18:21.233102556Z",
       "author": "jackroddy/21204bf1",
       "text": "The libsail sampling proposal that sat in tmp-claude was removed with the rest of the scratch on 6 Oct.",

@@ -1,0 +1,28 @@
+{
+  "id": "nail-benchmarks-48b3e9",
+  "title": "cutoffs learn: hmmer cutoffs from the best domain score beside the sequence score",
+  "body": "",
+  "type": "feature",
+  "status": "open",
+  "priority": 1,
+  "labels": [],
+  "parent": null,
+  "blocked_by": [],
+  "related": [],
+  "assignee": null,
+  "lease_expires": null,
+  "defer_until": null,
+  "created_at": "2026-10-12T20:47:34.066177593Z",
+  "updated_at": "2026-10-12T20:47:34.066177593Z",
+  "closed_at": null,
+  "close_reason": null,
+  "resolution": null,
+  "notes": [],
+  "stamps": {
+    "created": {
+      "commit": "260160a",
+      "branch": "claude-refactor"
+    },
+    "closed": null
+  }
+}
