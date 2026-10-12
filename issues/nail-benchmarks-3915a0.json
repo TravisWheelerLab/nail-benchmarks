@@ -13,11 +13,20 @@
   "lease_expires": "2026-10-12T21:33:22.215696569Z",
   "defer_until": null,
   "created_at": "2026-10-12T21:09:54.298568242Z",
-  "updated_at": "2026-10-12T21:18:22.215696569Z",
+  "updated_at": "2026-10-12T21:18:22.243087655Z",
   "closed_at": null,
   "close_reason": null,
   "resolution": null,
-  "notes": [],
+  "notes": [
+    {
+      "id": "6f3b68fc",
+      "at": "2026-10-12T21:18:22.243086653Z",
+      "author": "jackroddy/0d39a02d",
+      "text": "built and toy-tested 12 Oct: pass gets hmmer's domain letter (HH/hH/Hh/hh), inc and dom replaced by hmmer_dom, hmmer held to hmmer_3 and hmmer_dom_3, summary splits sens_dom/sens_seq; format bumped to scores 3. Toy: 85 Hh of 6,468 hmmer-passing pairs. Real parse launched in tmux recall-parse, log tmp-claude/2026-10-12-recall-domain/real.log",
+      "commit": "2010c1d",
+      "branch": "claude-refactor"
+    }
+  ],
   "stamps": {
     "created": {
       "commit": "2010c1d",
