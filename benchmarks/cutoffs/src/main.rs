@@ -1234,6 +1234,28 @@ const N_SCORES: usize = 5;
 /// The tools a calibration scores, in the order `cutoffs.tbl` writes them.
 const TOOLS: [&str; 3] = [NAIL, MMSEQS, HMMER];
 
+/// The column block of hmmer's cutoffs learned from its best domain score.
+const HMMER_DOM: &str = "hmmer_dom";
+
+/// hmmer's `--tblout` read at its best single domain's score and E-value.
+//
+// the same rows as HmmerTable, so one fill table learns both
+// sets of cutoffs: the full sequence score at column 5 and
+// the best domain's at column 8
+struct HmmerBestDomain;
+
+impl HitColumns for HmmerBestDomain {
+    const QUERY: usize = HmmerTable::QUERY;
+    const TARGET: usize = HmmerTable::TARGET;
+    const Q_START: Option<usize> = None;
+    const Q_END: Option<usize> = None;
+    const T_START: Option<usize> = None;
+    const T_END: Option<usize> = None;
+    const SCORE: usize = 8;
+    const E_VALUE: usize = 7;
+    const N_COLUMNS: usize = HmmerTable::N_COLUMNS;
+}
+
 /// One family's table read into its top `N_SCORES` decoy scores and its
 /// decoy count.
 ///
@@ -1326,6 +1348,13 @@ fn learn(args: LearnArgs, paths: &Paths) -> anyhow::Result<()> {
                     true => decoy_scores::<HmmerTable>(&hmmer)?,
                     false => empty(),
                 }));
+                // the same decoys scored by their best domain, so the
+                // count is the one hmmer_n already holds
+                let best = match hmmer.exists() {
+                    true => decoy_scores::<HmmerBestDomain>(&hmmer)?,
+                    false => empty(),
+                };
+                row.extend(cells(&best).into_iter().take(N_SCORES));
                 Ok(Some(row))
             })
             .collect::<anyhow::Result<Vec<_>>>()
@@ -1340,6 +1369,7 @@ fn learn(args: LearnArgs, paths: &Paths) -> anyhow::Result<()> {
         headers.extend((1..=N_SCORES).map(|i| format!("{tool}_{i}")));
         headers.push(format!("{tool}_n"));
     }
+    headers.extend((1..=N_SCORES).map(|i| format!("{HMMER_DOM}_{i}")));
 
     let mut table = toil::Table::new(toil::Schema::new(headers));
     for row in rows.into_iter().flatten() {
