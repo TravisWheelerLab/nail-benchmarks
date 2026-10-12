@@ -119,7 +119,12 @@ mod tests {
         assert!(fits::<HmmerTable>(hmmer));
         assert_eq!(
             hmmer_hit(hmmer).unwrap(),
-            [&b"2_5_RNA_ligase2"[..], b"MGYP003392859013", b"54.0", b"53.7"]
+            [
+                &b"2_5_RNA_ligase2"[..],
+                b"MGYP003392859013",
+                b"54.0",
+                b"53.7"
+            ]
         );
 
         let dom = b"MGYP000987338150     -            178 2-oxoacid_dh         PF00198.27   232   9.3e-44  145.5   0.5   1   1   1.1e-46   1.1e-43  145.2   0.5     5   143    42   178    39   178 0.97 FL=0";
