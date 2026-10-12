@@ -3,20 +3,20 @@
   "title": "cutoffs learn: hmmer cutoffs from the best domain score beside the sequence score",
   "body": "",
   "type": "feature",
-  "status": "in_progress",
+  "status": "closed",
   "priority": 1,
   "labels": [],
   "parent": null,
   "blocked_by": [],
   "related": [],
   "assignee": "jackroddy/0d39a02d",
-  "lease_expires": "2026-10-12T21:02:43.916532607Z",
+  "lease_expires": null,
   "defer_until": null,
   "created_at": "2026-10-12T20:47:34.066177593Z",
-  "updated_at": "2026-10-12T20:49:09.653961676Z",
-  "closed_at": null,
-  "close_reason": null,
-  "resolution": null,
+  "updated_at": "2026-10-12T20:49:09.686974902Z",
+  "closed_at": "2026-10-12T20:49:09.686974902Z",
+  "close_reason": "learn writes hmmer_dom_1..5 from tblout column 8",
+  "resolution": "done",
   "notes": [
     {
       "id": "e4ef40cf",
@@ -32,6 +32,9 @@
       "commit": "260160a",
       "branch": "claude-refactor"
     },
-    "closed": null
+    "closed": {
+      "commit": "123b712",
+      "branch": "claude-refactor"
+    }
   }
 }
