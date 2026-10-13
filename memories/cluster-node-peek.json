@@ -1,0 +1,10 @@
+{
+  "slug": "cluster-node-peek",
+  "text": "A running task's node scratch is readable from the login node with `srun --jobid=<raw id> --overlap -n1 -N1 <command>`, where the raw id is squeue's `%A` for the array index; ssh to a compute node is refused. Give srun a plain command: a `bash -c` wrapper quoted through the two ssh hops runs on the login node instead, and reads the login node's /tmp and process list as if they were the node's.",
+  "created_at": "2026-10-13T21:29:09.516146211Z",
+  "updated_at": "2026-10-13T21:29:09.516146211Z",
+  "stamp": {
+    "commit": "a1a3232",
+    "branch": "claude-refactor"
+  }
+}
