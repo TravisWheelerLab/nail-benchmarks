@@ -13,9 +13,9 @@
   "lease_expires": null,
   "defer_until": null,
   "created_at": "2026-10-06T17:28:37.194963249Z",
-  "updated_at": "2026-10-06T18:23:17.782762102Z",
+  "updated_at": "2026-10-13T02:23:17.754981324Z",
   "closed_at": "2026-10-06T18:23:17.782762102Z",
-  "close_reason": "committed: hmmsearch over the originals at the shard's -Z is the one judge; toy fanout and union agree byte for byte, sp-10k calibrates",
+  "close_reason": "Commit 5b03f2d: hmmsearch over the originals at the shard's -Z is the one judge. Toy fanout and union agreed byte for byte, and sp-10k calibrated.",
   "resolution": "done",
   "notes": [
     {
