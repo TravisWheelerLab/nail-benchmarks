@@ -3,7 +3,7 @@
   "title": "finish the MGnify cutoffs run: gather, reject and learn have never run",
   "body": "The MGnify reversed set was drawn (501 G, 1000 shards, 2,455,940 sequences a shard, 62.5 minutes) and recruit ran over 100 of the 1000 shards before it was stopped deliberately. Those 200 tables are in sets/cutoffs/outputs/recruit/results/. gather, reject and learn have not run on MGnify at all. data/mgy-cutoffs.tbl is from an earlier harness.",
   "type": "task",
-  "status": "open",
+  "status": "closed",
   "priority": 2,
   "labels": [],
   "parent": null,
@@ -15,10 +15,10 @@
   "lease_expires": null,
   "defer_until": null,
   "created_at": "2026-09-28T19:02:29.649550227Z",
-  "updated_at": "2026-10-06T22:44:56.615010767Z",
-  "closed_at": null,
-  "close_reason": null,
-  "resolution": null,
+  "updated_at": "2026-10-13T02:23:17.542449931Z",
+  "closed_at": "2026-10-13T02:23:17.542449931Z",
+  "close_reason": "Done. recruit ran over all 1000 reversed shards from 6 to 10 October, and gather, reject, fill and learn on 12 October. The table is promoted as data/mgy-cutoffs.tbl in commit 2010c1d, with the hmmer_dom block from 123b712.",
+  "resolution": "done",
   "notes": [
     {
       "id": "fcd8d77a",
@@ -66,6 +66,9 @@
       "commit": "e080da4",
       "branch": "claude-refactor"
     },
-    "closed": null
+    "closed": {
+      "commit": "a1a3232",
+      "branch": "claude-refactor"
+    }
   }
 }
