@@ -13,9 +13,9 @@
   "lease_expires": null,
   "defer_until": null,
   "created_at": "2026-09-28T19:02:29.902590431Z",
-  "updated_at": "2026-10-06T23:00:40.245709331Z",
+  "updated_at": "2026-10-13T02:23:17.912355894Z",
   "closed_at": "2026-10-06T23:00:40.245709331Z",
-  "close_reason": "every toy now finds real hits end to end; long-seqs' toy label removed as meaningless at six pairs",
+  "close_reason": "Commit dcdd68d: every toy finds real hits end to end, and long-seqs' toy label is removed as meaningless at six pairs.",
   "resolution": "done",
   "notes": [
     {
