@@ -13,9 +13,9 @@
   "lease_expires": null,
   "defer_until": null,
   "created_at": "2026-09-28T19:02:29.824997759Z",
-  "updated_at": "2026-10-01T02:26:58.2853752Z",
+  "updated_at": "2026-10-13T02:23:17.937930125Z",
   "closed_at": "2026-10-01T02:26:58.2853752Z",
-  "close_reason": "figures/loss-decomp-stages.pdf: per corpus, one 100% stacked bar per arm of hmmer's lost hits by stage (never seeded / seeded not aligned / under the family cutoff), hits lost and sensitivity beside. scripts/plot.py reads stages.tbl alone; the lost_ columns are the segments in table order. Replaces seeding.pdf and the ledger read in plot.rs.",
+  "close_reason": "Commit ac4893d: figures/loss-decomp-stages.pdf, per corpus one 100% stacked bar per arm of hmmer's lost hits by stage, with hits lost and sensitivity beside. scripts/plot.py reads stages.tbl alone and takes its segments from the lost_ columns in table order. It replaced seeding.pdf and the ledger read in plot.rs.",
   "resolution": "done",
   "notes": [
     {
