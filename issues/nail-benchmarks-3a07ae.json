@@ -13,9 +13,9 @@
   "lease_expires": null,
   "defer_until": null,
   "created_at": "2026-09-28T19:02:30.323416467Z",
-  "updated_at": "2026-10-06T23:09:32.760295918Z",
+  "updated_at": "2026-10-13T02:23:17.859473303Z",
   "closed_at": "2026-10-06T23:09:32.760295918Z",
-  "close_reason": "removed; feisty stays in Cargo.lock as libsail's own dependency",
+  "close_reason": "Commit c76de68 removed it; feisty stays in Cargo.lock as libsail's own dependency.",
   "resolution": "done",
   "notes": [],
   "stamps": {
