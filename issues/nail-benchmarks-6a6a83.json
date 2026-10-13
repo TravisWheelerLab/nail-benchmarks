@@ -13,9 +13,9 @@
   "lease_expires": null,
   "defer_until": null,
   "created_at": "2026-09-28T19:02:30.266590113Z",
-  "updated_at": "2026-10-06T23:10:12.837937755Z",
+  "updated_at": "2026-10-13T02:23:17.808869042Z",
   "closed_at": "2026-10-06T23:10:12.837937755Z",
-  "close_reason": "deleted: recipe, shape, deal_nested, rungs and their tests; 323 lines",
+  "close_reason": "Commit 06c23e2 deleted the recipe, the shape, deal_nested, the rungs and their tests, 323 lines.",
   "resolution": "done",
   "notes": [],
   "stamps": {
