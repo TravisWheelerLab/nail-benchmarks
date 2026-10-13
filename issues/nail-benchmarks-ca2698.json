@@ -1,7 +1,7 @@
 {
   "id": "nail-benchmarks-ca2698",
-  "title": "nail's internal stage times relative to each other",
-  "body": "Plan item d. Pure parsing work; needs no machine time until the runs exist.",
+  "title": "stage-times draws nail's stage tree for mgy and pid side by side",
+  "body": "`benchmarks/stage-times` runs nail once per unit with `-s`, keeps the stage tree nail prints under `results/nail.<unit>.stats`, and `parse` writes `stages.tbl` and `counts.tbl` for its two labels, `mgy` and `pid`. Both real labels have run and parsed. The crate has no `plot` command, and CLAUDE.md lists it among the benchmarks that stop at `parse`.\n\n## Proposal\nA `plot` command and a script under `scripts/` that draw the two labels' trees side by side, so a stage's share of nail's wall clock on MGnify reads against its share on the profmark set.",
   "type": "feature",
   "status": "open",
   "priority": 3,
@@ -13,7 +13,7 @@
   "lease_expires": null,
   "defer_until": null,
   "created_at": "2026-09-28T19:02:30.096947015Z",
-  "updated_at": "2026-10-01T02:09:59.642503877Z",
+  "updated_at": "2026-10-13T02:23:17.595552614Z",
   "closed_at": null,
   "close_reason": null,
   "resolution": null,
