@@ -1,10 +1,10 @@
 {
   "slug": "hmph-location",
-  "text": "hmph, the tool that measures how parallel a process tree was over its lifetime (serial seconds and parallel work per process), is a separate repository at ~/hmph with its own foam. stage-times, thread-scaling and any serial-overhead question about nail or mmseqs are meant to use it rather than instrument the tools.",
+  "text": "hmph measures how parallel a process tree was over its lifetime, as serial seconds and parallel work per process. It is a separate repository at ~/hmph with its own foam.",
   "created_at": "2026-09-28T22:03:17.547569039Z",
-  "updated_at": "2026-09-28T22:03:17.547569039Z",
+  "updated_at": "2026-10-13T02:22:50.264109662Z",
   "stamp": {
-    "commit": "401f26d",
+    "commit": "a1a3232",
     "branch": "claude-refactor"
   }
 }
