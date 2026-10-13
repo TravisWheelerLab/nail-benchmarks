@@ -1,0 +1,10 @@
+{
+  "slug": "cluster-hop",
+  "text": "The cluster is `ssh cluster`, a Host in ~/.ssh/config for hpc.arizona.edu with key auth and no prompt. It lands on the gatekeeper bastion: no scheduler, bare home. The login node is one hop on, `ssh shell.hpc.arizona.edu` from the bastion (`shell` is an alias in the interactive profile only), so a non-interactive command is `ssh cluster 'ssh shell.hpc.arizona.edu <cmd>'`, or `bash -s` with a script on stdin. Home there holds ~/sbatch/, group storage is /xdisk/twheeler/jroddy, and `va` shows the allocation.",
+  "created_at": "2026-10-13T05:50:10.532368172Z",
+  "updated_at": "2026-10-13T05:50:10.532368172Z",
+  "stamp": {
+    "commit": "a1a3232",
+    "branch": "claude-refactor"
+  }
+}
