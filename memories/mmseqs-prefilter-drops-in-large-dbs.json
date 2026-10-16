@@ -1,0 +1,10 @@
+{
+  "slug": "mmseqs-prefilter-drops-in-large-dbs",
+  "text": "At nail's fill arguments (`-k 6 -s 12 --max-seqs 1000000000`), `mmseqs prefilter` drops candidates from a large target DB. Against Sec10_N's 433,251-sequence nail gap file from the 15 Oct 2026 cutoffs fill, it left out MGYP003678617395. Among 100,000 or fewer of the same targets it kept that decoy, which nail scores 31.8. `--min-ungapped-score 0` did not bring it back. The cause inside mmseqs is unknown. Scratch: `tmp-claude/2026-10-15-hmmer-recruit-import/surprise/sec10/`.",
+  "created_at": "2026-10-16T02:21:29.970200814Z",
+  "updated_at": "2026-10-16T02:21:29.970200814Z",
+  "stamp": {
+    "commit": "a1a3232",
+    "branch": "claude-refactor"
+  }
+}
