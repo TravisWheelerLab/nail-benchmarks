@@ -12,23 +12,25 @@
 //! Doing that exhaustively would mean searching every family against every
 //! reversed sequence. Instead it runs in stages:
 //!
-//!   1. `recruit` — a cheap sweep of nail and mmseqs over the initial
+//!   1. `recruit` — a sweep of nail, mmseqs and hmmer over the initial
 //!      reversals, which finds the small subset that scores at all. What it
 //!      finds are *recruits*.
 //!   2. `gather` — pulls each recruit out of the shard it came from. A record
 //!      read there is already the reversal, and reversing it again gives the
-//!      *original*, so both forms come out of one pass.
+//!      *original*, so both forms come out of one pass. `recruits.tbl` lists
+//!      every recruit and the tools that recruited it.
 //!   3. `reject` — one hmmsearch of each family against its recruits'
-//!      originals, at the `-Z` of one shard. A recruit whose original the
+//!      originals, at the `-Z` of one shard, or one pass over the tables of a
+//!      forward search of the same sequences. A recruit whose original the
 //!      family hits is a *reject*, a reversed homolog rather than a piece of
 //!      noise; the rest are *decoys*.
-//!   4. `fill` — nail, mmseqs and hmmsearch over the decoys, with the
-//!      prefilter effectively off and `-E 1e9`, so that every tool has a
-//!      score for every decoy and not only for the ones it recruited. It
-//!      rescores nothing: a tool's score for a pair does not move with these
-//!      settings. What the pass adds is the pairs a tool never reached in
-//!      `recruit`.
-//!   5. `learn` — the top scores per family per tool, into `cutoffs.tbl`.
+//!   4. `fill` — nail and mmseqs over the decoys each did not recruit, with
+//!      the prefilter effectively off and `-E 1e9`. It rescores nothing: a
+//!      tool's score for a pair does not move with these settings, so a decoy
+//!      a tool recruited keeps the score recruit gave it. hmmer has no gaps,
+//!      since its recruit search ran over every pair in each shard.
+//!   5. `learn` — the top scores per family per tool, from recruit and fill,
+//!      into `cutoffs.tbl`.
 //!
 //! Rejection matters more than it looks: a reversal keeps a surprisingly high
 //! score against its own original, so the recruits that look like the best
@@ -43,8 +45,9 @@
 //! search per family, and every tool here parallelises over queries alone --
 //! so a thread count above one buys nothing and the parallelism has to be
 //! many families at once, which is a batched step of single-threaded
-//! commands. Each step is one tool over every family; mmseqs' five-process
-//! chain runs as one shell command, so michi launches it once.
+//! commands. Each step is one tool over the families it has work in;
+//! mmseqs' five-process chain runs as one shell command, so michi launches
+//! it once.
 //!
 //! Every launch forks this process, so what it holds in memory while a step
 //! runs is what each of those 20,000 launches pays for. The stages write
@@ -57,7 +60,6 @@ use std::collections::{HashMap, HashSet};
 use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
-use std::sync::atomic::{AtomicUsize, Ordering};
 
 use anyhow::{Context, bail};
 use clap::{Parser, Subcommand};
@@ -70,8 +72,10 @@ use libsail::seq::fasta::{DEFAULT_LINE_WIDTH, IndexedFasta};
 use libsail::tbl::blast::BlastTable;
 use libsail::tbl::hmmer::HmmerTable;
 use libsail::tbl::nail::NailTable;
-use libsail::tbl::{Hit, HitColumns, HitParser, Table};
+use libsail::tbl::{HitColumns, HitParser, Table};
 use michi::{Cmd as PCmd, PipelineBuilder, Progress, Step, Table as PTable};
+use util::search::{Dirs, Split};
+use util::split::Kind;
 use util::tools::{hmmsearch, mmseqs, nail};
 use util::{ledger, manifest};
 
@@ -260,6 +264,11 @@ impl Layout {
         self.gather.join(QUERIES)
     }
 
+    /// Every recruit and the tools that recruited it, written by `gather`.
+    fn recruits_tbl(&self) -> PathBuf {
+        self.gather.join("recruits.tbl")
+    }
+
     fn recruit(&self) -> anyhow::Result<Stage> {
         self.stage("recruit")
     }
@@ -393,6 +402,16 @@ pub struct RejectArgs {
     /// reject for every tool
     #[arg(short = 'e', default_value_t = REJECT_E, value_name = "F")]
     pub reject_e: f64,
+
+    /// Judge by reading hmmsearch's tables of a forward search of the same
+    /// sequences, `hmmer.<unit>.tbl` per unit of --reject-set, rather than
+    /// searching
+    #[arg(long, value_name = "dir", requires = "reject_set")]
+    pub reject_with: Option<PathBuf>,
+
+    /// The set those tables searched, for each unit's sequence count
+    #[arg(long, value_name = "dir", requires = "reject_with")]
+    pub reject_set: Option<PathBuf>,
 }
 
 #[derive(Parser, Debug)]
@@ -533,16 +552,28 @@ fn recruit(args: RecruitArgs, paths: &Paths) -> anyhow::Result<()> {
 
     let nail_bin = nail()?;
     let mmseqs_bin = mmseqs()?;
+    let hmmsearch_bin = hmmsearch()?;
 
     let query_hmm = layout.query_hmm();
     let query_db = layout.query_db();
 
     let stage = layout.recruit()?;
     let (results, tmp) = (stage.results(), stage.tmp());
+    let dirs = Dirs::new(&stage.root, &tmp);
+
+    // one split for every shard, outside the per-shard scratch that each
+    // shard's last step removes
+    let split = Split::new(
+        &query_hmm,
+        Kind::Hmm,
+        tmp.join("hmmer-query"),
+        util::search::jobs(threads),
+    );
 
     let mut pl = PipelineBuilder::new()
         .pool(threads)
-        .step(PCmd::new("mkdir").flag("-p").path(&results));
+        .step(PCmd::new("mkdir").flag("-p").path(&results))
+        .step(split.step("split", &[]));
 
     for (idx, shard) in layout.targets() {
         let scratch = tmp.join(format!("shard-{idx}"));
@@ -614,7 +645,23 @@ fn recruit(args: RecruitArgs, paths: &Paths) -> anyhow::Result<()> {
                     ]
                 })
                 .name(format!("mmseqs.{idx}")),
-            )
+            );
+
+        let hmmer = util::search::hmmer(
+            &hmmsearch_bin,
+            &split,
+            &dirs,
+            HMMER,
+            HMMER,
+            &idx.to_string(),
+            shard,
+            util::search::EVALUE,
+            false,
+            &[],
+        );
+        pl = pl
+            .step(hmmer.search)
+            .step(hmmer.cat)
             .step(PCmd::new("rm").name("clean").flag("-rf").path(&scratch));
     }
 
@@ -650,33 +697,29 @@ fn gather(args: GatherArgs, paths: &Paths) -> anyhow::Result<()> {
 
     let pool = pool(args.threads)?;
 
-    // per shard, which families each recruited sequence hit. Only names travel
-    // here; the sequences themselves are read in the second pass.
-    let wanted: Vec<(String, HashMap<String, Vec<String>>)> = pool.install(|| {
+    // per shard, which families each recruited sequence hit and which tools
+    // reported it. Only names travel here; the sequences themselves are read
+    // in the second pass.
+    let wanted: Vec<(String, Recruits)> = pool.install(|| {
         shard_list
             .par_iter()
-            .map(
-                |shard| -> anyhow::Result<(String, HashMap<String, Vec<String>>)> {
-                    let mut map: HashMap<String, Vec<String>> = HashMap::new();
+            .map(|shard| -> anyhow::Result<(String, Recruits)> {
+                let mut map = Recruits::new();
+                let path = |tool: &str| manifest::table_path(&recruit_results, tool, shard);
+                let read = |path: PathBuf| format!("failed to read {}", path.display());
 
-                    let path = manifest::table_path(&recruit_results, NAIL, shard);
-                    let tbl = Table::<HitParser<NailTable>>::open(&path)
-                        .with_context(|| format!("failed to read {}", path.display()))?;
-                    collect(&tbl, &mut map);
+                let tbl = Table::<HitParser<NailTable>>::open(path(NAIL))
+                    .with_context(|| read(path(NAIL)))?;
+                collect(&tbl, bit(NAIL), &mut map);
+                let tbl = Table::<HitParser<BlastTable>>::open(path(MMSEQS))
+                    .with_context(|| read(path(MMSEQS)))?;
+                collect(&tbl, bit(MMSEQS), &mut map);
+                let tbl = Table::<HitParser<HmmerTable>>::open(path(HMMER))
+                    .with_context(|| read(path(HMMER)))?;
+                collect(&tbl, bit(HMMER), &mut map);
 
-                    let path = manifest::table_path(&recruit_results, MMSEQS, shard);
-                    let tbl = Table::<HitParser<BlastTable>>::open(&path)
-                        .with_context(|| format!("failed to read {}", path.display()))?;
-                    collect(&tbl, &mut map);
-
-                    for v in map.values_mut() {
-                        v.sort();
-                        v.dedup();
-                    }
-
-                    Ok((shard.clone(), map))
-                },
-            )
+                Ok((shard.clone(), map))
+            })
             .collect::<anyhow::Result<Vec<_>>>()
     })?;
 
@@ -687,6 +730,34 @@ fn gather(args: GatherArgs, paths: &Paths) -> anyhow::Result<()> {
     }
 
     println!("{} families recruited decoys", families.len());
+
+    // every recruit and the tools that reported it, sorted by family and
+    // then name, for reject and fill to read rather than recruit's tables
+    let mut sorted: Vec<&String> = families.iter().collect();
+    sorted.sort_unstable();
+    std::fs::create_dir_all(&layout.gather)?;
+    let mut table = recruits_stream(&layout.recruits_tbl(), &families)?;
+    let mut recruits = 0usize;
+    for family in sorted {
+        let mut rows: Vec<(&str, u8)> = wanted
+            .iter()
+            .filter_map(|(_, map)| map.get(family))
+            .flat_map(|names| names.iter().map(|(n, b)| (n.as_str(), *b)))
+            .collect();
+        rows.sort_unstable();
+        for (name, bits) in rows {
+            let mut row = vec![family.clone(), name.to_string()];
+            row.extend(TOOLS.map(|tool| u8::from(bits & bit(tool) != 0).to_string()));
+            table.row(row)?;
+            recruits += 1;
+        }
+    }
+    table.header()?;
+    drop(table);
+    println!(
+        "{recruits} recruits, listed in {}",
+        layout.recruits_tbl().display()
+    );
 
     // ---- pull the recruits out of the shards, in both forms
 
@@ -723,7 +794,7 @@ fn gather(args: GatherArgs, paths: &Paths) -> anyhow::Result<()> {
                 // rather than held in memory
                 let mut by_target: HashMap<&str, Vec<&str>> = HashMap::new();
                 for (family, names) in map {
-                    for name in names {
+                    for name in names.keys() {
                         by_target
                             .entry(name.as_str())
                             .or_default()
@@ -802,13 +873,54 @@ fn gather(args: GatherArgs, paths: &Paths) -> anyhow::Result<()> {
     Ok(())
 }
 
-/// Fold a hit table into a family to target-name map.
-fn collect<C: HitColumns>(tbl: &Table<HitParser<C>>, map: &mut HashMap<String, Vec<String>>) {
+/// Each recruited sequence of one shard, by family, with the tools that
+/// reported it as bits.
+type Recruits = HashMap<String, HashMap<String, u8>>;
+
+/// The bit that marks a pair as reported by `tool` in recruit.
+fn bit(tool: &str) -> u8 {
+    let at = TOOLS
+        .iter()
+        .position(|t| *t == tool)
+        .expect("a tool the calibration scores");
+    1 << at
+}
+
+/// Fold one tool's hit table into a shard's recruits.
+fn collect<C: HitColumns>(tbl: &Table<HitParser<C>>, tool: u8, map: &mut Recruits) {
     for hit in tbl.iter() {
-        map.entry(hit.query.clone())
+        *map.entry(hit.query.clone())
             .or_default()
-            .push(hit.target.clone());
+            .entry(hit.target.clone())
+            .or_default() |= tool;
     }
+}
+
+/// `recruits.tbl` opened for writing: a family, a sequence, and a column
+/// per tool holding 1 where that tool recruited the pair.
+fn recruits_stream(
+    path: &Path,
+    families: &HashSet<String>,
+) -> anyhow::Result<toil::Stream<std::io::BufWriter<std::fs::File>>> {
+    let mut columns = vec!["family", "target"];
+    columns.extend(TOOLS);
+    let schema = toil::Schema::new(columns);
+    let mut widths = schema.widths();
+    let mut wide = vec![
+        "x".repeat(families.iter().map(String::len).max().unwrap_or(0)),
+        "x".repeat(NAME_WIDTH),
+    ];
+    wide.extend(TOOLS.map(|_| "0".to_string()));
+    widths.widen(&schema.row(wide));
+    Ok(toil::Stream::new(
+        schema,
+        widths,
+        std::io::BufWriter::with_capacity(
+            1 << 20,
+            std::fs::File::create(path)
+                .with_context(|| format!("failed to create {}", path.display()))?,
+        ),
+    ))
 }
 
 // ------------------------------------------------------------------ reject
@@ -857,6 +969,18 @@ fn reject(args: RejectArgs, paths: &Paths) -> anyhow::Result<()> {
     let layout = Layout::new(paths)?;
     let stage = layout.reject()?;
     let originals = layout.originals();
+
+    if let (Some(tables), Some(set)) = (&args.reject_with, &args.reject_set) {
+        return reject_with(
+            &layout,
+            &stage,
+            &paths.set,
+            tables,
+            set,
+            args.reject_e,
+            args.jobs,
+        );
+    }
 
     if !originals.is_dir() {
         bail!(
@@ -918,22 +1042,7 @@ fn reject(args: RejectArgs, paths: &Paths) -> anyhow::Result<()> {
     // family's own recruits, so every hit in it is a question that family
     // was asked: see CLAUDE.md on rejection being per pair
     let out = layout.rejects_tbl();
-    let schema = toil::Schema::new(["family", "target", "evalue", "score"]);
-    let mut widths = schema.widths();
-    widths.widen(&schema.row([
-        "x".repeat(families.iter().map(String::len).max().unwrap_or(0)),
-        "x".repeat(NAME_WIDTH),
-        "0.0e-000".to_string(),
-        "0000.0".to_string(),
-    ]));
-    let mut table = toil::Stream::new(
-        schema,
-        widths,
-        std::io::BufWriter::new(
-            std::fs::File::create(&out)
-                .with_context(|| format!("failed to create {}", out.display()))?,
-        ),
-    );
+    let mut table = rejects_stream(&out, families.iter().map(String::len).max())?;
 
     let (mut rejects, mut families_hit) = (0usize, 0usize);
     for family in &families {
@@ -975,6 +1084,190 @@ fn reject(args: RejectArgs, paths: &Paths) -> anyhow::Result<()> {
     table.header()?;
     println!(
         "{rejects} rejects over {families_hit} families, written to {}",
+        out.display()
+    );
+    Ok(())
+}
+
+/// `rejects.tbl` opened for writing, its family column `family_width` wide.
+fn rejects_stream(
+    path: &Path,
+    family_width: Option<usize>,
+) -> anyhow::Result<toil::Stream<std::io::BufWriter<std::fs::File>>> {
+    let schema = toil::Schema::new(["family", "target", "evalue", "score"]);
+    let mut widths = schema.widths();
+    widths.widen(&schema.row([
+        "x".repeat(family_width.unwrap_or(0)),
+        "x".repeat(NAME_WIDTH),
+        "0.0e-000".to_string(),
+        "0000.0".to_string(),
+    ]));
+    Ok(toil::Stream::new(
+        schema,
+        widths,
+        std::io::BufWriter::new(
+            std::fs::File::create(path)
+                .with_context(|| format!("failed to create {}", path.display()))?,
+        ),
+    ))
+}
+
+/// A (family, sequence) pair as one number, for a set too large to hold as
+/// strings.
+//
+// two 64-bit hashes of the pair under different leading tags. two pairs
+// colliding in both is ~1e-20 at 600 million pairs, and a collision could
+// only turn a forward hit on a sequence that is not a recruit into a reject
+fn pair_key(family: &[u8], target: &[u8]) -> u128 {
+    use std::hash::{DefaultHasher, Hash, Hasher};
+    let half = |tag: u8| {
+        let mut h = DefaultHasher::new();
+        (tag, family, target).hash(&mut h);
+        h.finish()
+    };
+    (u128::from(half(0)) << 64) | u128::from(half(1))
+}
+
+/// Judge every recruit in one pass over a forward search's hmmer tables.
+///
+/// The forward set holds the originals under the names the reversals carry,
+/// dealt into shards of its own, so a recruit is found by name whichever
+/// shard holds it.
+fn reject_with(
+    layout: &Layout,
+    stage: &Stage,
+    reversals: &Path,
+    tables: &Path,
+    set: &Path,
+    reject_e: f64,
+    threads: usize,
+) -> anyhow::Result<()> {
+    let forward = Set::load_as(set, &util::set::shape::FIXED)?;
+    let reversed = Set::load_as(reversals, SHAPE)?;
+    let total = |set: &Set| -> anyhow::Result<u64> { set.units().map(|u| u.number("seqs")).sum() };
+    let (f, r) = (total(&forward)?, total(&reversed)?);
+    if f != r {
+        bail!(
+            "{} holds {f} sequences and {} holds {r}; the forward search is of a different set",
+            set.display(),
+            reversals.display()
+        );
+    }
+
+    // each table's E-values rescaled from its own shard's size to the
+    // judge's -Z, so a reject means what the judge's search would make it.
+    // a shard within one sequence of it is the same -Z, as Layout takes a
+    // deal's shards to be: hmmer prints two figures, and rescaling those by
+    // a part in a million moves a pair printed at the threshold across it
+    let units = forward
+        .units()
+        .map(|u| {
+            let path = tables.join(format!("{HMMER}.{}.tbl", u.name()));
+            if !path.exists() {
+                bail!("no table for unit {:?} at {}", u.name(), path.display());
+            }
+            let n = u.number("seqs")?;
+            let scale = match n.abs_diff(layout.seqs) <= 1 {
+                true => 1.0,
+                false => layout.seqs as f64 / n as f64,
+            };
+            Ok((path, scale))
+        })
+        .collect::<anyhow::Result<Vec<_>>>()?;
+
+    let recruits_tbl = layout.recruits_tbl();
+    println!("reading {}...", recruits_tbl.display());
+    let mut keys: Vec<u128> = Vec::new();
+    let mut family_width = 0;
+    let mut rows = toil::Reader::new(std::io::BufReader::with_capacity(
+        1 << 20,
+        std::fs::File::open(&recruits_tbl).with_context(|| {
+            format!(
+                "no recruits at {}; run `cutoffs gather` first",
+                recruits_tbl.display()
+            )
+        })?,
+    ))?;
+    while let Some((_, entry)) = rows.next_entry()? {
+        let toil::Entry::Row(cells) = entry else {
+            continue;
+        };
+        let (Some(family), Some(target)) = (cells.field(0), cells.field(1)) else {
+            continue;
+        };
+        family_width = family_width.max(family.len());
+        keys.push(pair_key(family, target));
+    }
+    keys.sort_unstable();
+    keys.dedup();
+
+    let results = stage.results();
+    if results.exists() {
+        std::fs::remove_dir_all(&results)?;
+    }
+    std::fs::remove_file(stage.manifest()).ok();
+    ledger::clear(&stage.root);
+    std::fs::create_dir_all(&stage.root)?;
+
+    println!(
+        "judging {} recruits against {} tables, {threads} at once...",
+        keys.len(),
+        units.len()
+    );
+    let pool = pool(threads)?;
+    let mut found: Vec<(String, String, f64, f32)> = pool
+        .install(|| {
+            units
+                .par_iter()
+                .map(|(path, scale)| -> anyhow::Result<Vec<_>> {
+                    let tbl = Table::<HitParser<HmmerTable>>::open(path)
+                        .with_context(|| format!("failed to read {}", path.display()))?;
+                    let mut hits = Vec::new();
+                    for h in tbl.iter() {
+                        let e = h.e_value * scale;
+                        if e > reject_e {
+                            continue;
+                        }
+                        let key = pair_key(h.query.as_bytes(), h.target.as_bytes());
+                        if keys.binary_search(&key).is_ok() {
+                            hits.push((h.query.clone(), h.target.clone(), e, h.score));
+                        }
+                    }
+                    Ok(hits)
+                })
+                .collect::<anyhow::Result<Vec<_>>>()
+        })?
+        .into_iter()
+        .flatten()
+        .collect();
+    drop(keys);
+
+    // one row per pair at its best E-value, as the judge writes them
+    found.sort_by(|a, b| {
+        (&a.0, &a.1)
+            .cmp(&(&b.0, &b.1))
+            .then(a.2.partial_cmp(&b.2).expect("NaN in an E-value"))
+    });
+    found.dedup_by(|b, a| a.0 == b.0 && a.1 == b.1);
+
+    let out = layout.rejects_tbl();
+    let mut table = rejects_stream(&out, Some(family_width))?;
+    table.meta("judged-by", [tables.display().to_string()])?;
+    let mut families = HashSet::new();
+    for (family, target, e, score) in &found {
+        families.insert(family.as_str());
+        table.row([
+            family.clone(),
+            target.clone(),
+            format!("{e:.1e}"),
+            format!("{score:.1}"),
+        ])?;
+    }
+    table.header()?;
+    println!(
+        "{} rejects over {} families, written to {}",
+        found.len(),
+        families.len(),
         out.display()
     );
     Ok(())
@@ -1031,16 +1324,21 @@ fn fill(args: FillArgs, paths: &Paths) -> anyhow::Result<()> {
         std::fs::remove_dir_all(&tmp)?;
     }
 
-    // the decoys: every recruit the judge did not reject, laid out per family
-    // the way gather laid out the recruits, and listed in decoys.tbl. the
+    // the decoys: every recruit the judge did not reject, listed in
+    // decoys.tbl. each tool searches only its gaps, the decoys it did not
+    // recruit itself, laid out per tool and family the way gather laid out
+    // the recruits; learn takes the rest of its scores from recruit. the
     // list is streamed to disk rather than held: this process is about to
-    // launch 60,000 commands, and every launch forks it, page tables and all,
+    // launch 40,000 commands, and every launch forks it, page tables and all,
     // so what it holds in memory is what every launch costs
     let decoys_dir = layout.decoys();
     if decoys_dir.exists() {
         std::fs::remove_dir_all(&decoys_dir)?;
     }
-    std::fs::create_dir_all(&decoys_dir)?;
+    for tool in GAPS {
+        std::fs::create_dir_all(decoys_dir.join(tool))?;
+    }
+    let mut recruits = RecruitsByFamily::open(&layout.recruits_tbl())?;
 
     let decoys_tbl = layout.decoys_tbl();
     let schema = toil::Schema::new(["family", "target"]);
@@ -1059,12 +1357,12 @@ fn fill(args: FillArgs, paths: &Paths) -> anyhow::Result<()> {
         ),
     );
 
-    let mut families = Vec::new();
-    let (mut kept, mut dropped) = (0usize, 0usize);
+    // the families with a gap, per tool in GAPS order
+    let mut gaps: [Vec<String>; 2] = Default::default();
+    let (mut kept, mut dropped, mut families) = (0usize, 0usize, 0usize);
     for family in all_families {
-        let mut out = std::io::BufWriter::new(std::fs::File::create(
-            decoys_dir.join(format!("{family}.fa")),
-        )?);
+        let tools = recruits.family(&family)?;
+        let mut outs: [Option<std::io::BufWriter<std::fs::File>>; 2] = Default::default();
         let mut n = 0;
         let mut rows = Reader::new(
             std::fs::File::open(reversals.join(format!("{family}.fa")))?,
@@ -1080,46 +1378,69 @@ fn fill(args: FillArgs, paths: &Paths) -> anyhow::Result<()> {
                 dropped += 1;
                 continue;
             }
-            out.write_all(rec)?;
-            if !rec.ends_with(b"\n") {
-                out.write_all(b"\n")?;
-            }
+            let bits = *tools.get(&name).with_context(|| {
+                format!("{name} is a recruit of {family} that recruits.tbl does not list")
+            })?;
             listed.row([family.as_str(), name.as_str()])?;
             n += 1;
+
+            for (out, tool) in outs.iter_mut().zip(GAPS) {
+                if bits & bit(tool) != 0 {
+                    continue;
+                }
+                let out = match out {
+                    Some(out) => out,
+                    None => out.insert(std::io::BufWriter::new(std::fs::File::create(
+                        decoys_dir.join(tool).join(format!("{family}.fa")),
+                    )?)),
+                };
+                out.write_all(rec)?;
+                if !rec.ends_with(b"\n") {
+                    out.write_all(b"\n")?;
+                }
+            }
         }
-        out.flush()?;
         kept += n;
-        if n > 0 {
+        families += usize::from(n > 0);
+
+        let mut gapped = false;
+        for (i, out) in outs.into_iter().enumerate() {
+            if let Some(mut out) = out {
+                out.flush()?;
+                gaps[i].push(family.clone());
+                gapped = true;
+            }
+        }
+        if gapped {
             // made here, in this thread, rather than as a command: a mkdir
             // is not worth a fork of this process
             std::fs::create_dir_all(tmp.join(&family))?;
-            families.push(family);
         }
     }
     listed.header()?;
     drop(listed);
     drop(rejects);
-    println!(
-        "{kept} decoys over {} families, {dropped} recruits rejected",
-        families.len()
-    );
-    if families.is_empty() {
+    drop(recruits);
+    println!("{kept} decoys over {families} families, {dropped} recruits rejected");
+    for (tool, families) in GAPS.iter().zip(&gaps) {
+        println!("{tool} fills gaps in {} families", families.len());
+    }
+    if families == 0 {
         bail!("every recruit was rejected; nothing to fill");
     }
 
     let nail_bin = nail()?;
     let mmseqs_bin = mmseqs()?;
-    let hmmsearch_bin = hmmsearch()?;
     let jobs = args.jobs;
     let queries = layout.queries();
-    let target = |family: &str| decoys_dir.join(format!("{family}.fa"));
+    let target = |tool: &str, family: &str| decoys_dir.join(tool).join(format!("{family}.fa"));
     let hmm = |family: &str| queries.join(family).join("query.hmm");
     let table = |tool: &str, family: &str| manifest::table_path(&results, tool, family);
     let scratch = |family: &str| tmp.join(family);
 
-    println!("filling {} families, {jobs} at once...", families.len());
+    println!("filling {jobs} families at once...");
 
-    // three launches per family, one per tool. mmseqs' chain -- its profile
+    // a launch per family per tool with a gap there. mmseqs' chain -- its profile
     // from the family's alignment, its target db, the search, the table --
     // is five of its own processes, run as one shell command so that michi
     // launches it once and the manifest times it as one run
@@ -1140,7 +1461,7 @@ fn fill(args: FillArgs, paths: &Paths) -> anyhow::Result<()> {
             ),
             format!(
                 "{m} createdb --threads 1 {} {}",
-                target(family).display(),
+                target(MMSEQS, family).display(),
                 q("targetDB")
             ),
             format!(
@@ -1162,9 +1483,10 @@ fn fill(args: FillArgs, paths: &Paths) -> anyhow::Result<()> {
         .join(" > /dev/null && ")
     };
 
-    let pipeline = PipelineBuilder::new()
-        .pool(jobs)
-        .step(per_family(NAIL, jobs, &families, |family| {
+    let [nail_gaps, mmseqs_gaps] = &gaps;
+    let mut pl = PipelineBuilder::new().pool(jobs);
+    if !nail_gaps.is_empty() {
+        pl = pl.step(per_family(NAIL, jobs, nail_gaps, |family| {
             PCmd::new(&nail_bin)
                 .sub("search")
                 .arg("--mmseqs-path", &mmseqs_bin)
@@ -1178,31 +1500,22 @@ fn fill(args: FillArgs, paths: &Paths) -> anyhow::Result<()> {
                 .flag("--allow-overwrite")
                 .arg("--tbl-out", table(NAIL, family))
                 .path(hmm(family))
-                .path(target(family))
+                .path(target(NAIL, family))
                 .field(manifest::NAME, NAIL)
                 .field(manifest::TOOL, NAIL)
                 .field(manifest::SHARD, family)
-        }))
-        .step(per_family(MMSEQS, jobs, &families, |family| {
+        }));
+    }
+    if !mmseqs_gaps.is_empty() {
+        pl = pl.step(per_family(MMSEQS, jobs, mmseqs_gaps, |family| {
             PCmd::new("/bin/sh")
                 .arg("-c", mmseqs_chain(family))
                 .field(manifest::NAME, MMSEQS)
                 .field(manifest::TOOL, MMSEQS)
                 .field(manifest::SHARD, family)
-        }))
-        .step(per_family(HMMER, jobs, &families, |family| {
-            hmmsearch_cmd(
-                &hmmsearch_bin,
-                &hmm(family),
-                &target(family),
-                &table(HMMER, family),
-                FILL_E,
-            )
-            .arg("--domtblout", manifest::dom_path(&results, HMMER, family))
-            .field(manifest::NAME, HMMER)
-            .field(manifest::TOOL, HMMER)
-            .field(manifest::SHARD, family)
-        }))
+        }));
+    }
+    let pipeline = pl
         .stderr_dir(tmp.join("stderr"))
         .sink(Progress::new())
         .sink(PTable::new(stage.manifest()))
@@ -1220,10 +1533,88 @@ fn fill(args: FillArgs, paths: &Paths) -> anyhow::Result<()> {
 
     // one rm for every family's scratch, in this thread, for the same reason
     // the mkdirs were. stderr stays: it is where a failed command's output is
-    for family in &families {
+    for family in nail_gaps.iter().chain(mmseqs_gaps) {
         std::fs::remove_dir_all(scratch(family)).ok();
     }
     Ok(())
+}
+
+/// The tools `fill` searches, each over the decoys it did not recruit.
+//
+// not hmmer: its recruit search scored every pair it could report over a
+// whole shard, so a decoy it did not recruit is one it would not score
+const GAPS: [&str; 2] = [NAIL, MMSEQS];
+
+/// `recruits.tbl` read a family at a time, in the order gather wrote it.
+struct RecruitsByFamily {
+    rows: toil::Reader<std::io::BufReader<std::fs::File>>,
+    /// Where each tool's column is.
+    columns: [usize; 3],
+    /// The row read and not yet handed out: family, target, tool bits.
+    next: Option<(String, String, u8)>,
+}
+
+impl RecruitsByFamily {
+    fn open(path: &Path) -> anyhow::Result<Self> {
+        let rows = toil::Reader::new(std::io::BufReader::with_capacity(
+            1 << 20,
+            std::fs::File::open(path).with_context(|| {
+                format!(
+                    "no recruits at {}; run `cutoffs gather` first",
+                    path.display()
+                )
+            })?,
+        ))?;
+        let columns = TOOLS.map(|tool| rows.header().index(tool));
+        let columns = match columns {
+            [Some(a), Some(b), Some(c)] => [a, b, c],
+            _ => bail!("{} has no column per tool", path.display()),
+        };
+        let mut recruits = RecruitsByFamily {
+            rows,
+            columns,
+            next: None,
+        };
+        recruits.advance()?;
+        Ok(recruits)
+    }
+
+    fn advance(&mut self) -> anyhow::Result<()> {
+        self.next = None;
+        while let Some((_, entry)) = self.rows.next_entry()? {
+            let toil::Entry::Row(cells) = entry else {
+                continue;
+            };
+            let text =
+                |i: usize| String::from_utf8_lossy(cells.field(i).unwrap_or(b"")).into_owned();
+            let mut bits = 0;
+            for (tool, at) in TOOLS.iter().zip(self.columns) {
+                if cells.field(at) == Some(b"1") {
+                    bits |= bit(tool);
+                }
+            }
+            self.next = Some((text(0), text(1), bits));
+            return Ok(());
+        }
+        Ok(())
+    }
+
+    /// The recruits of `family` and the tools that reported each, asked for
+    /// in sorted order.
+    fn family(&mut self, family: &str) -> anyhow::Result<HashMap<String, u8>> {
+        let mut out = HashMap::new();
+        while let Some((f, target, bits)) = &self.next {
+            match f.as_str().cmp(family) {
+                std::cmp::Ordering::Less => {}
+                std::cmp::Ordering::Equal => {
+                    out.insert(target.clone(), *bits);
+                }
+                std::cmp::Ordering::Greater => break,
+            }
+            self.advance()?;
+        }
+        Ok(out)
+    }
 }
 
 // ------------------------------------------------------------------- learn
@@ -1256,45 +1647,89 @@ impl HitColumns for HmmerBestDomain {
     const N_COLUMNS: usize = HmmerTable::N_COLUMNS;
 }
 
-/// One family's table read into its top `N_SCORES` decoy scores and its
-/// decoy count.
-///
-/// The table is one family's profile against that family's own decoys, so
-/// every hit in it is in the family's null: a family's null holds only
-/// sequences vetted for that family, and the file layout is what says so.
-fn decoy_scores<T>(path: &Path) -> anyhow::Result<(Vec<f32>, usize)>
-where
-    T: HitColumns,
-{
-    let table = Table::<HitParser<T>>::open(path)
-        .with_context(|| format!("failed to read {}", path.display()))?;
+/// One column of a family's null: its best decoy scores, highest first, and
+/// how many decoys it scored.
+#[derive(Default)]
+struct Null {
+    top: Vec<f32>,
+    n: usize,
+}
 
-    // one entry per pair, the last row for it winning, so a pair reported
-    // twice counts as one decoy
-    let mut by_pair: HashMap<(&str, &str), &Hit> = HashMap::new();
-    for hit in table.iter() {
-        by_pair.insert((hit.query.as_str(), hit.target.as_str()), hit);
+impl Null {
+    fn add(&mut self, score: f32) {
+        self.n += 1;
+        self.keep(score);
     }
 
-    let mut hits: Vec<&Hit> = by_pair.into_values().collect();
-    // ties broken on score and then name, so the row does not depend on
-    // which of two equal hits a hash map yielded first
-    hits.sort_by(|a, b| {
-        a.e_value
-            .partial_cmp(&b.e_value)
-            .expect("NaN in decoy e-values")
-            .then(b.score.partial_cmp(&a.score).expect("NaN in decoy scores"))
-            .then_with(|| a.target.cmp(&b.target))
-    });
-    let scores: Vec<f32> = hits
-        .iter()
-        .map(|h| h.score)
-        // a family with fewer than N_SCORES decoys pads with zero, which
-        // the readers of cutoffs.tbl take as "no usable cutoff"
-        .chain(std::iter::repeat(0.0))
-        .take(N_SCORES)
-        .collect();
-    Ok((scores, hits.len()))
+    fn keep(&mut self, score: f32) {
+        let at = self.top.partition_point(|s| *s >= score);
+        if at < N_SCORES {
+            self.top.insert(at, score);
+            self.top.truncate(N_SCORES);
+        }
+    }
+
+    fn merge(&mut self, other: Null) {
+        self.n += other.n;
+        for s in other.top {
+            self.keep(s);
+        }
+    }
+
+    /// The scores padded to `N_SCORES`, and the count.
+    //
+    // a family with fewer than N_SCORES decoys pads with zero, which the
+    // readers of cutoffs.tbl take as "no usable cutoff"
+    fn cells(&self) -> (Vec<f32>, usize) {
+        let scores = self
+            .top
+            .iter()
+            .copied()
+            .chain(std::iter::repeat(0.0))
+            .take(N_SCORES)
+            .collect();
+        (scores, self.n)
+    }
+}
+
+/// A family's null in each column of `cutoffs.tbl`: the tools in `TOOLS`
+/// order, then hmmer's best domain.
+type Nulls = [Null; 4];
+
+/// Where hmmer's best-domain null sits in `Nulls`.
+const DOM: usize = 3;
+
+/// Each pair's best score in one hit table.
+//
+// best rather than last: a tool can report a pair more than once, and a
+// decoy's score is the highest it reached
+fn best_per_pair<T: HitColumns>(path: &Path) -> anyhow::Result<HashMap<(String, String), f32>> {
+    let table = Table::<HitParser<T>>::open(path)
+        .with_context(|| format!("failed to read {}", path.display()))?;
+    let mut best: HashMap<(String, String), f32> = HashMap::new();
+    for hit in table.iter() {
+        let at = best
+            .entry((hit.query.clone(), hit.target.clone()))
+            .or_insert(hit.score);
+        *at = at.max(hit.score);
+    }
+    Ok(best)
+}
+
+/// Fold one table's pairs into the nulls, leaving out the rejects.
+fn fold<T: HitColumns>(
+    path: &Path,
+    column: usize,
+    rejects: &HashSet<u128>,
+    nulls: &mut HashMap<String, Nulls>,
+) -> anyhow::Result<()> {
+    for ((family, target), score) in best_per_pair::<T>(path)? {
+        if rejects.contains(&pair_key(family.as_bytes(), target.as_bytes())) {
+            continue;
+        }
+        nulls.entry(family).or_default()[column].add(score);
+    }
+    Ok(())
 }
 
 fn learn(args: LearnArgs, paths: &Paths) -> anyhow::Result<()> {
@@ -1313,55 +1748,59 @@ fn learn(args: LearnArgs, paths: &Paths) -> anyhow::Result<()> {
             stage.manifest().display()
         );
     }
-    let mut families: Vec<String> = searched
+    let filled: Vec<(String, String)> = searched
         .runs()
-        .filter_map(|row| row.get(manifest::SHARD).map(str::to_string))
+        .filter_map(|row| {
+            Some((
+                row.get(manifest::NAME)?.to_string(),
+                row.get(manifest::SHARD)?.to_string(),
+            ))
+        })
         .collect();
-    families.sort_unstable();
-    families.dedup();
-    if families.is_empty() {
-        bail!("no finished searches in {}", stage.manifest().display());
-    }
 
-    let empty = || (vec![0.0; N_SCORES], 0);
-    let skipped = AtomicUsize::new(0);
+    let rejects: HashSet<u128> = read_rejects(&layout.rejects_tbl())?
+        .iter()
+        .map(|(f, t)| pair_key(f.as_bytes(), t.as_bytes()))
+        .collect();
 
-    // collected rather than written as they finish, so the file is in
-    // family order however the pool interleaves
+    // a decoy's score comes from recruit wherever the tool recruited it and
+    // from fill's search of its gaps otherwise; each pair is in one shard,
+    // and a gap is a pair the tool's recruit table does not hold, so no pair
+    // is counted twice. ranked by score, since the two stages' E-values are
+    // on different scales
+    let recruit = layout.recruit()?.results();
     let pool = pool(args.threads)?;
-    let rows: Vec<Option<Vec<String>>> = pool.install(|| {
-        families
+    let mut nulls: HashMap<String, Nulls> = pool.install(|| {
+        layout
+            .targets()
             .par_iter()
-            .map(|family| -> anyhow::Result<Option<Vec<String>>> {
-                let table = |tool: &str| manifest::table_path(&results, tool, family);
-                let (nail, mmseqs, hmmer) = (table(NAIL), table(MMSEQS), table(HMMER));
-                if !nail.exists() || !mmseqs.exists() {
-                    // a family without both tables tells us nothing
-                    // comparative
-                    skipped.fetch_add(1, Ordering::Relaxed);
-                    return Ok(None);
-                }
-                let mut row = vec![family.clone()];
-                row.extend(cells(&decoy_scores::<NailTable>(&nail)?));
-                row.extend(cells(&decoy_scores::<BlastTable>(&mmseqs)?));
-                row.extend(cells(&match hmmer.exists() {
-                    true => decoy_scores::<HmmerTable>(&hmmer)?,
-                    false => empty(),
-                }));
-                // the same decoys scored by their best domain, so the
-                // count is the one hmmer_n already holds
-                let best = match hmmer.exists() {
-                    true => decoy_scores::<HmmerBestDomain>(&hmmer)?,
-                    false => empty(),
-                };
-                row.extend(cells(&best).into_iter().take(N_SCORES));
-                Ok(Some(row))
+            .map(|(shard, _)| -> anyhow::Result<HashMap<String, Nulls>> {
+                let mut nulls = HashMap::new();
+                let path = |tool: &str| manifest::table_path(&recruit, tool, shard);
+                fold::<NailTable>(&path(NAIL), 0, &rejects, &mut nulls)?;
+                fold::<BlastTable>(&path(MMSEQS), 1, &rejects, &mut nulls)?;
+                fold::<HmmerTable>(&path(HMMER), 2, &rejects, &mut nulls)?;
+                fold::<HmmerBestDomain>(&path(HMMER), DOM, &rejects, &mut nulls)?;
+                Ok(nulls)
             })
-            .collect::<anyhow::Result<Vec<_>>>()
+            .try_reduce(HashMap::new, |mut a, b| {
+                for (family, nulls) in b {
+                    let into = a.entry(family).or_default();
+                    for (into, null) in into.iter_mut().zip(nulls) {
+                        into.merge(null);
+                    }
+                }
+                Ok(a)
+            })
     })?;
-    let skipped = skipped.load(Ordering::Relaxed);
-    if skipped > 0 {
-        eprintln!("skipped {skipped} families missing a nail or mmseqs table");
+
+    for (tool, family) in &filled {
+        let path = manifest::table_path(&results, tool, family);
+        match tool.as_str() {
+            NAIL => fold::<NailTable>(&path, 0, &rejects, &mut nulls)?,
+            MMSEQS => fold::<BlastTable>(&path, 1, &rejects, &mut nulls)?,
+            _ => bail!("fill ran {tool:?}, which only fills nail's and mmseqs' gaps"),
+        }
     }
 
     let mut headers = vec!["family".to_string()];
@@ -1371,8 +1810,17 @@ fn learn(args: LearnArgs, paths: &Paths) -> anyhow::Result<()> {
     }
     headers.extend((1..=N_SCORES).map(|i| format!("{HMMER_DOM}_{i}")));
 
+    let mut families: Vec<(String, Nulls)> = nulls.into_iter().collect();
+    families.sort_unstable_by(|a, b| a.0.cmp(&b.0));
     let mut table = toil::Table::new(toil::Schema::new(headers));
-    for row in rows.into_iter().flatten() {
+    for (family, nulls) in families {
+        let mut row = vec![family];
+        for null in &nulls[..DOM] {
+            row.extend(cells(&null.cells()));
+        }
+        // the same decoys scored by their best domain, so the count is the
+        // one hmmer_n already holds
+        row.extend(cells(&nulls[DOM].cells()).into_iter().take(N_SCORES));
         table.row(row);
     }
 
@@ -1423,6 +1871,8 @@ fn all(args: AllArgs, paths: &Paths) -> anyhow::Result<()> {
             dry_run: false,
             jobs,
             reject_e: REJECT_E,
+            reject_with: None,
+            reject_set: None,
         },
         paths,
     )?;

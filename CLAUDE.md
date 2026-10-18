@@ -647,28 +647,47 @@ hides the one thing the method turns on.
 
 ### The stages
 
-`recruit` searches every family against the initial reversals, cheaply, and
-finds the small subset that scores at all. `gather` pulls those out of the
-shards in both forms. `reject` runs one hmmsearch of each family against its
-recruits' originals, the judge that splits them into decoys and rejects, and
-writes the rejected pairs to `rejects.tbl`. `fill` searches every tool
-against the decoys with the prefilter effectively off and `-E 1e9`, so each
-tool has a score for every decoy and not only for the ones it recruited.
-`learn` turns those scores into the per-family cutoffs every hit is
-afterwards held against.
+`recruit` searches every family against the initial reversals with nail,
+mmseqs and hmmer, and finds the subset that scores at all. On MGnify hmmer's
+share ran on a cluster, at about 16 hours a shard, and its tables were copied
+into `recruit/results/` afterwards. `gather` pulls the recruits out of the
+shards in both forms. It also lists every recruit in `recruits.tbl`, with a
+column per tool holding 1 where that tool recruited the pair. `reject` judges
+each recruit and writes the rejected pairs to `rejects.tbl`. `fill` searches
+nail and mmseqs against the decoys each of them did not recruit, with the
+prefilter effectively off and `-E 1e9`. `learn` takes each tool's decoy
+scores from its recruit tables, and from `fill` for the rest, and turns them
+into the per-family cutoffs every hit is afterwards held against.
 
 hmmsearch is the one judge for every tool, as it is in pid. A recruit whose
 original the family's profile hits at E ≤ 1e-3 is a reject for nail and
-mmseqs as well as for hmmer, so `fill` searches one set of decoys for all
-three and the nulls differ only in what each tool scored them. The judge
-runs at `-Z` equal to the sequence count of one shard, read from `set.tbl`,
-so a reject means what it would in the search a cutoff is applied to rather
-than in the small file of one family's recruits.
+mmseqs as well as for hmmer, so the three nulls hold the same decoys and
+differ only in what each tool scored them. The judge runs at `-Z` equal to
+the sequence count of one shard, read from `set.tbl`, so a reject means what
+it would in the search a cutoff is applied to rather than in the small file
+of one family's recruits.
 
-`fill` rescores nothing. A tool's score for a pair does not move with these
-settings; what the pass adds is the pairs a tool never reached in `recruit`. The threshold is an E-value rather than a `-Z` because it is one
-mechanism the three tools share, and because its only job is to keep a weak
-decoy from being left off the table.
+The judge is either an hmmsearch per family or a forward search that has
+already run. `reject --reject-with <dir> --reject-set <set>` reads
+`hmmer.<unit>.tbl` for each unit of a forward set, in one pass, and checks
+every row against `recruits.tbl` by name. The forward set has to hold the
+same sequences under the same names, dealt any way. recall's set is that set
+for MGnify. Judged from recall's tables, the 12 October recruits gave the same
+1,351,380 rejects the per-family judge gave. `reject` rescales a table's
+E-values to the judge's `-Z` only when its shard differs from ours by more
+than one sequence. hmmer prints two figures, and a rescale by a part in a
+million pushed 18 pairs printed at exactly 1e-3 over the threshold.
+
+`fill` rescores nothing. A tool scores a pair the same at recruit's settings
+as at fill's: on 2,000 families of the 12 October run, the 10.0 M nail pairs
+and 0.9 M mmseqs pairs both stages reported scored identically. So `fill`
+searches only each tool's gaps. The same comparison found 1.6% of nail's
+recruited decoys missing from what `fill` reported, which is one more reason
+`learn` reads recruit's scores rather than searching them again. hmmer gets
+no fill. Its recruit search ran over every pair in each shard, so a decoy it
+did not recruit is one it scores above E 10. The threshold is an E-value
+rather than a `-Z` because it is one mechanism nail and mmseqs share, and
+because its only job is to keep a weak decoy from being left off the table.
 
 The set arrives reversed, built by a `fixed` recipe under a `reversed` tag, so
 no stage here reverses anything and no second copy of the shards is made. A
@@ -742,8 +761,8 @@ in proportion to the parent's memory and the launches queue behind each
 other. A fill that held its 11 M-row `decoys.tbl` in memory ran 11 launches a
 second. So the stages stream their tables to disk, make and remove
 directories in their own thread, and run mmseqs' five-process chain as one
-shell command: three launches per family and nothing short-lived among
-them.
+shell command. `fill` launches at most two commands per family, one per tool
+with a gap there, and nothing short-lived among them.
 
 ## benchmarks/pid
 
