@@ -1,0 +1,10 @@
+{
+  "slug": "mgy-rev-hmmer-recruit-backup",
+  "text": "`/data/results-mgy-rev-hmmer-bk-2026-10-15` holds hmmer's cutoffs recruit tables from the cluster as `hmmer.<i>.tbl.gz`, one per reversed MGnify shard, 1000 in all (12 G, `gzip -t` clean). The uncompressed copies in `sets/cutoffs/outputs/recruit/results/hmmer.<i>.tbl` were sha256-checked against them.",
+  "created_at": "2026-10-18T21:42:04.346341914Z",
+  "updated_at": "2026-10-18T21:42:04.346341914Z",
+  "stamp": {
+    "commit": "a1a3232",
+    "branch": "claude-refactor"
+  }
+}
