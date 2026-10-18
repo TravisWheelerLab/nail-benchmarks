@@ -13,7 +13,7 @@
   "lease_expires": null,
   "defer_until": null,
   "created_at": "2026-09-28T19:02:29.773506264Z",
-  "updated_at": "2026-10-13T02:23:17.647162681Z",
+  "updated_at": "2026-10-18T21:54:57.755276048Z",
   "closed_at": null,
   "close_reason": null,
   "resolution": null,
@@ -24,6 +24,14 @@
       "author": "jackroddy/01dd6c44",
       "text": "The serial/parallel split is being built as its own tool, hmph, at ~/hmph (its own repo, its own foam). It watches a process tree and writes concurrency per process per tick, integrated into serial seconds and parallel work. Once it runs, wrap thread-scaling's searches in it rather than instrumenting the tools.",
       "commit": "401f26d",
+      "branch": "claude-refactor"
+    },
+    {
+      "id": "59f87e3b",
+      "at": "2026-10-18T21:54:57.755274909Z",
+      "author": "jackroddy/0d39a02d",
+      "text": "hmph is dropped. Three reps replace it: the rerun uses nail dev 326797b (sha `8443291daa9f`) at `--rungs 1,2,4,8,16,32,48 --reps 3`, started 18 Oct 2026. nail now runs with `-s` and writes its stage tree to a `.stats` file beside each hit table, which gives nail's serial stages at every rung. mmseqs and hmmer get no serial split. The 26 September results are in `/data/thread-scaling-bk-2026-09-26`.",
+      "commit": "9a27d39",
       "branch": "claude-refactor"
     }
   ],
