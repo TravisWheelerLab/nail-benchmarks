@@ -1,0 +1,10 @@
+{
+  "slug": "cutoffs-backup-2026-10-15",
+  "text": "`/data/cutoffs-bk-2026-10-15` is a `cp -a` of `sets/cutoffs` taken on 15 Oct 2026, before the run that added hmmer's recruits: 211,818 files, with names and sizes checked against the source. It holds the 12 October recruits, rejects, fill and learn outputs.",
+  "created_at": "2026-10-18T21:42:04.311370868Z",
+  "updated_at": "2026-10-18T21:42:04.311370868Z",
+  "stamp": {
+    "commit": "a1a3232",
+    "branch": "claude-refactor"
+  }
+}
