@@ -11,6 +11,9 @@
 //! across every rung rather than piling it onto whichever rung was running.
 //! `/proc/loadavg` is read either side of every search into `load.tbl`, so a
 //! point that was run under load can be seen to have been.
+//!
+//! nail runs with `-s`, and its stage tree goes to a `.stats` file beside its
+//! hit table, so its serial stages can be read off every rung.
 
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
@@ -203,26 +206,26 @@ pub fn main(args: Args, paths: &crate::Paths) -> anyhow::Result<()> {
 
                     match arm {
                         Arm::Nail => {
+                            let table = dirs.table(&name, &shard);
+                            let cmd = Cmd::new(&bins.nail)
+                                .sub("search")
+                                .arg("--mmseqs-path", &bins.mmseqs)
+                                .arg("-t", threads)
+                                .arg("--tmp-dir", scratch.join(&name))
+                                .flag("--allow-overwrite")
+                                .arg("-E", EVALUE)
+                                .arg("--mmseqs-s", SEED_S)
+                                .arg("--seed-mode", SEED_MODE)
+                                .flag("-s")
+                                .arg("--tbl-out", &table)
+                                .path(&query_hmm)
+                                .path(&target)
+                                .stdout_to(table.with_extension("stats"));
+
                             pl = pl.step(
-                                util::search::nail(
-                                    &bins.nail,
-                                    &bins.mmseqs,
-                                    &query_hmm,
-                                    &target,
-                                    &dirs.table(&name, &shard),
-                                    &scratch.join(&name),
-                                    threads,
-                                    EVALUE,
-                                    &[
-                                        ("--mmseqs-s", SEED_S.to_string()),
-                                        ("--seed-mode", SEED_MODE.to_string()),
-                                    ],
-                                    &[],
-                                    &name,
-                                    &fields,
-                                )
-                                .name(format!("{name}.{shard}"))
-                                .cores(threads),
+                                Step::serial([util::search::tag(cmd, &name, arm.tool(), &fields)])
+                                    .name(format!("{name}.{shard}"))
+                                    .cores(threads),
                             );
                         }
                         Arm::Mmseqs => {
