@@ -1,0 +1,10 @@
+{
+  "slug": "thread-scaling-size-sweep",
+  "text": "thread-scaling size sweep on node 1, 20-21 Oct 2026: nail's speedup at 48 threads as a % of perfect. All of Pfam against MGnify: 84.7 at 500k targets, 84.1 at 250k, 83.2 at 125k, 83.8 at 88k, 81.4 at 50k. Cutting queries against 500k targets costs more: 79.8 with half of Pfam, 75.7 with a quarter, 59.2 with 2,000 profiles. Scratch: `tmp-claude/2026-10-20-small-scaling/`.",
+  "created_at": "2026-10-23T02:43:37.554576902Z",
+  "updated_at": "2026-10-23T02:43:37.554576902Z",
+  "stamp": {
+    "commit": "f2bffd3",
+    "branch": "claude-refactor"
+  }
+}
