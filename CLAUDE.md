@@ -831,14 +831,16 @@ both sides.
 ## benchmarks/thread-scaling
 
 Strong scaling for nail, mmseqs and hmmer over its own `cross` set, all of
-Pfam against 500,000 MGnify sequences, built by `build-set --in
-thread-scaling-toy|thread-scaling-real`. `run` searches every unit at every
-rung of `--rungs`, `--reps` times over, with the reps as the outer loop so
-load from other users spreads across rungs. Four arms: nail `-t N`, mmseqs
-`--threads N`, one `hmmsearch --cpu N`, and `hmmer-split`, the query cut N/2
-ways at `--cpu 2`. Each search is pinned to N cores. `/proc/loadavg` is read
-either side of every search into `outputs/load.tbl`, and it counts the
-search's own threads as well as anyone else's.
+Pfam against 100,000 MGnify sequences, built by `build-set --in
+thread-scaling-toy|thread-scaling-real`. At that size hmmer's one-thread
+search takes about an hour. nail reaches 82% of perfect speedup at 48
+threads, and that figure falls as the set shrinks. `run` searches every unit
+at every rung of `--rungs`, `--reps` times over, with the reps as the outer
+loop so load from other users spreads across rungs. Four arms: nail `-t N`,
+mmseqs `--threads N`, one `hmmsearch --cpu N`, and `hmmer-split`, the query
+cut N/2 ways at `--cpu 2`. Each search is pinned to N cores. `/proc/loadavg`
+is read either side of every search into `outputs/load.tbl`, and it counts
+the search's own threads as well as anyone else's.
 
 Every arm of a scaling curve starts from the same rung, one thread. Where an
 arm's recipe degenerates at a rung into another arm's command, reuse that
@@ -856,6 +858,14 @@ draws wall clock and that percentage against threads into
 
 The split arm is `util::search::hmmer`, so its parts share one pool of N
 cores.
+
+nail runs with `-s`. `run` sends its stage tree to a `.stats` file beside its
+hit table, where each rung's serial stages can be read.
+
+The real run runs on one memory node, under `numactl --cpunodebind=1
+--membind=1`. michi builds its pool from the affinity mask numactl sets.
+Every lease is then a node 1 core, and every child inherits the memory
+binding.
 
 ## benchmarks/stage-times
 

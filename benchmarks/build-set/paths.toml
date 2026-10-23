@@ -145,7 +145,7 @@ alignments = "../../data/pfam.sto"
 [[thread-scaling-real.targets]]
 name = "mgnify"
 from = "../../data/mgnify"
-seqs = 500000
+seqs = 100000
 
 # -------------------------------------------------------------- stage-times
 
