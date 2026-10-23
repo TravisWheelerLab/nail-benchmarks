@@ -1,0 +1,10 @@
+{
+  "slug": "michi-under-numactl",
+  "text": "Under `numactl --cpunodebind=1 --membind=1`, michi 0.2.0 leases only node 1 cores, since `Cores::read` builds its pool from sched_getaffinity. On 21 Oct 2026 a 1-thread nail and its mmseqs child had Cpus_allowed_list 1, and over 99% of their memory sat on node 1 per numa_maps. With a one-node pool michi writes no node or policy column and sets no mempolicy.",
+  "created_at": "2026-10-23T02:43:37.607930294Z",
+  "updated_at": "2026-10-23T02:43:37.607930294Z",
+  "stamp": {
+    "commit": "f2bffd3",
+    "branch": "claude-refactor"
+  }
+}
