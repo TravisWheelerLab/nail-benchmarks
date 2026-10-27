@@ -54,7 +54,9 @@
 //! A pair earns a row by clearing some run's cutoff, or by hmmer having
 //! reported it at all. hmmer's whole reported set is kept because it is what
 //! everything else is measured against: a pair it found weakly is still a
-//! pair they can be asked about.
+//! pair they can be asked about. A family short of any cutoff keeps every
+//! pair a run reported, so an analysis that leaves it out can count what it
+//! left.
 //!
 //! Every column is padded to its width except `query`, which is unpadded
 //! because a query's rows are adjacent and so line up without it, and `dom`,
@@ -68,7 +70,7 @@ pub mod runs;
 mod scan;
 pub mod shard;
 
-use std::collections::{BTreeMap, HashMap};
+use std::collections::{BTreeMap, HashMap, HashSet};
 use std::fmt;
 use std::path::{Path, PathBuf};
 
@@ -334,6 +336,9 @@ impl Queries {
 pub struct Cutoffs {
     nail: Vec<Option<f32>>,
     mmseqs: Vec<Option<f32>>,
+    /// Whether the family has a threshold in all four columns [`complete`]
+    /// reads.
+    complete: Vec<bool>,
 }
 
 impl Cutoffs {
@@ -345,6 +350,12 @@ impl Cutoffs {
         };
 
         column.get(query as usize).copied().flatten()
+    }
+
+    /// Whether nail, mmseqs, hmmer and hmmer's best domain all have a
+    /// threshold on one family.
+    pub fn complete(&self, query: u32) -> bool {
+        self.complete.get(query as usize).copied().unwrap_or(false)
     }
 
     /// One score per family per tool, out of the decoys the calibration scored
@@ -362,14 +373,16 @@ impl Cutoffs {
         let mut out = Cutoffs {
             nail: vec![None; queries.len()],
             mmseqs: vec![None; queries.len()],
+            complete: vec![false; queries.len()],
         };
 
-        parse(path, c, |family, nail, mmseqs| {
+        parse(path, c, |family, scores| {
             // a family the calibration knows and this query set does not is
             // not an error: the calibration covers every family Pfam has
             if let Some(id) = queries.id(family) {
-                out.nail[id as usize] = nail;
-                out.mmseqs[id as usize] = mmseqs;
+                out.nail[id as usize] = scores[0];
+                out.mmseqs[id as usize] = scores[1];
+                out.complete[id as usize] = scores.iter().all(Option::is_some);
             }
         })?;
 
@@ -401,8 +414,8 @@ impl Named {
     pub fn read(path: &Path, c: usize) -> anyhow::Result<Named> {
         let mut out = HashMap::new();
 
-        parse(path, c, |family, nail, mmseqs| {
-            out.insert(family.to_string(), (nail, mmseqs));
+        parse(path, c, |family, scores| {
+            out.insert(family.to_string(), (scores[0], scores[1]));
         })?;
 
         ensure!(
@@ -416,16 +429,27 @@ impl Named {
     }
 }
 
-/// Read `cutoffs.tbl`, handing each family its two thresholds at index `c`.
+/// The families `cutoffs.tbl` gives a threshold for nail, mmseqs, hmmer and
+/// hmmer's best domain at index `c`. Every other family is left out of the
+/// analyses.
+pub fn complete(path: &Path, c: usize) -> anyhow::Result<HashSet<String>> {
+    let mut out = HashSet::new();
+    parse(path, c, |family, scores| {
+        if scores.iter().all(Option::is_some) {
+            out.insert(family.to_string());
+        }
+    })?;
+
+    Ok(out)
+}
+
+/// Read `cutoffs.tbl`, handing each family its thresholds at index `c`: nail,
+/// mmseqs, hmmer's sequence score and hmmer's best domain, in that order.
 ///
 /// `cutoffs.tbl` names its columns `<tool>_1..<tool>_5` and `<tool>_n`, so the
 /// column to read is found by name rather than by counting -- which is what
 /// lets the calibration add a tool without moving anything here.
-fn parse(
-    path: &Path,
-    c: usize,
-    mut row: impl FnMut(&str, Option<f32>, Option<f32>),
-) -> anyhow::Result<()> {
+fn parse(path: &Path, c: usize, mut row: impl FnMut(&str, [Option<f32>; 4])) -> anyhow::Result<()> {
     let table =
         toil::Table::read(path).with_context(|| format!("failed to read {}", path.display()))?;
 
@@ -436,7 +460,12 @@ fn parse(
             .with_context(|| format!("{} has no {name} column", path.display()))
     };
 
-    let (nail_at, mmseqs_at) = (column("nail")?, column("mmseqs")?);
+    let at = [
+        column("nail")?,
+        column("mmseqs")?,
+        column("hmmer")?,
+        column("hmmer_dom")?,
+    ];
 
     for cells in table.rows() {
         let Some(family) = cells.get(0) else {
@@ -451,7 +480,7 @@ fn parse(
                 .filter(|s| *s > 0.0)
         };
 
-        row(family, score(nail_at), score(mmseqs_at));
+        row(family, at.map(score));
     }
 
     Ok(())

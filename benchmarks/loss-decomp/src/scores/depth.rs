@@ -13,6 +13,11 @@
 //! entry, split across one data file per thread whose offsets run on as if
 //! the files were one, and nail's header databases give which key is which
 //! name, in the order it wrote them.
+//!
+//! A family short of a cutoff for some tool is left out of every count and
+//! every row, its prefilter list included. `#= left_out` on each table counts
+//! the families and the pairs each run reported in them, and a run's last row
+//! of `depth.tbl` carries its own count for the unit in `left_out`.
 
 use std::collections::{HashMap, HashSet};
 use std::fs::File;
@@ -23,6 +28,7 @@ use std::path::{Path, PathBuf};
 use anyhow::{Context, bail, ensure};
 
 use crate::scores::runs::Reader as Runs;
+use crate::scores::{LeftOut, Named};
 
 /// Where one arm's seeding left mmseqs' databases, under a run's root.
 pub fn prefilter_dir(root: &Path, arm: &str, shard: &str) -> PathBuf {
@@ -431,6 +437,10 @@ pub fn depth(
     let mut scores = Runs::open(table)?;
     let hmmer = scores.meta().hmmer()?;
     let runs = scores.meta().runs.clone();
+    let named = Named::read(&scores.meta().cutoffs, scores.meta().c)?;
+
+    let mut left = LeftOut::new(runs.len());
+    let mut left_of: HashMap<(usize, String), u64> = HashMap::new();
 
     // every pair that hmmer found or a run kept, grouped by the arm and the
     // shard whose prefilter list says where it sat
@@ -439,6 +449,18 @@ pub fn depth(
     let mut truth_of: indexmap::IndexMap<String, u64> = indexmap::IndexMap::new();
 
     scores.each(|row| {
+        if !row.row().complete() {
+            for run in 0..runs.len() {
+                *left_of
+                    .entry((run, row.row().shard().to_string()))
+                    .or_default() += u64::from(row.present(run));
+            }
+            let family = std::str::from_utf8(row.row().field(0))
+                .context("a query name that is not utf-8")?;
+            left.pair(family, |run| row.present(run));
+            return Ok(());
+        }
+
         let truth = row.row().passed(hmmer);
         if truth {
             *truth_of.entry(row.row().shard().to_string()).or_default() += 1;
@@ -478,6 +500,7 @@ pub fn depth(
         toil::Column::new("truth"),
         toil::Column::new("hits"),
         toil::Column::new("frac").fixed(4),
+        toil::Column::new("left_out"),
     ]));
     table.meta("bin", [width.to_string()]);
     let mut hits_table = toil::Table::new(toil::Schema::new([
@@ -531,7 +554,12 @@ pub fn depth(
 
         pairs.sort_by(|a, b| a.query.cmp(&b.query));
         let mut queries: Vec<&str> = pairs.iter().map(|p| p.query.as_str()).collect();
-        queries.extend(by_query.keys().map(String::as_str));
+        queries.extend(
+            by_query
+                .keys()
+                .map(String::as_str)
+                .filter(|query| named.complete(query)),
+        );
         queries.sort_unstable();
         queries.dedup();
 
@@ -563,12 +591,24 @@ pub fn depth(
             .map(|(&key, &(off, len))| (off, len, key))
             .collect();
         keys.sort_unstable();
-        let keys: Vec<u32> = keys.into_iter().map(|(_, _, key)| key).collect();
 
         let name_of: HashMap<u32, &str> = pf
             .query_key
             .iter()
             .map(|(name, &key)| (key, name.as_str()))
+            .collect();
+
+        // a key with no name cannot be judged, and is kept as it always was
+        let keys: Vec<u32> = keys
+            .into_iter()
+            .map(|(_, _, key)| key)
+            .filter(|key| match name_of.get(key) {
+                Some(name) if !named.complete(name) => {
+                    left.family(name);
+                    false
+                }
+                _ => true,
+            })
             .collect();
 
         let mut found: HashMap<u32, HashMap<u32, u32>> = HashMap::new();
@@ -667,6 +707,7 @@ pub fn depth(
                 truth.into(),
                 hits.into(),
                 frac(hits, prefilter).into(),
+                "-".into(),
             ]);
         }
         table.row([
@@ -680,7 +721,20 @@ pub fn depth(
             tally.truth_beyond.into(),
             0u64.into(),
             "-".into(),
+            left_of
+                .get(&(run, shard.clone()))
+                .copied()
+                .unwrap_or(0)
+                .into(),
         ]);
+    }
+
+    // after the groups, since the prefilter lists add families the rows
+    // never named
+    for words in left.lines(&runs) {
+        table.meta("left_out", words.clone());
+        hits_table.meta("left_out", words.clone());
+        lists_table.meta("left_out", words);
     }
 
     table

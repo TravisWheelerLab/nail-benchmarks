@@ -399,7 +399,7 @@ impl RunsRow<'_, '_> {
 }
 
 #[cfg(test)]
-mod tests {
+pub mod tests {
     use super::*;
 
     use std::path::PathBuf;
@@ -420,11 +420,12 @@ mod tests {
             let path = dir.join("cutoffs.tbl");
             std::fs::write(
                 &path,
-                "# family nail_1 mmseqs_1\n\
-                 # ------ ------ --------\n\
-                   alpha  24.5   30.0\n\
-                   beta   20.0   30.0\n\
-                   gamma  20.0   30.0\n",
+                "# family nail_1 mmseqs_1 hmmer_1 hmmer_dom_1\n\
+                 # ------ ------ -------- ------- -----------\n\
+                   alpha  24.5   30.0     25.0    20.0\n\
+                   beta   20.0   30.0     25.0    20.0\n\
+                   gamma  20.0   30.0     25.0    20.0\n\
+                   zeta   20.0   30.0     25.0    0.0\n",
             )
             .unwrap();
 
@@ -433,9 +434,10 @@ mod tests {
     }
 
     /// Two cells and hmmer, over a pipeline that seeded: one pair both cells
-    /// found and scored differently, one seeded pair only hmmer reported, and
-    /// one pair seeding never offered the cells at all.
-    fn file() -> String {
+    /// found and scored differently, one seeded pair only hmmer reported, one
+    /// pair seeding never offered the cells at all, and one pair in `zeta`,
+    /// which has no cutoff for hmmer's best domain.
+    pub fn file() -> String {
         format!(
             "\
 #= format runs 1
@@ -453,7 +455,8 @@ mod tests {
 alpha MGYP000000000001 24.0 25.0   24.0   1   24.0
 beta MGYP000000000002 -    -      30.0   1   30.0
 gamma MGYP000000000003 .    .      28.0   1   28.0
-#= end 3
+zeta MGYP000000000004 30.0 .      31.0   1   31.0
+#= end 4
 ",
             cutoffs().display()
         )
@@ -481,7 +484,7 @@ gamma MGYP000000000003 .    .      28.0   1   28.0
     #[test]
     fn the_checkpoints_are_told_apart() {
         let rows = rows(&file(), |r| (r.seeded(0), r.present(0), r.seeded(2)));
-        assert_eq!(rows.len(), 3);
+        assert_eq!(rows.len(), 4);
 
         assert!(rows[0].0 && rows[0].1);
 

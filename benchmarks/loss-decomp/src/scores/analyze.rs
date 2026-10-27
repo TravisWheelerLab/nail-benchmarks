@@ -5,6 +5,9 @@
 //! table, and reads each arm's prefilter database for one thing: whether a
 //! pair the seeding never offered was in the prefilter list at all.
 //!
+//! A family short of a cutoff for some tool is left out of every count, and
+//! `#= left_out` counts the families and the pairs each run reported in them.
+//!
 //! They are separate from `parse` because reading every results table is the
 //! expensive half and the half least likely to change: a different statistic
 //! is a re-run of this, not of the benchmark.
@@ -17,9 +20,9 @@ use anyhow::{Context, ensure};
 use util::domains::{self, Domain};
 use util::manifest;
 
-use crate::scores::Tool;
 use crate::scores::depth;
 use crate::scores::runs::Reader as Runs;
+use crate::scores::{LeftOut, Tool};
 
 /// What was searched, what the fractions are fractions of, and the two times
 /// the figures use as reference lines.
@@ -106,6 +109,8 @@ struct Tally {
     /// Pairs hmmer's best domain cleared its cutoff on and its sequence
     /// score did not, which are no part of `truth`.
     domain_only: usize,
+    /// Pairs the run reported, at any score, in a family short of a cutoff.
+    left_out: Vec<usize>,
 }
 
 impl Tally {
@@ -124,6 +129,7 @@ impl Tally {
             kept: vec![0; runs],
             over: vec![0; runs],
             domain_only: 0,
+            left_out: vec![0; runs],
         }
     }
 }
@@ -158,10 +164,26 @@ pub fn stages(path: &Path, root: &Path, out: &Path, threads: usize) -> anyhow::R
     // what hmmer and the run scored it, and how hmmer's domains add up
     let mut under: Vec<Under> = Vec::new();
 
+    let mut left = LeftOut::new(runs);
+
     scores.each(|row| {
+        let unit = row.row().shard().to_string();
+
+        if !row.row().complete() {
+            let tally = at
+                .entry(unit.clone())
+                .or_insert_with(|| Tally::new(runs));
+            for run in 0..runs {
+                tally.left_out[run] += usize::from(row.present(run));
+            }
+            let family = std::str::from_utf8(row.row().field(0))
+                .context("a query name that is not utf-8")?;
+            left.pair(family, |run| row.present(run));
+            return Ok(());
+        }
+
         rows += 1;
 
-        let unit = row.row().shard().to_string();
         let best_domain = row.best_domain();
         let dom_cutoff = row.row().domain_cutoff();
         let domain_clears = match (best_domain, dom_cutoff) {
@@ -307,6 +329,7 @@ pub fn stages(path: &Path, root: &Path, out: &Path, threads: usize) -> anyhow::R
         "kept",
         "over",
         "sens",
+        "left_out",
     ]
     .map(str::to_string)
     .to_vec();
@@ -336,6 +359,7 @@ pub fn stages(path: &Path, root: &Path, out: &Path, threads: usize) -> anyhow::R
                     tally.kept[run].to_string(),
                     tally.over[run].to_string(),
                     format!("{:.4}", frac(tally.kept[run], tally.truth)),
+                    tally.left_out[run].to_string(),
                 ]);
             }
         }
@@ -350,6 +374,9 @@ pub fn stages(path: &Path, root: &Path, out: &Path, threads: usize) -> anyhow::R
 
         let mut table = toil::Table::new(toil::Schema::new(headers.clone()));
         preamble(&mut table, scores.meta(), truth, domain_only, rows);
+        for words in left.lines(&scores.meta().runs) {
+            table.meta("left_out", words);
+        }
         for row in cells {
             table.row(row);
         }
@@ -383,6 +410,9 @@ pub fn stages(path: &Path, root: &Path, out: &Path, threads: usize) -> anyhow::R
         .map(str::to_string)
         .to_vec(),
     ));
+    for words in left.lines(&scores.meta().runs) {
+        table.meta("left_out", words);
+    }
     for (pair, class) in under.iter().zip(classes) {
         table.row(vec![
             pair.unit.clone(),
@@ -504,5 +534,91 @@ fn frac(n: usize, of: usize) -> f64 {
     match of {
         0 => 0.0,
         of => n as f64 / of as f64,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// The words of every `#= left_out` line in a written table.
+    fn left_out(table: &toil::Table) -> Vec<Vec<String>> {
+        table
+            .meta_rows()
+            .filter(|row| row.key() == "left_out")
+            .map(|row| {
+                (0..row.len())
+                    .filter_map(|i| row.get(i))
+                    .map(str::to_string)
+                    .collect()
+            })
+            .collect()
+    }
+
+    #[test]
+    fn a_family_short_of_a_cutoff_is_left_out_and_counted() {
+        let dir = std::env::temp_dir().join(format!("loss-decomp-left-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+
+        // delta has no hmmer_dom cutoff, so it is short of one
+        let cutoffs = dir.join("cutoffs.tbl");
+        std::fs::write(
+            &cutoffs,
+            "# family nail_1 mmseqs_1 hmmer_1 hmmer_dom_1\n\
+             # ------ ------ -------- ------- -----------\n\
+               alpha  24.5   30.0     24.5    20.0\n\
+               delta  20.0   30.0     20.0    0.0\n",
+        )
+        .unwrap();
+
+        // every pair seeded and none under its cutoff, so stages opens no
+        // prefilter database and no domtbl. the delta rows would count as
+        // truth and as kept if they were not left out
+        let runs = dir.join("runs.tbl");
+        std::fs::write(
+            &runs,
+            format!(
+                "\
+#= format runs 1
+#= query 2 18 120
+#= target 1 3 12 40
+#= seed once 4.0000
+#= cutoffs {} c=0
+#= run hmmer hmmer 2.0000
+#= run nail nail 3.0000 seeds=once
+# query target           hmmer  nail   inc dom
+# ----- ---------------- ------ ------ --- ---
+#= shard 1
+alpha MGYP000000000001 30.0   30.0   1   30.0
+delta MGYP000000000002 30.0   12.0   1   30.0
+delta MGYP000000000003 -      5.0    -   -
+#= left_out families 1
+#= left_out hmmer 1 nail 2
+#= end 3
+",
+                cutoffs.display()
+            ),
+        )
+        .unwrap();
+
+        let out = dir.join("stages.tbl");
+        stages(&runs, &dir, &out, 1).unwrap();
+
+        let table = toil::Table::read(&out).unwrap();
+        assert_eq!(table.rows().len(), 1);
+        assert_eq!(table.get(0, "truth"), Some("1"));
+        assert_eq!(table.get(0, "kept"), Some("1"));
+        assert_eq!(table.get(0, "over"), Some("1"));
+        assert_eq!(table.get(0, "left_out"), Some("2"));
+
+        let want = vec![
+            vec!["families".to_string(), "1".to_string()],
+            ["hmmer", "1", "nail", "2"].map(str::to_string).to_vec(),
+        ];
+        assert_eq!(left_out(&table), want);
+
+        let pairs = toil::Table::read(dir.join("cutoff-pairs.tbl")).unwrap();
+        assert!(pairs.rows().is_empty());
+        assert_eq!(left_out(&pairs), want);
     }
 }

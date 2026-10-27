@@ -54,7 +54,9 @@
 //! A pair earns a row by clearing some run's cutoff, or by hmmer having
 //! reported it at all. hmmer's whole reported set is kept because it is what
 //! everything else is measured against: a pair it found weakly is still a
-//! pair they can be asked about.
+//! pair they can be asked about. Every pair any run reported in a family short
+//! of a cutoff is kept as well, so that the analyses, which leave such a family
+//! out, can count what they left.
 //!
 //! Every column is padded to its width except `query`, which is unpadded
 //! because a query's rows are adjacent and so line up without it, and `dom`,
@@ -69,7 +71,7 @@ pub mod runs;
 mod scan;
 pub mod shard;
 
-use std::collections::{BTreeMap, HashMap};
+use std::collections::{BTreeMap, HashMap, HashSet};
 use std::fmt;
 use std::path::{Path, PathBuf};
 
@@ -329,6 +331,8 @@ pub struct Cutoffs {
     nail: Vec<Option<f32>>,
     mmseqs: Vec<Option<f32>>,
     hmmer: Vec<Option<f32>>,
+    /// Whether every tool, and hmmer's best domain, has a threshold.
+    complete: Vec<bool>,
 }
 
 impl Cutoffs {
@@ -341,6 +345,12 @@ impl Cutoffs {
         };
 
         column.get(query as usize).copied().flatten()
+    }
+
+    /// Whether every tool, and hmmer's best domain, has a threshold on one
+    /// family.
+    pub fn complete(&self, query: u32) -> bool {
+        self.complete.get(query as usize).copied().unwrap_or(false)
     }
 
     /// One score per family per tool, out of the decoys the calibration scored
@@ -359,12 +369,14 @@ impl Cutoffs {
             nail: vec![None; queries.len()],
             mmseqs: vec![None; queries.len()],
             hmmer: vec![None; queries.len()],
+            complete: vec![false; queries.len()],
         };
 
         parse(path, c, |family, scores| {
             // a family the calibration knows and this query set does not is
             // not an error: the calibration covers every family Pfam has
             if let Some(id) = queries.id(family) {
+                out.complete[id as usize] = scores.iter().all(Option::is_some);
                 let [nail, mmseqs, hmmer, _] = scores;
                 out.nail[id as usize] = nail;
                 out.mmseqs[id as usize] = mmseqs;
@@ -400,6 +412,12 @@ impl Named {
     /// and then answers per run.
     pub fn family(&self, family: &str) -> Family {
         self.0.get(family).copied().unwrap_or([None; 4])
+    }
+
+    /// Whether every tool, and hmmer's best domain, has a threshold on one
+    /// family.
+    pub fn complete(&self, family: &str) -> bool {
+        self.family(family).iter().all(Option::is_some)
     }
 
     pub fn read(path: &Path, c: usize) -> anyhow::Result<Named> {
@@ -459,6 +477,58 @@ fn parse(path: &Path, c: usize, mut row: impl FnMut(&str, Family)) -> anyhow::Re
     }
 
     Ok(())
+}
+
+// ----------------------------------------------------------------- left out
+
+/// The families short of a cutoff for some tool, which every analysis leaves
+/// out, and the pairs each run reported in them at any score.
+pub struct LeftOut {
+    families: HashSet<String>,
+    /// One per run, in `#= run` order.
+    pairs: Vec<u64>,
+}
+
+impl LeftOut {
+    pub fn new(runs: usize) -> LeftOut {
+        LeftOut {
+            families: HashSet::new(),
+            pairs: vec![0; runs],
+        }
+    }
+
+    pub fn family(&mut self, family: &str) {
+        if !self.families.contains(family) {
+            self.families.insert(family.to_string());
+        }
+    }
+
+    /// One pair of a left-out family, with whether each run reported it.
+    pub fn pair(&mut self, family: &str, reported: impl Fn(usize) -> bool) {
+        self.family(family);
+        for (run, n) in self.pairs.iter_mut().enumerate() {
+            *n += u64::from(reported(run));
+        }
+    }
+
+    pub fn merge(&mut self, other: LeftOut) {
+        for (a, b) in self.pairs.iter_mut().zip(other.pairs) {
+            *a += b;
+        }
+        self.families.extend(other.families);
+    }
+
+    /// The two `#= left_out` lines' words: `families <n>`, then
+    /// `<run> <n>` for every run.
+    pub fn lines(&self, runs: &[Run]) -> [Vec<toil::Cell>; 2] {
+        [
+            vec![toil::Cell::from("families"), self.families.len().into()],
+            runs.iter()
+                .zip(&self.pairs)
+                .flat_map(|(run, n)| [toil::Cell::from(run.name.as_str()), (*n).into()])
+                .collect(),
+        ]
+    }
 }
 
 // --------------------------------------------------------------------- meta

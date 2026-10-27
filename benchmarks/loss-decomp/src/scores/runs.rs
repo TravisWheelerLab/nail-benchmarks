@@ -22,8 +22,14 @@
 //! # ----- ---------------- ---- --- ------ ------ --- ---
 //! #= shard 1
 //! 2-Hacid_dh_C MGYP000522683479 98.8 ... 98.8   98.7   1   98.1
+//! #= left_out families <n>
+//! #= left_out <run> <n> ...
 //! #= end <rows>
 //! ```
+//!
+//! `#= left_out` counts the families short of a cutoff for some tool, which
+//! every analysis leaves out, and the pairs each run reported in them. The
+//! rows stay in the table.
 //!
 //! A run's name is stacked over its column on the dashes it is built from, so
 //! that a cell of the sweep is named in full without ruling fourteen columns
@@ -44,6 +50,7 @@
 use std::fmt::Write as _;
 use std::io::{BufWriter, Read, Write};
 use std::path::Path;
+use std::sync::Mutex;
 
 use anyhow::{Context, ensure};
 
@@ -55,7 +62,7 @@ use util::set::Set;
 use crate::scores::collect::{self, Job};
 use crate::scores::frame::{Frame, Layout, Row, Verdict};
 use crate::scores::shard::{Count, Pair, Scratch, Shard};
-use crate::scores::{Cutoffs, Meta, Named, Queries, runs};
+use crate::scores::{Cutoffs, LeftOut, Meta, Named, Queries, runs};
 
 /// The `#= format` line a runs table opens with.
 pub const FORMAT: &str = "runs 1";
@@ -198,13 +205,22 @@ pub fn collect(args: Args<'_>) -> anyhow::Result<Count> {
         mem: args.mem,
     };
 
+    let left = Mutex::new(LeftOut::new(columns.len()));
+
     let count = collect::blocks(
         job,
-        |work, shard, scratch| block(work, shard, scratch, &schema, &widths),
+        |work, shard, scratch| block(work, shard, scratch, &schema, &widths, &left),
         &mut out,
     )?;
 
-    Stream::continued(schema.clone(), widths.clone(), &mut out).meta("end", [count.rows])?;
+    let left = left
+        .into_inner()
+        .expect("a worker panicked holding the count");
+    let mut tail = Stream::continued(schema.clone(), widths.clone(), &mut out);
+    for words in left.lines(&meta.runs) {
+        tail.meta("left_out", words)?;
+    }
+    tail.meta("end", [count.rows])?;
     out.flush()?;
 
     Ok(count)
@@ -217,13 +233,21 @@ fn block(
     scratch: &mut Scratch,
     schema: &Schema,
     widths: &Widths,
+    left: &Mutex<LeftOut>,
 ) -> anyhow::Result<(Vec<u8>, Count)> {
     let mut out = Stream::continued(schema.clone(), widths.clone(), Vec::new());
     out.meta("shard", [shard])?;
 
     let mut doms = String::new();
+    let mut mine = LeftOut::new(work.runs.len());
 
     let count = work.collect(shard, scratch, &mut |pair: &Pair<'_>| {
+        if !work.cutoffs.complete(pair.query) {
+            mine.pair(work.queries.name(pair.query), |run| {
+                pair.scores[run].is_some()
+            });
+        }
+
         let mut line = out.line()?;
 
         line.text(work.queries.name(pair.query))?;
@@ -264,6 +288,10 @@ fn block(
         line.end()?;
         Ok(())
     })?;
+
+    left.lock()
+        .expect("a worker panicked holding the count")
+        .merge(mine);
 
     Ok((out.into_inner(), count))
 }

@@ -4,18 +4,22 @@
 //! counts per checkpoint within a run; both are held to the same denominator,
 //! which is what hmmer found and scored over its family's cutoff.
 //!
+//! A family short of a cutoff for any tool, or for hmmer's best domain, is
+//! left out of every count. Each table says how many families that was in a
+//! `#= left_out families <n>` line, and counts per run the pairs that run
+//! reported in them in a `left_out` column.
+//!
 //! They are separate from `parse` because reading every results table is the
 //! expensive half and the half least likely to change: a different statistic
 //! is a re-run of this, not of the benchmark.
 
-use std::collections::BTreeSet;
+use std::collections::{BTreeSet, HashSet};
 use std::path::Path;
 
 use anyhow::{Context, ensure};
 
-use crate::scores::frame::{Frame, Verdict};
 use crate::scores::runs::Reader as Runs;
-use crate::scores::{Named, Tool, runs};
+use crate::scores::{Tool, complete};
 
 /// What every run found, and what it cost.
 ///
@@ -23,37 +27,31 @@ use crate::scores::{Named, Tool, runs};
 /// cutoff, how much of that hmmer also found, and how much of that hmmer read
 /// as one domain rather than several. Nothing is held but the counters.
 ///
-/// This reads either table. A summary asks only whether each run cleared its
-/// family's cutoff and what the domain list says, and the two tables answer
-/// the first differently -- recall's out of its `pass` string, a sweep's out
-/// of the run's own score column. So it works over the frame, which is given
-/// the verdict its format calls for, rather than over either reader.
 pub fn summary(path: &Path, out: &Path) -> anyhow::Result<()> {
-    let mut scores = Frame::open(path)?;
+    let mut scores = Runs::open(path)?;
 
-    ensure!(
-        scores.format() == runs::FORMAT,
-        "{} opens `#= format {}`, which is not a runs table",
-        path.display(),
-        scores.format()
-    );
-
-    scores.layout(runs::layout(&scores.meta));
-    scores.verdict(Verdict {
-        at: runs::SCORES_AT,
-        cutoffs: Named::read(&scores.meta.cutoffs, scores.meta.c)?,
-    });
-
-    let hmmer = scores.meta.hmmer()?;
-    let runs = scores.meta.runs.len();
+    let hmmer = scores.meta().hmmer()?;
+    let runs = scores.meta().runs.len();
+    let complete = complete(&scores.meta().cutoffs, scores.meta().c)?;
 
     let mut found = vec![0usize; runs];
     let mut hits = vec![0usize; runs];
     let mut hits_sd = vec![0usize; runs];
+    let mut left = vec![0usize; runs];
+    let mut left_families = HashSet::new();
     let (mut truth, mut truth_sd) = (0usize, 0usize);
     let mut rows = 0u64;
 
-    scores.each(|row| {
+    scores.each(|scored| {
+        let row = scored.row();
+
+        if left_out(&complete, &mut left_families, row.field(0))? {
+            for (run, n) in left.iter_mut().enumerate() {
+                *n += usize::from(scored.present(run));
+            }
+            return Ok(());
+        }
+
         rows += 1;
 
         let true_hit = row.passed(hmmer);
@@ -92,8 +90,8 @@ pub fn summary(path: &Path, out: &Path) -> anyhow::Result<()> {
 
     // every setting any run recorded, so a pipeline that swept two knobs gets
     // two columns and one that swept none gets none
-    let keys: BTreeSet<&str> = scores
-        .meta
+    let meta = scores.meta();
+    let keys: BTreeSet<&str> = meta
         .runs
         .iter()
         .flat_map(|run| run.params.keys())
@@ -103,13 +101,14 @@ pub fn summary(path: &Path, out: &Path) -> anyhow::Result<()> {
     let mut headers = vec!["name".to_string(), "tool".to_string()];
     headers.extend(keys.iter().map(|k| k.to_string()));
     headers.extend(
-        ["wall_s", "found", "hits", "sens", "hits_sd", "sens_sd"]
-            .iter()
-            .map(|h| h.to_string()),
+        [
+            "wall_s", "found", "hits", "sens", "hits_sd", "sens_sd", "left_out",
+        ]
+        .iter()
+        .map(|h| h.to_string()),
     );
 
-    let cells: Vec<Vec<String>> = scores
-        .meta
+    let cells: Vec<Vec<String>> = meta
         .runs
         .iter()
         .enumerate()
@@ -126,6 +125,7 @@ pub fn summary(path: &Path, out: &Path) -> anyhow::Result<()> {
                 format!("{:.4}", frac(hits[i], truth)),
                 hits_sd[i].to_string(),
                 format!("{:.4}", frac(hits_sd[i], truth_sd)),
+                left[i].to_string(),
             ]);
 
             cells
@@ -133,7 +133,11 @@ pub fn summary(path: &Path, out: &Path) -> anyhow::Result<()> {
         .collect();
 
     let mut table = toil::Table::new(toil::Schema::new(headers));
-    preamble(&mut table, &scores.meta, truth, rows);
+    table.meta(
+        "left_out",
+        [toil::Cell::from("families"), left_families.len().into()],
+    );
+    preamble(&mut table, meta, truth, rows);
     for row in cells {
         table.row(row);
     }
@@ -194,6 +198,8 @@ struct Tally {
     /// not return it, which is a loss like any other.
     lost_cutoff: Vec<usize>,
     kept: Vec<usize>,
+    /// Pairs each run reported in a family left out, for this unit.
+    left: Vec<usize>,
 }
 
 impl Tally {
@@ -204,6 +210,7 @@ impl Tally {
             lost_cloud_align: vec![0; runs],
             lost_cutoff: vec![0; runs],
             kept: vec![0; runs],
+            left: vec![0; runs],
         }
     }
 }
@@ -214,6 +221,8 @@ pub fn stages(path: &Path, out: &Path) -> anyhow::Result<()> {
 
     let hmmer = scores.meta().hmmer()?;
     let runs = scores.meta().runs.len();
+    let complete = complete(&scores.meta().cutoffs, scores.meta().c)?;
+    let mut left_families = HashSet::new();
 
     ensure!(
         !scores.meta().seeds.is_empty(),
@@ -228,14 +237,23 @@ pub fn stages(path: &Path, out: &Path) -> anyhow::Result<()> {
     let mut rows = 0u64;
 
     scores.each(|row| {
+        let unit = row.row().shard();
+
+        if left_out(&complete, &mut left_families, row.row().field(0))? {
+            let tally = tally(&mut at, unit, runs);
+            for (run, n) in tally.left.iter_mut().enumerate() {
+                *n += usize::from(row.present(run));
+            }
+            return Ok(());
+        }
+
         rows += 1;
 
         if !row.row().passed(hmmer) {
             return Ok(());
         }
 
-        let unit = row.row().shard().to_string();
-        let tally = at.entry(unit).or_insert_with(|| Tally::new(runs));
+        let tally = tally(&mut at, unit, runs);
         tally.truth += 1;
 
         for run in 0..runs {
@@ -275,6 +293,7 @@ pub fn stages(path: &Path, out: &Path) -> anyhow::Result<()> {
         "lost_cutoff",
         "kept",
         "sens",
+        "left_out",
     ]
     .map(str::to_string)
     .to_vec();
@@ -295,6 +314,7 @@ pub fn stages(path: &Path, out: &Path) -> anyhow::Result<()> {
                 tally.lost_cutoff[run].to_string(),
                 tally.kept[run].to_string(),
                 format!("{:.4}", frac(tally.kept[run], tally.truth)),
+                tally.left[run].to_string(),
             ]);
         }
     }
@@ -307,6 +327,10 @@ pub fn stages(path: &Path, out: &Path) -> anyhow::Result<()> {
     let truth: usize = at.values().map(|tally| tally.truth).sum();
 
     let mut table = toil::Table::new(toil::Schema::new(headers));
+    table.meta(
+        "left_out",
+        [toil::Cell::from("families"), left_families.len().into()],
+    );
     preamble(&mut table, scores.meta(), truth, rows);
     for row in cells {
         table.row(row);
@@ -317,9 +341,97 @@ pub fn stages(path: &Path, out: &Path) -> anyhow::Result<()> {
         .with_context(|| format!("failed to write {}", out.display()))
 }
 
+/// One unit's tally, made on the first row that names the unit.
+fn tally<'a>(
+    at: &'a mut indexmap::IndexMap<String, Tally>,
+    unit: &str,
+    runs: usize,
+) -> &'a mut Tally {
+    if !at.contains_key(unit) {
+        at.insert(unit.to_string(), Tally::new(runs));
+    }
+
+    &mut at[unit]
+}
+
+/// Whether a row's family is left out, adding it to `met` when it is.
+fn left_out(
+    complete: &HashSet<String>,
+    met: &mut HashSet<String>,
+    query: &[u8],
+) -> anyhow::Result<bool> {
+    let query = std::str::from_utf8(query).context("a query name that is not utf-8")?;
+
+    if complete.contains(query) {
+        return Ok(false);
+    }
+
+    if !met.contains(query) {
+        met.insert(query.to_string());
+    }
+
+    Ok(true)
+}
+
 fn frac(n: usize, of: usize) -> f64 {
     match of {
         0 => 0.0,
         of => n as f64 / of as f64,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// What `analysis` writes from the fixture table.
+    fn written(name: &str, analysis: fn(&Path, &Path) -> anyhow::Result<()>) -> String {
+        let dir = std::env::temp_dir().join(format!("mgy-analyze-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+
+        let path = dir.join(format!("{name}.runs.tbl"));
+        std::fs::write(&path, crate::scores::runs::tests::file()).unwrap();
+
+        let out = dir.join(format!("{name}.tbl"));
+        analysis(&path, &out).unwrap();
+        std::fs::read_to_string(&out).unwrap()
+    }
+
+    /// The last cell of the first row that opens with the cells `key`.
+    fn left_column(text: &str, key: &[&str]) -> String {
+        text.lines()
+            .filter(|line| !line.starts_with('#'))
+            .map(|line| line.split_whitespace().collect::<Vec<_>>())
+            .find(|cells| cells.starts_with(key))
+            .and_then(|cells| cells.last().map(|cell| cell.to_string()))
+            .unwrap()
+    }
+
+    #[test]
+    fn a_summary_leaves_out_a_family_short_of_a_cutoff_and_counts_it() {
+        let text = written("summary", summary);
+
+        assert!(text.contains("#= left_out families 1\n"));
+
+        // zeta's pair is hmmer's and the first cell's, and not the full
+        // run's, which was never offered it
+        assert_eq!(left_column(&text, &["hmmer"]), "1");
+        assert_eq!(left_column(&text, &["A2.0-B4.0"]), "1");
+        assert_eq!(left_column(&text, &["full"]), "0");
+
+        // beta and gamma, and not zeta, which hmmer scored over nail's
+        // cutoff
+        assert!(text.contains("hmmer          2 hits"));
+        assert!(text.contains("pairs          3 rows"));
+    }
+
+    #[test]
+    fn stages_leave_out_a_family_short_of_a_cutoff_and_count_it() {
+        let text = written("stages", stages);
+
+        assert!(text.contains("#= left_out families 1\n"));
+        assert_eq!(left_column(&text, &["1", "A2.0-B4.0"]), "1");
+        assert_eq!(left_column(&text, &["1", "full"]), "0");
+        assert!(text.contains("hmmer          2 hits"));
     }
 }

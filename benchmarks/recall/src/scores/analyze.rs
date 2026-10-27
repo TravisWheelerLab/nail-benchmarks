@@ -13,7 +13,7 @@ use std::path::Path;
 
 use anyhow::{Context, ensure};
 
-use crate::scores::frame::Frame;
+use crate::scores::frame::{Frame, Row};
 use crate::scores::{Tool, read};
 
 /// What every run found, and what it cost.
@@ -21,7 +21,8 @@ use crate::scores::{Tool, read};
 /// One pass over the table, counting per run: what it reported over the
 /// cutoff, how much of that hmmer also found, and that split by whether one
 /// of hmmer's domains cleared its own cutoff or only the sequence score did.
-/// Nothing is held but the counters.
+/// Nothing is held but the counters. A family short of any cutoff is left
+/// out, and `#= left_out` counts it and the pairs each tool reported in it.
 ///
 /// This reads either table. A summary asks only whether each run cleared its
 /// family's cutoff and what hmmer's domain letter says, and the two tables answer
@@ -42,13 +43,23 @@ pub fn summary(path: &Path, out: &Path, threads: usize) -> anyhow::Result<()> {
 
     let hmmer = scores.meta.hmmer()?;
     let runs = scores.meta.runs.len();
+    let complete = crate::scores::complete(&scores.meta.cutoffs, scores.meta.c)?;
+    let tools = scores.meta.tools();
+    let at = score_columns(&scores.meta, &tools)?;
 
     let parts = scores.par_each(
         path,
         threads,
-        || Tally::new(runs),
+        || Tally::new(runs, tools.len()),
         |t, row| {
             t.rows += 1;
+
+            let query =
+                std::str::from_utf8(row.field(0)).context("a query name that is not utf-8")?;
+            if !complete.contains(query) {
+                t.left.count(query, row, &at);
+                return Ok(());
+            }
 
             let true_hit = row.passed(hmmer);
             let by_domain = row.domain_passed(hmmer);
@@ -97,7 +108,10 @@ pub fn summary(path: &Path, out: &Path, threads: usize) -> anyhow::Result<()> {
         truth_seq,
         domain_only,
         rows,
-    } = parts.into_iter().fold(Tally::new(runs), Tally::add);
+        left,
+    } = parts
+        .into_iter()
+        .fold(Tally::new(runs, tools.len()), Tally::add);
 
     ensure!(
         truth > 0,
@@ -151,6 +165,7 @@ pub fn summary(path: &Path, out: &Path, threads: usize) -> anyhow::Result<()> {
         .collect();
 
     let mut table = toil::Table::new(toil::Schema::new(headers));
+    left.write(&mut table, &tools);
     preamble(
         &mut table,
         &scores.meta,
@@ -179,10 +194,11 @@ struct Tally {
     /// which are no part of the truth and are counted to say how rare.
     domain_only: usize,
     rows: u64,
+    left: Left,
 }
 
 impl Tally {
-    fn new(runs: usize) -> Tally {
+    fn new(runs: usize, tools: usize) -> Tally {
         Tally {
             found: vec![0; runs],
             hits: vec![0; runs],
@@ -193,6 +209,7 @@ impl Tally {
             truth_seq: 0,
             domain_only: 0,
             rows: 0,
+            left: Left::new(tools),
         }
     }
 
@@ -213,6 +230,7 @@ impl Tally {
         self.truth_seq += other.truth_seq;
         self.domain_only += other.domain_only;
         self.rows += other.rows;
+        self.left = self.left.add(other.left);
         self
     }
 }
@@ -242,10 +260,7 @@ pub fn coverage(path: &Path, out: &Path, threads: usize) -> anyhow::Result<()> {
     let complete = crate::scores::complete(&scores.meta.cutoffs, scores.meta.c)?;
 
     let tools = scores.meta.tools();
-    let at: Vec<usize> = tools
-        .iter()
-        .map(|tool| read::score(&scores.meta, *tool).context("a tool with no score column"))
-        .collect::<anyhow::Result<_>>()?;
+    let at = score_columns(&scores.meta, &tools)?;
 
     let runs = scores.meta.runs.len();
 
@@ -254,20 +269,14 @@ pub fn coverage(path: &Path, out: &Path, threads: usize) -> anyhow::Result<()> {
         threads,
         || Cover {
             counts: vec![[0; 3]; runs],
-            left_families: HashSet::new(),
-            left: vec![0; at.len()],
+            left: Left::new(tools.len()),
         },
         |t, row| {
             let query =
                 std::str::from_utf8(row.field(0)).context("a query name that is not utf-8")?;
 
             if !complete.contains(query) {
-                if !t.left_families.contains(query) {
-                    t.left_families.insert(query.to_string());
-                }
-                for (i, at) in at.iter().enumerate() {
-                    t.left[i] += usize::from(row.field(*at) != b"-");
-                }
+                t.left.count(query, row, &at);
                 return Ok(());
             }
 
@@ -289,18 +298,14 @@ pub fn coverage(path: &Path, out: &Path, threads: usize) -> anyhow::Result<()> {
     )?;
 
     let mut counts = vec![[0usize; 3]; runs];
-    let mut left_families = HashSet::new();
-    let mut left = vec![0usize; tools.len()];
+    let mut left = Left::new(tools.len());
     for part in parts {
         for (mine, theirs) in counts.iter_mut().zip(&part.counts) {
             for (a, b) in mine.iter_mut().zip(theirs) {
                 *a += b;
             }
         }
-        for (a, b) in left.iter_mut().zip(&part.left) {
-            *a += b;
-        }
-        left_families.extend(part.left_families);
+        left = left.add(part.left);
     }
 
     let keys: BTreeSet<&str> = scores
@@ -320,17 +325,7 @@ pub fn coverage(path: &Path, out: &Path, threads: usize) -> anyhow::Result<()> {
     );
 
     let mut table = toil::Table::new(toil::Schema::new(headers));
-    table.meta(
-        "left_out",
-        [toil::Cell::from("families"), left_families.len().into()],
-    );
-    table.meta(
-        "left_out",
-        tools
-            .iter()
-            .zip(&left)
-            .flat_map(|(tool, n)| [toil::Cell::from(tool.to_string()), (*n).into()]),
-    );
+    left.write(&mut table, &tools);
 
     for (run, count) in scores.meta.runs.iter().zip(&counts) {
         let mut cells = vec![run.name.clone(), run.tool.to_string()];
@@ -354,9 +349,64 @@ pub fn coverage(path: &Path, out: &Path, threads: usize) -> anyhow::Result<()> {
 struct Cover {
     /// Per run: dom_over, dom_under, no_hmmer.
     counts: Vec<[usize; 3]>,
-    left_families: HashSet<String>,
-    /// Per tool, the pairs it reported in a family left out.
-    left: Vec<usize>,
+    left: Left,
+}
+
+/// The families left out of a pass for want of a cutoff, and per tool the
+/// pairs it reported in them.
+struct Left {
+    families: HashSet<String>,
+    pairs: Vec<usize>,
+}
+
+impl Left {
+    fn new(tools: usize) -> Left {
+        Left {
+            families: HashSet::new(),
+            pairs: vec![0; tools],
+        }
+    }
+
+    /// Count one row of a family left out, against the tools' score columns
+    /// at `at`.
+    fn count(&mut self, query: &str, row: &Row, at: &[usize]) {
+        if !self.families.contains(query) {
+            self.families.insert(query.to_string());
+        }
+        for (n, at) in self.pairs.iter_mut().zip(at) {
+            *n += usize::from(row.field(*at) != b"-");
+        }
+    }
+
+    fn add(mut self, other: Left) -> Left {
+        self.families.extend(other.families);
+        for (a, b) in self.pairs.iter_mut().zip(&other.pairs) {
+            *a += b;
+        }
+        self
+    }
+
+    fn write(&self, table: &mut toil::Table, tools: &[Tool]) {
+        table.meta(
+            "left_out",
+            [toil::Cell::from("families"), self.families.len().into()],
+        );
+        table.meta(
+            "left_out",
+            tools
+                .iter()
+                .zip(&self.pairs)
+                .flat_map(|(tool, n)| [toil::Cell::from(tool.to_string()), (*n).into()]),
+        );
+    }
+}
+
+/// Where each tool's score column sits, in `tools` order.
+fn score_columns(meta: &crate::scores::Meta, tools: &[Tool]) -> anyhow::Result<Vec<usize>> {
+    tools
+        .iter()
+        .map(|tool| read::score(meta, *tool).context("a tool with no score column"))
+        .collect()
 }
 
 /// What was searched, what the fractions are fractions of, and the two times

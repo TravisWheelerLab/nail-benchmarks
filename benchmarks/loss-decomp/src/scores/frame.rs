@@ -266,6 +266,9 @@ impl State {
 
                 self.done = true;
             }
+            // the writer's count of what the analyses will leave out, which
+            // each of them counts again over the rows it reads
+            "left_out" => {}
             other => bail!("{}:{} has a `#= {other}` line", self.file, self.line),
         }
 
@@ -355,6 +358,12 @@ impl<'a> Row<'a> {
     /// The cutoff hmmer's best domain is held to on this pair's family.
     pub fn domain_cutoff(&self) -> Option<f32> {
         self.state.cutoff[3]
+    }
+
+    /// Whether this pair's family has a cutoff for every tool and for
+    /// hmmer's best domain.
+    pub fn complete(&self) -> bool {
+        self.state.cutoff.iter().all(Option::is_some)
     }
 
     /// Whether one run reported this pair at or above its family's cutoff.

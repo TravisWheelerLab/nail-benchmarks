@@ -185,7 +185,17 @@ class Table:
 
 # what every summary.tbl carries, whatever it swept. everything else in the
 # header is a setting, and becomes a param on the run.
-FIXED = ("name", "tool", "wall_s", "found", "hits", "sens", "hits_sd", "sens_sd")
+FIXED = (
+    "name",
+    "tool",
+    "wall_s",
+    "found",
+    "hits",
+    "sens",
+    "hits_sd",
+    "sens_sd",
+    "left_out",
+)
 
 
 def read(path):

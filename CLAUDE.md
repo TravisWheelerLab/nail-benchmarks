@@ -582,8 +582,12 @@ three ways: hmmer's best domain clears `hmmer_dom`, hmmer reported the pair
 with no domain over it, or hmmer did not report the pair. hmmer counts a pair
 when its sequence score clears `hmmer` or its best domain clears `hmmer_dom`.
 A family missing a cutoff for any tool is left out of every row, and
-`#= left_out` lines count the families and each tool's pairs in them.
-`parse scores` keeps every reported pair in such a family so that count is
+`#= left_out` lines count the families and each tool's pairs in them. Every
+analysis in recall, cloud-search and loss-decomp leaves such families out. In
+cloud-search and loss-decomp a table with a row per run also gets a
+`left_out` column. recall's tables get only the per-tool lines, because
+`scores.tbl` keeps one score per tool. The writers of `scores.tbl` and
+`runs.tbl` keep every reported pair in such a family, so the counts are
 whole. recall's `summary` and `coverage` read `scores.tbl` on `--threads`
 threads, each over its own run of whole shard blocks.
 

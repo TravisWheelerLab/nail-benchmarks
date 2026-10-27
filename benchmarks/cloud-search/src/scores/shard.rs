@@ -127,8 +127,9 @@ pub struct Shard<'a> {
 impl Shard<'_> {
     /// Read every run's table for one shard and hand each pair to `render`.
     ///
-    /// A pair earns a row by clearing some run's cutoff or by hmmer having
-    /// reported it; the rest are read, folded and dropped.
+    /// A pair earns a row by clearing some run's cutoff, by hmmer having
+    /// reported it, or by its family being short of a cutoff; the rest are
+    /// read, folded and dropped.
     pub fn collect(
         &self,
         shard: &str,
@@ -344,7 +345,10 @@ impl Shard<'_> {
             // score lives
             let passed = pass.iter().any(u8::is_ascii_uppercase);
             let reference = self.hmmer.is_some_and(|at| scores[at].is_some());
-            if !passed && !reference {
+
+            // a family short of a cutoff keeps every pair a run reported, so
+            // an analysis that leaves the family out can count what it left
+            if !passed && !reference && self.cutoffs.complete(query) {
                 continue;
             }
 
