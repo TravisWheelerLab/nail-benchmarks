@@ -1,0 +1,28 @@
+{
+  "id": "nail-benchmarks-11ee7d",
+  "title": "cloud-search's final figure draws the MGnify set only",
+  "body": "## What exists today\n\ncloud-search's real set has two units, built by `build-set --in cloud-search-real`: Pfam against 500,000 MGnify sequences (`pfam.mgnify`) and Pfam against 500,000 Swissprot sequences (`pfam.swissprot`). `cloud-search plot` draws the `(A, B)` surfaces for both.\n\n## The change\n\nThe final figure draws the MGnify unit only. Swissprot leaves the figure.",
+  "type": "task",
+  "status": "open",
+  "priority": 1,
+  "labels": [],
+  "parent": "nail-benchmarks-1c3791",
+  "blocked_by": [],
+  "related": [],
+  "assignee": null,
+  "lease_expires": null,
+  "defer_until": null,
+  "created_at": "2026-10-27T22:46:31.238117237Z",
+  "updated_at": "2026-10-27T22:46:31.238117237Z",
+  "closed_at": null,
+  "close_reason": null,
+  "resolution": null,
+  "notes": [],
+  "stamps": {
+    "created": {
+      "commit": "2a9c3d5",
+      "branch": "claude-refactor"
+    },
+    "closed": null
+  }
+}
