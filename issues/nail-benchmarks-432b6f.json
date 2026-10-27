@@ -3,7 +3,7 @@
   "title": "cutoffs learns from hmmer's recruits and fills only each tool's gaps",
   "body": "## What is committed\n\n`recruit` runs nail and mmseqs per shard. `gather` pulls the recruits out in both forms. `reject` judges each family's recruits with a per-family hmmsearch. `fill` searches nail, mmseqs and hmmer against every decoy of each family. `learn` reads only fill's tables.\n\n## What is uncommitted on claude-refactor\n\nThe changes are in `benchmarks/cutoffs/src/main.rs` and the cutoffs section of `CLAUDE.md`.\n\n- `recruit` runs hmmer as well, through `util::search::hmmer`. On MGnify hmmer ran on the cluster, and its 1000 tables were copied into `sets/cutoffs/outputs/recruit/results/`.\n- `gather` writes `gather/recruits.tbl`, one row per (family, target) with a 1 or 0 column per tool.\n- `reject --reject-with <dir> --reject-set <set>` judges every recruit from a forward set's `hmmer.<unit>.tbl` in one pass, matched by name. It rescales an E-value only when the shard differs from the judge's `-Z` by more than one sequence.\n- `fill` searches nail and mmseqs only against their gaps: the decoys that tool did not recruit, written to `fill/decoys/<tool>/<family>.fa`. hmmer gets no fill.\n- `learn` takes each tool's decoy scores from the recruit tables, minus the rejects, plus fill's gap tables, and keeps each pair's best score.\n\n## The real run, 15 Oct 2026, 48 cores on one node\n\n| stage | wall | peak RSS | output |\n|---|---|---|---|\n| gather | 556 s | 73.6 GB | 567,939,112 recruits over 20,795 families |\n| reject | 468 s | 84.5 GB | 4,353,787 rejects over 6,273 families |\n| fill | 14,114 s | 3.8 GB | 41,590 commands, 0 failed |\n| learn | 642 s | 12.3 GB | `sets/cutoffs/analysis/cutoffs.tbl` |\n\n## Checks\n\n- Judged from recall's tables, the 12 October recruits gave the same 1,351,380 rejects as the per-family judge.\n- On 2,000 families, every pair that recruit and the old fill both reported had the same score: 10.0 M nail pairs and 0.9 M mmseqs pairs.\n- On the toy, both reject paths gave the same 23 pairs, and `learn` matched an independent recomputation on 898 of 898 families.\n- Against the old fill, the new run has no score for 1,494 of 107.2 M nail decoys over 148 families, and for 135,782 of 104.2 M mmseqs decoys over 334 families. Of those, 3 nail decoys and 1 mmseqs decoy reach the family's new third-decoy cutoff. The memory `mmseqs-prefilter-drops-in-large-dbs` has the nail case; nobody looked at the mmseqs case. The count is `tmp-claude/2026-10-15-hmmer-recruit-import/surprise/lost.py`.\n\n## Open\n\nNothing is committed yet. Whether the new table replaces `data/mgy-cutoffs.tbl` is its own decision issue.",
   "type": "task",
-  "status": "open",
+  "status": "closed",
   "priority": 2,
   "labels": [],
   "parent": null,
@@ -13,16 +13,19 @@
   "lease_expires": null,
   "defer_until": null,
   "created_at": "2026-10-18T21:41:45.009650589Z",
-  "updated_at": "2026-10-18T21:41:45.009650589Z",
-  "closed_at": null,
-  "close_reason": null,
-  "resolution": null,
+  "updated_at": "2026-10-27T18:51:11.135642479Z",
+  "closed_at": "2026-10-27T18:51:11.135642479Z",
+  "close_reason": "Landed in 9a27d39, and its table was promoted in 4424213.",
+  "resolution": "done",
   "notes": [],
   "stamps": {
     "created": {
       "commit": "a1a3232",
       "branch": "claude-refactor"
     },
-    "closed": null
+    "closed": {
+      "commit": "4424213",
+      "branch": "claude-refactor"
+    }
   }
 }
