@@ -13,7 +13,7 @@
   "lease_expires": null,
   "defer_until": null,
   "created_at": "2026-09-28T19:02:30.096947015Z",
-  "updated_at": "2026-10-27T22:40:16.605626592Z",
+  "updated_at": "2026-10-27T22:40:16.638930423Z",
   "closed_at": null,
   "close_reason": null,
   "resolution": null,
@@ -40,6 +40,14 @@
       "author": "jackroddy/01dd6c44",
       "text": "released at session end",
       "commit": "f8f4436",
+      "branch": "claude-refactor"
+    },
+    {
+      "id": "d2e6e5d8",
+      "at": "2026-10-27T22:40:16.638929182Z",
+      "author": "jackroddy/6422e305",
+      "text": "Moved into the figures milestone. Two questions are still open: how the figure looks, and where its data comes from. Jack leans toward combining it with thread-scaling. Since 5ee1285, thread-scaling's nail runs write `-s` stage trees to `.stats` files at every rung and rep.",
+      "commit": "2a9c3d5",
       "branch": "claude-refactor"
     }
   ],
