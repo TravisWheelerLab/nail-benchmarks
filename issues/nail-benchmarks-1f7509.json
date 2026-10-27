@@ -13,11 +13,20 @@
   "lease_expires": "2026-10-27T20:25:59.09608505Z",
   "defer_until": null,
   "created_at": "2026-10-27T20:10:59.062065531Z",
-  "updated_at": "2026-10-27T20:10:59.09608505Z",
+  "updated_at": "2026-10-27T21:00:06.979955342Z",
   "closed_at": null,
   "close_reason": null,
   "resolution": null,
-  "notes": [],
+  "notes": [
+    {
+      "id": "e51efd28",
+      "at": "2026-10-27T21:00:06.97995455Z",
+      "author": "jackroddy/6422e305",
+      "text": "The full run finished on 27 Oct 2026, over all 1000 MGnify shards on the 15 October cutoffs at `--c 2`. `parse scores` took 527 s at 48 threads and `parse coverage` took 716 s on one thread. The table is `sets/recall/analysis/coverage.tbl`.\n\n| run | hits | dom_over | dom_under | no_hmmer |\n|---|---|---|---|---|\n| hmmer_dom | 2,114,381,548 | 2,114,381,548 | 0 | 0 |\n| nail-s12.0 | 2,088,699,612 | 2,049,507,767 | 33,373,741 | 5,818,104 |\n| nail-s10.0 | 2,038,587,022 | 2,002,043,039 | 31,275,600 | 5,268,383 |\n| hmmer | 1,987,290,598 | 1,890,974,727 | 96,315,871 | 0 |\n| nail-s9.0 | 1,948,071,943 | 1,915,552,479 | 28,209,684 | 4,309,780 |\n| mmseqs-s12.0-ms2000 | 1,682,924,653 | 1,602,877,320 | 76,237,725 | 3,809,608 |\n| mmseqs-s7.5-ms2000 | 1,545,724,952 | 1,481,512,004 | 61,220,886 | 2,992,062 |\n\nThe 14 families left out held 21,427 hmmer hits and none from nail or mmseqs. `summary.tbl` was not rebuilt and still reflects the 12 October cutoffs.",
+      "commit": "062899d",
+      "branch": "claude-refactor"
+    }
+  ],
   "stamps": {
     "created": {
       "commit": "4424213",
