@@ -13,11 +13,20 @@
   "lease_expires": null,
   "defer_until": null,
   "created_at": "2026-10-27T18:51:43.98014957Z",
-  "updated_at": "2026-10-27T18:51:43.98014957Z",
+  "updated_at": "2026-10-27T19:27:53.43813013Z",
   "closed_at": null,
   "close_reason": null,
   "resolution": null,
-  "notes": [],
+  "notes": [
+    {
+      "id": "56ceca17",
+      "at": "2026-10-27T19:27:53.438128996Z",
+      "author": "jackroddy/6422e305",
+      "text": "Jack decided where the counts go.\n\n- A table with a row per run gets a `left_out` column, holding the hits that run reported in the left-out families. These are recall's and cloud-search's `summary.tbl`, and loss-decomp's `stages.tbl` and `depth.tbl`. Each is under 20 KB today.\n- A table with a row per pair gets one `#= left_out` line with a count per tool and no new column. These are recall's `scores.tbl` at 311 GB, and loss-decomp's `runs.tbl`, `hits.tbl`, `lists.tbl` and `cutoff-pairs.tbl`.\n- Every one of these tables also gets `#= left_out families <n>`.",
+      "commit": "4424213",
+      "branch": "claude-refactor"
+    }
+  ],
   "stamps": {
     "created": {
       "commit": "4424213",
