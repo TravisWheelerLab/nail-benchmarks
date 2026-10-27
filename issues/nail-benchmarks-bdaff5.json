@@ -3,7 +3,7 @@
   "title": "Does the 15 October cutoffs table replace data/mgy-cutoffs.tbl?",
   "body": "`data/mgy-cutoffs.tbl` holds the cutoffs learned on 12 October from nail's and mmseqs' recruits. `sets/cutoffs/analysis/cutoffs.tbl` holds the 15 October run, which adds hmmer's recruits to all three nulls (nail-benchmarks-432b6f). Each tool's null now holds 4 to 5 times as many decoys.\n\n## How the third-decoy cutoffs moved\n\nOver the 20,780 families both tables hold, in bits:\n\n| column | families moved | share | median rise | p90 rise | max rise |\n|---|---|---|---|---|---|\n| `nail_3` | 8,057 | 38.8% | 0.7 | 2.5 | 45.3 |\n| `mmseqs_3` | 965 | 4.6% | 1.0 | 3.0 | 24.0 |\n| `hmmer_3` | 18,767 | 90.3% | 3.6 | 13.7 | 204.9 |\n| `hmmer_dom_3` | 8,943 | 43.0% | 0.8 | 2.8 | 40.3 |\n\nOne cutoff fell. Sec10_N's `nail_3` dropped 0.9 bits, because the new fill's prefilter dropped a decoy the old fill scored at 31.8.\n\nThe largest `hmmer_3` rises come from decoys that pile up many weak domains. Pentapeptide_2's top decoy scores 426.4 bits over 43 domains, and its best domain scores 21.2. In the nine families with the largest rises, 4,610 of the 4,619 decoys over 60 bits have more than one domain. We checked seven of the top decoys against recall's forward tables. None of their originals hits the family that recruited it, so the reject did not miss reversed homologs here.\n\n15 families appear for the first time, mostly short peptide families such as Kinin, GnRH and Octapeptide. 14 families have fewer than three decoys for some tool and get a 0.0 cutoff for it. The old table had one such family, FARP.\n\n## What it does to loss-decomp\n\nParsed in the sandbox; the figure is `tmp-claude/sandbox/figures-newcut/loss-decomp-hits.pdf`.\n\n| | 12 Oct cutoffs | 15 Oct cutoffs |\n|---|---|---|\n| hmmer truth | 2,303,110 | 1,989,503 |\n| domain only | 41,302 | 223,175 |\n| nail kept | 2,083,114 | 1,866,469 |\n| nail sensitivity | 0.9045 | 0.9382 |\n\n## Options\n\n- Promote the 15 October table. hmmer's sequence cutoffs rise in 90% of families, and loss-decomp's hmmer truth shrinks by 14%. A tool with a 0.0 cutoff in a family admits every hit there.\n- Keep the 12 October table. Its nulls leave out the decoys only hmmer recruited, and those include hmmer's strongest noise.\n\nI lean to promoting. The decoys hmmer added passed the same reject as the rest, so the higher cutoffs are what the method measures once it sees them. The 14 families with a 0.0 cutoff need a look first.",
   "type": "decision",
-  "status": "open",
+  "status": "closed",
   "priority": 2,
   "labels": [],
   "parent": null,
@@ -13,16 +13,19 @@
   "lease_expires": null,
   "defer_until": null,
   "created_at": "2026-10-18T21:41:56.565594903Z",
-  "updated_at": "2026-10-18T21:41:56.565594903Z",
-  "closed_at": null,
-  "close_reason": null,
-  "resolution": null,
+  "updated_at": "2026-10-27T18:51:11.103548356Z",
+  "closed_at": "2026-10-27T18:51:11.103548356Z",
+  "close_reason": "Promoted in 4424213: the 15 October table replaced data/mgy-cutoffs.tbl. The families it leaves without a cutoff for some tool are handled in their own issue.",
+  "resolution": "done",
   "notes": [],
   "stamps": {
     "created": {
       "commit": "a1a3232",
       "branch": "claude-refactor"
     },
-    "closed": null
+    "closed": {
+      "commit": "4424213",
+      "branch": "claude-refactor"
+    }
   }
 }
