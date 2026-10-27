@@ -1,0 +1,28 @@
+{
+  "id": "nail-benchmarks-3757c0",
+  "title": "Does pid's cells plot still show anything on reversed decoys?",
+  "body": "## What exists today\n\n`pid parse cells` writes `cells.true.tbl` and `cells.decoy.tbl`, nail's cell fraction against the query by target cell count. `plot_cell_frac.py` draws them into `figures/cells.pdf`. The decoys have been reversed TrEMBL sequences since `f12fda4`.\n\n## The change\n\nCheck the data behind the cells plot on the reversed decoys. Jack thinks the plot lost its punch with reversals and no longer shows anything interesting.",
+  "type": "task",
+  "status": "open",
+  "priority": 1,
+  "labels": [],
+  "parent": "nail-benchmarks-1c3791",
+  "blocked_by": [],
+  "related": [],
+  "assignee": null,
+  "lease_expires": null,
+  "defer_until": null,
+  "created_at": "2026-10-27T22:44:54.627614413Z",
+  "updated_at": "2026-10-27T22:44:54.627614413Z",
+  "closed_at": null,
+  "close_reason": null,
+  "resolution": null,
+  "notes": [],
+  "stamps": {
+    "created": {
+      "commit": "2a9c3d5",
+      "branch": "claude-refactor"
+    },
+    "closed": null
+  }
+}
