@@ -70,7 +70,7 @@ mod scan;
 pub mod shard;
 pub mod write;
 
-use std::collections::{BTreeMap, HashMap};
+use std::collections::{BTreeMap, HashMap, HashSet};
 use std::fmt;
 use std::path::{Path, PathBuf};
 
@@ -418,6 +418,15 @@ impl Cutoffs {
         self.hmmer_dom.get(query as usize).copied().flatten()
     }
 
+    /// Whether every tool, and hmmer's best domain, has a threshold on one
+    /// family.
+    pub fn complete(&self, query: u32) -> bool {
+        Tool::ALL
+            .into_iter()
+            .all(|tool| self.get(tool, query).is_some())
+            && self.domain(query).is_some()
+    }
+
     /// One score per family per tool, out of the decoys the calibration scored
     /// it against.
     ///
@@ -460,6 +469,20 @@ impl Cutoffs {
 
         Ok(out)
     }
+}
+
+/// The families `cutoffs.tbl` gives a threshold for every tool and for
+/// hmmer's best domain at index `c`, which is what [`Cutoffs::complete`] asks
+/// of one.
+pub fn complete(path: &Path, c: usize) -> anyhow::Result<HashSet<String>> {
+    let mut out = HashSet::new();
+    parse(path, c, |family, scores| {
+        if scores.iter().all(Option::is_some) {
+            out.insert(family.to_string());
+        }
+    })?;
+
+    Ok(out)
 }
 
 /// Read `cutoffs.tbl`, handing each family its thresholds at index `c`: nail,

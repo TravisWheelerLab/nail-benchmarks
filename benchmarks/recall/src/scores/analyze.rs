@@ -8,7 +8,7 @@
 //! expensive half and the half least likely to change: a different statistic
 //! is a re-run of this, not of the benchmark.
 
-use std::collections::BTreeSet;
+use std::collections::{BTreeSet, HashSet};
 use std::path::Path;
 
 use anyhow::{Context, ensure};
@@ -152,6 +152,131 @@ pub fn summary(path: &Path, out: &Path) -> anyhow::Result<()> {
     );
     for row in cells {
         table.row(row);
+    }
+
+    table
+        .write(out)
+        .with_context(|| format!("failed to write {}", out.display()))
+}
+
+/// What every run reported over its own cutoff, split by what hmmer made of
+/// the same pairs: its best domain over `hmmer_dom`, reported with no domain
+/// over it, or not reported at all.
+///
+/// Nothing here is a fraction of hmmer's hits. hmmer gets a second row, its
+/// best domain against `hmmer_dom`, beside the one its sequence score earns.
+/// A family short of any cutoff is left out of every row, and `#= left_out`
+/// counts it and the pairs each tool reported in it.
+pub fn coverage(path: &Path, out: &Path) -> anyhow::Result<()> {
+    let mut scores = Frame::open(path)?;
+
+    ensure!(
+        scores.format() == crate::scores::FORMAT,
+        "{} opens `#= format {}`, which is not recall's table",
+        path.display(),
+        scores.format()
+    );
+
+    scores.layout(read::layout(&scores.meta));
+
+    let hmmer = scores.meta.hmmer()?;
+    let hmmer_score = read::score(&scores.meta, Tool::Hmmer).context("no hmmer score column")?;
+    let complete = crate::scores::complete(&scores.meta.cutoffs, scores.meta.c)?;
+
+    let tools = scores.meta.tools();
+    let at: Vec<usize> = tools
+        .iter()
+        .map(|tool| read::score(&scores.meta, *tool).context("a tool with no score column"))
+        .collect::<anyhow::Result<_>>()?;
+
+    let runs = scores.meta.runs.len();
+
+    // one more than the runs: the last is hmmer's best domain
+    let mut counts = vec![[0usize; 3]; runs + 1];
+    let mut left_families: HashSet<String> = HashSet::new();
+    let mut left = vec![0usize; tools.len()];
+
+    scores.each(|row| {
+        let query = std::str::from_utf8(row.field(0)).context("a query name that is not utf-8")?;
+
+        if !complete.contains(query) {
+            if !left_families.contains(query) {
+                left_families.insert(query.to_string());
+            }
+            for (i, at) in at.iter().enumerate() {
+                left[i] += usize::from(row.field(*at) != b"-");
+            }
+            return Ok(());
+        }
+
+        let by_domain = row.domain_passed(hmmer);
+        let class = match (by_domain, row.field(hmmer_score) != b"-") {
+            (true, _) => 0,
+            (false, true) => 1,
+            (false, false) => 2,
+        };
+
+        for run in 0..runs {
+            if row.passed(run) {
+                counts[run][class] += 1;
+            }
+        }
+
+        if by_domain {
+            counts[runs][0] += 1;
+        }
+
+        Ok(())
+    })?;
+
+    let keys: BTreeSet<&str> = scores
+        .meta
+        .runs
+        .iter()
+        .flat_map(|run| run.params.keys())
+        .map(String::as_str)
+        .collect();
+
+    let mut headers = vec!["name".to_string(), "tool".to_string()];
+    headers.extend(keys.iter().map(|k| k.to_string()));
+    headers.extend(
+        ["wall_s", "hits", "dom_over", "dom_under", "no_hmmer"]
+            .iter()
+            .map(|h| h.to_string()),
+    );
+
+    let mut table = toil::Table::new(toil::Schema::new(headers));
+    table.meta(
+        "left_out",
+        [toil::Cell::from("families"), left_families.len().into()],
+    );
+    table.meta(
+        "left_out",
+        tools
+            .iter()
+            .zip(&left)
+            .flat_map(|(tool, n)| [toil::Cell::from(tool.to_string()), (*n).into()]),
+    );
+
+    let hmmer_run = &scores.meta.runs[hmmer];
+    let rows = scores
+        .meta
+        .runs
+        .iter()
+        .map(|run| (run.name.clone(), run))
+        .chain([(format!("{}_dom", hmmer_run.name), hmmer_run)]);
+
+    for ((name, run), count) in rows.zip(&counts) {
+        let mut cells = vec![name, run.tool.to_string()];
+        cells.extend(keys.iter().map(|k| match run.params.get(*k) {
+            Some(value) => value.clone(),
+            None => "-".to_string(),
+        }));
+        cells.push(format!("{:.4}", run.wall_s));
+        cells.push(count.iter().sum::<usize>().to_string());
+        cells.extend(count.iter().map(usize::to_string));
+
+        table.row(cells);
     }
 
     table

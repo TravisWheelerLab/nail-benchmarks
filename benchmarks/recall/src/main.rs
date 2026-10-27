@@ -45,6 +45,8 @@ enum Parse {
     Scores(crate::scores::parse::ScoresArgs),
     /// What every run found and what it cost, one row per run.
     Summary(crate::scores::parse::TableArgs),
+    /// What every run reported over its own cutoff, split by hmmer's domains.
+    Coverage(crate::scores::parse::TableArgs),
 }
 
 /// Where this benchmark reads and writes, as one label of `paths.toml` names
@@ -91,6 +93,7 @@ impl Command {
             Command::Run(a) => a.label.as_deref(),
             Command::Parse(Parse::Scores(a)) => a.label.as_deref(),
             Command::Parse(Parse::Summary(a)) => a.label.as_deref(),
+            Command::Parse(Parse::Coverage(a)) => a.label.as_deref(),
         }
     }
 
@@ -106,6 +109,10 @@ impl Command {
             Command::Parse(Parse::Summary(mut a)) => {
                 a.analysis = paths.analysis.clone();
                 crate::scores::parse::main(crate::scores::parse::Cmd::Summary(a))
+            }
+            Command::Parse(Parse::Coverage(mut a)) => {
+                a.analysis = paths.analysis.clone();
+                crate::scores::parse::main(crate::scores::parse::Cmd::Coverage(a))
             }
         }
     }

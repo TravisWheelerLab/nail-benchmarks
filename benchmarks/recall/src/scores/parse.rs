@@ -21,12 +21,15 @@ pub enum Cmd {
     Scores(ScoresArgs),
     /// What every run found and what it cost, one row per run.
     Summary(TableArgs),
+    /// What every run reported over its own cutoff, split by hmmer's domains.
+    Coverage(TableArgs),
 }
 
 pub fn main(cmd: Cmd) -> anyhow::Result<()> {
     match cmd {
         Cmd::Scores(args) => scores(args),
         Cmd::Summary(args) => summary(args),
+        Cmd::Coverage(args) => coverage(args),
     }
 }
 
@@ -208,6 +211,16 @@ fn summary(args: TableArgs) -> anyhow::Result<()> {
     let out = beside(&path, args.out, "summary.tbl")?;
 
     analyze::summary(&path, &out)?;
+
+    println!("wrote {}", out.display());
+    Ok(())
+}
+
+fn coverage(args: TableArgs) -> anyhow::Result<()> {
+    let path = table(&args, &["scores.tbl"])?;
+    let out = beside(&path, args.out, "coverage.tbl")?;
+
+    analyze::coverage(&path, &out)?;
 
     println!("wrote {}", out.display());
     Ok(())

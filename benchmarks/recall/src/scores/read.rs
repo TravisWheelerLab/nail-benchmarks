@@ -7,18 +7,25 @@
 //! the scores start after `pass` and there are as many of them as the file
 //! declares tools.
 //!
-//! Nothing reads the score columns themselves, because no analysis here opens
-//! one -- a summary asks only what the `pass` string says. One that wanted a
-//! tool's score would add the accessor then, against this layout.
+//! A summary asks only what the `pass` string says. Coverage also reads
+//! whether a tool's score column holds a score, through [`score`].
 
 use crate::scores::frame::Layout;
-use crate::scores::{Meta, Slots};
+use crate::scores::{Meta, Slots, Tool};
 
 /// Where recall's score columns start: after query, target and pass.
 const SCORES: usize = 3;
 
 /// Where the pass string sits.
 pub const PASS: usize = 2;
+
+/// Where one tool's score column sits, if the table carries one.
+pub fn score(meta: &Meta, tool: Tool) -> Option<usize> {
+    meta.tools()
+        .iter()
+        .position(|t| *t == tool)
+        .map(|at| SCORES + at)
+}
 
 /// Where this table's columns sit: query, target, pass, one per tool,
 /// hmmer_dom.

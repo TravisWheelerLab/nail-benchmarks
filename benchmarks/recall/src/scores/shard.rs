@@ -319,7 +319,10 @@ impl Shard<'_> {
             // score lives
             let passed = pass.iter().any(u8::is_ascii_uppercase);
             let reference = self.hmmer.is_some_and(|at| scores[at].is_some());
-            if !passed && !reference {
+
+            // a family short of a cutoff keeps every pair a run reported, so
+            // an analysis that leaves the family out can count what it left
+            if !passed && !reference && self.cutoffs.complete(query) {
                 continue;
             }
 
