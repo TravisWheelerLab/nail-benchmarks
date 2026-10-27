@@ -3,20 +3,20 @@
   "title": "recall counts each run's hits over its own cutoff, split by hmmer's domains",
   "body": "## What exists today\n\n`recall parse summary` reads `scores.tbl` and writes `summary.tbl`, one row per run. It counts each run's hits as a fraction of hmmer's: `sens`, `sens_dom` and `sens_seq` all divide by the pairs hmmer scored over its own cutoff. On the 15 October cutoffs nail reports more pairs over its cutoff than hmmer does, so a fraction of hmmer's hits no longer describes it.\n\n## Proposal\n\n`recall parse coverage` reads `scores.tbl` and writes `coverage.tbl`: one row per run, counting the pairs it reported at or above its own family cutoff, at `--c 2`. hmmer gets two rows: one with its sequence score against `hmmer_3`, one with its best domain against `hmmer_dom_3`. Each row splits its count three ways:\n\n- hmmer's best domain on the pair clears `hmmer_dom_3`\n- hmmer reported the pair, and no domain clears it\n- hmmer did not report the pair\n\nFamilies with no cutoff for some tool are left out, as nail-benchmarks-8add63 decided. A `#= left_out` line counts the families and, per tool, the pairs it reported in them. `parse scores` keeps a row for every reported pair in such a family, so that count is complete.",
   "type": "feature",
-  "status": "in_progress",
+  "status": "closed",
   "priority": 1,
   "labels": [],
   "parent": null,
   "blocked_by": [],
   "related": [],
   "assignee": "jackroddy/6422e305",
-  "lease_expires": "2026-10-27T20:25:59.09608505Z",
+  "lease_expires": null,
   "defer_until": null,
   "created_at": "2026-10-27T20:10:59.062065531Z",
-  "updated_at": "2026-10-27T21:00:06.979955342Z",
-  "closed_at": null,
-  "close_reason": null,
-  "resolution": null,
+  "updated_at": "2026-10-27T21:00:07.016189759Z",
+  "closed_at": "2026-10-27T21:00:07.016189759Z",
+  "close_reason": "Landed in 062899d. The full run's table is in the note above.",
+  "resolution": "done",
   "notes": [
     {
       "id": "e51efd28",
@@ -32,6 +32,9 @@
       "commit": "4424213",
       "branch": "claude-refactor"
     },
-    "closed": null
+    "closed": {
+      "commit": "062899d",
+      "branch": "claude-refactor"
+    }
   }
 }
