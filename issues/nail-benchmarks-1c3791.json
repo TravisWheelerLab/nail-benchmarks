@@ -1,0 +1,28 @@
+{
+  "id": "nail-benchmarks-1c3791",
+  "title": "Final figure changes for this version of the paper",
+  "body": "The changes to the figures that go into this version of the paper. Each child is one change Jack asked for.",
+  "type": "milestone",
+  "status": "open",
+  "priority": 1,
+  "labels": [],
+  "parent": null,
+  "blocked_by": [],
+  "related": [],
+  "assignee": null,
+  "lease_expires": null,
+  "defer_until": null,
+  "created_at": "2026-10-27T22:39:22.770444075Z",
+  "updated_at": "2026-10-27T22:39:22.770444075Z",
+  "closed_at": null,
+  "close_reason": null,
+  "resolution": null,
+  "notes": [],
+  "stamps": {
+    "created": {
+      "commit": "2a9c3d5",
+      "branch": "claude-refactor"
+    },
+    "closed": null
+  }
+}
