@@ -13,11 +13,20 @@
   "lease_expires": null,
   "defer_until": null,
   "created_at": "2026-10-27T22:47:05.474674983Z",
-  "updated_at": "2026-10-27T22:47:05.474674983Z",
+  "updated_at": "2026-10-27T23:24:44.88294075Z",
   "closed_at": null,
   "close_reason": null,
   "resolution": null,
-  "notes": [],
+  "notes": [
+    {
+      "id": "94029ce5",
+      "at": "2026-10-27T23:24:44.88293952Z",
+      "author": "jackroddy/6422e305",
+      "text": "A draft of the table exists. Jack has not signed off on it.\n\n## How coverage counts\n\nEvery count on a row is a pair that cleared that row's own tool's cutoff, at `--c 2` on the 15 October cutoffs, over all 1000 shards. hmmer counts a pair when its sequence score clears `hmmer_3` or its best domain clears `hmmer_dom_3`. The 14 families missing any cutoff are left out. They held 21,427 hmmer hits and none from nail or mmseqs.\n\nEach row is split by hmmer's verdict on the pair:\n\n- `dom_over`: hmmer's best domain clears `hmmer_dom_3`\n- `seq_only`: only hmmer's sequence score clears `hmmer_3`\n- `not_hmmer`: neither clears, whether hmmer reported the pair or not\n\nA run's first two counts are subsets of hmmer's own, so they divide by hmmer's exactly.\n\n## A bug that was fixed\n\nThe first version split by whether hmmer reported the pair at all, not by whether hmmer's score cleared. Its middle column held pairs hmmer reported below both cutoffs. For nail at `-s 12` that was 21.6 M of 33.4 M, and it gave 34.7% where the true share is 12.2%. The row totals were right in both versions. An awk recount of five shards, read straight from the pass letters and the cutoffs file, matched the fixed Rust counts exactly.\n\n## The draft\n\nCounts in thousands. The first two percentages are of hmmer's count in that column. The last is of the tool's own hits.\n\n| tool | dom_over | % | seq_only | % | not_hmmer | % |\n|---|---|---|---|---|---|---|\n| hmmer | 2,114,382 | 100.0 | 96,316 | 100.0 | -- | -- |\n| nail s12 | 2,049,508 | 96.9 | 11,780 | 12.2 | 27,412 | 1.3 |\n| nail s10 | 2,002,043 | 94.7 | 11,339 | 11.8 | 25,205 | 1.2 |\n| nail s9 | 1,915,552 | 90.6 | 10,561 | 11.0 | 21,958 | 1.1 |\n| mmseqs s12 | 1,602,877 | 75.8 | 12,907 | 13.4 | 67,140 | 4.0 |\n| mmseqs s7.5 | 1,481,512 | 70.1 | 10,441 | 10.8 | 53,771 | 3.5 |\n\nThe LaTeX keeps the paper's layout and labels the columns \"Found by HMMER\", with ≥1 domain over and no domain over, and \"Not found by HMMER\". The caption's column definitions were rewritten to match. The run times, summed over shards, are 21,926 h for hmmer, 135 / 74 / 53 h for nail at s12 / s10 / s9, and 95 / 7 h for mmseqs at s12 / s7.5.\n\n## Where it lives\n\n`sets/recall/analysis/coverage.tbl`, from `recall parse coverage`. The classes were fixed after commit `f1838ea`, and that fix is not committed yet.",
+      "commit": "2a9c3d5",
+      "branch": "claude-refactor"
+    }
+  ],
   "stamps": {
     "created": {
       "commit": "2a9c3d5",
