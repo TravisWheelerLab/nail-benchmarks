@@ -3,20 +3,20 @@
   "title": "recall, cloud-search and loss-decomp leave out families missing a cutoff for any tool",
   "body": "## What exists today\n\nrecall, cloud-search and loss-decomp each read `data/mgy-cutoffs.tbl` through their own `Cutoffs::read(path, c, queries)` in `src/scores/mod.rs`. Each looks up a hit's cutoff with `Cutoffs::get(tool, query) -> Option<f32>`. `parse` turns a 0.0 cell into `None` with `.filter(|s| *s > 0.0)`. A family with no row also gets `None`. A hit whose cutoff is `None` fails `is_some_and(|c| best >= c)`, and nothing warns.\n\nThe result is that a family with no hmmer cutoff adds nothing to the truth. In a family with no nail cutoff, every hmmer hit counts as one nail missed. cloud-search has no hmmer column, so its `Tool::Hmmer` takes nail's cutoff.\n\nThe table promoted in `4424213` has 14 such families. All 14 have a 0.0 `nail_3`, and 9 of them also have a 0.0 `mmseqs_3`. Every one of them has a hmmer cutoff.\n\n## Proposal\n\nJack decided this. A family that lacks a cutoff for any tool is left out of every count, for every tool. Whenever a pipeline leaves a family out, it reports how many hits it left out, per tool.\n\nThe outputs it changes:\n\n- recall: the `pass` string written in `shard.rs`, and `summary.tbl`\n- cloud-search: `summary.tbl` and `stages.tbl`\n- loss-decomp: `stages.tbl`, `cutoff-pairs.tbl` and `depth.tbl`\n\nEach benchmark keeps its own copy of the change, under the rule in `CLAUDE.md` that benchmarks share no analysis code.\n\n## Open\n\n- Where the count goes: a `#=` line in each table, or a line from `parse` on stderr.\n- Whether \"any tool\" means every tool the table holds, or only the tools a run reads. cloud-search reads no hmmer column.\n- Whether a left-out hit is any pair the tool reported in that family, or only pairs over some score.",
   "type": "feature",
-  "status": "in_progress",
+  "status": "closed",
   "priority": 2,
   "labels": [],
   "parent": null,
   "blocked_by": [],
   "related": [],
   "assignee": "jackroddy/6422e305",
-  "lease_expires": "2026-10-27T22:34:45.078034771Z",
+  "lease_expires": null,
   "defer_until": null,
   "created_at": "2026-10-27T18:51:43.98014957Z",
-  "updated_at": "2026-10-27T22:19:45.078034771Z",
-  "closed_at": null,
-  "close_reason": null,
-  "resolution": null,
+  "updated_at": "2026-10-27T22:35:43.831723281Z",
+  "closed_at": "2026-10-27T22:35:43.831723281Z",
+  "close_reason": "Landed in 2a9c3d5. recall, cloud-search and loss-decomp leave such families out and count them. On the sandbox data only hmmer had pairs in them.",
+  "resolution": "done",
   "notes": [
     {
       "id": "56ceca17",
@@ -32,6 +32,9 @@
       "commit": "4424213",
       "branch": "claude-refactor"
     },
-    "closed": null
+    "closed": {
+      "commit": "2a9c3d5",
+      "branch": "claude-refactor"
+    }
   }
 }
