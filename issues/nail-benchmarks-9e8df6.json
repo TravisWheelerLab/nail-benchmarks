@@ -1,0 +1,28 @@
+{
+  "id": "nail-benchmarks-9e8df6",
+  "title": "What does the paper's MGnify recall table look like?",
+  "body": "## What exists today\n\n`recall parse coverage` writes `sets/recall/analysis/coverage.tbl` over all 1000 MGnify shards on the 15 October cutoffs, since `f1838ea`. It has one row per run plus hmmer. Each row holds the pairs the run reported over its own cutoff, split three ways: hmmer's best domain clears `hmmer_dom`, hmmer reported the pair with no domain over it, or hmmer did not report the pair. hmmer counts a pair when its sequence score or its best domain clears its cutoff. The paper's current table reports recall as a fraction of hmmer's, split by single and multiple domains.\n\n## Open\n\nWhat the final table in the paper looks like.",
+  "type": "decision",
+  "status": "open",
+  "priority": 1,
+  "labels": [],
+  "parent": "nail-benchmarks-1c3791",
+  "blocked_by": [],
+  "related": [],
+  "assignee": null,
+  "lease_expires": null,
+  "defer_until": null,
+  "created_at": "2026-10-27T22:47:05.474674983Z",
+  "updated_at": "2026-10-27T22:47:05.474674983Z",
+  "closed_at": null,
+  "close_reason": null,
+  "resolution": null,
+  "notes": [],
+  "stamps": {
+    "created": {
+      "commit": "2a9c3d5",
+      "branch": "claude-refactor"
+    },
+    "closed": null
+  }
+}
