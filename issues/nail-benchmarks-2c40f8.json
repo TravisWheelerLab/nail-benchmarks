@@ -1,7 +1,7 @@
 {
   "id": "nail-benchmarks-2c40f8",
   "title": "What are loss-decomp's final figures?",
-  "body": "## What exists today\n\nloss-decomp draws three figures: `loss-decomp-hits.pdf` from `plot.py`, a letter page of eight panels off `stages.tbl` and `cutoff-pairs.tbl`, and `loss-decomp-depth-binned.pdf` and `loss-decomp-depth-cumulative.pdf` from `plot_depth.py`, off `depth.tbl`. The ones in `figures/` were drawn on the 12 October cutoffs. A sandbox run on the 15 October cutoffs is in `tmp-claude/sandbox/figures-newcut/`.\n\n## Open\n\nWhich figures loss-decomp contributes to the paper, and what each one shows.",
+  "body": "## What exists today\n\nloss-decomp draws three figures: `loss-decomp-hits.pdf` from `plot.py`, a letter page of eight panels off `stages.tbl` and `cutoff-pairs.tbl`, and `loss-decomp-depth-binned.pdf` and `loss-decomp-depth-cumulative.pdf` from `plot_depth.py`, off `depth.tbl`. The ones in `figures/` were drawn on the 12 October cutoffs. Nothing has been drawn on the 15 October cutoffs that survives.\n\n## Open\n\nWhich figures loss-decomp contributes to the paper, and what each one shows.",
   "type": "decision",
   "status": "open",
   "priority": 1,
@@ -13,7 +13,7 @@
   "lease_expires": null,
   "defer_until": null,
   "created_at": "2026-10-27T22:47:43.929135754Z",
-  "updated_at": "2026-10-27T22:47:43.929135754Z",
+  "updated_at": "2026-10-27T22:47:51.657896287Z",
   "closed_at": null,
   "close_reason": null,
   "resolution": null,
