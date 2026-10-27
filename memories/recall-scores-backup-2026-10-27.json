@@ -1,0 +1,10 @@
+{
+  "slug": "recall-scores-backup-2026-10-27",
+  "text": "`/data/recall-scores-bk-2026-10-27/scores.tbl` is a copy of `sets/recall/analysis/scores.tbl` as `parse scores` wrote it on 12 Oct 2026, against the 12 October cutoffs: 310,683,475,588 bytes, `cmp` clean against the source. It was taken on 27 Oct 2026, before the coverage table rebuilt scores.tbl on the 15 October cutoffs.",
+  "created_at": "2026-10-27T19:50:06.328878098Z",
+  "updated_at": "2026-10-27T19:50:06.328878098Z",
+  "stamp": {
+    "commit": "4424213",
+    "branch": "claude-refactor"
+  }
+}
