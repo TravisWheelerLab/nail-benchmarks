@@ -257,6 +257,7 @@ pub fn tools(runs: &[Run]) -> Vec<Tool> {
 }
 
 /// Where each run's letters sit in a `pass` string.
+#[derive(Clone)]
 pub struct Slots {
     /// The string with every run under its cutoff: each run's tool letter,
     /// lowercase, once per letter the run spends.

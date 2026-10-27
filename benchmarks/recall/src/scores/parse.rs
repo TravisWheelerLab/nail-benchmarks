@@ -202,6 +202,10 @@ pub struct TableArgs {
 
     #[arg(short, long, value_name = "out.tbl")]
     out: Option<PathBuf>,
+
+    /// How many threads read the table
+    #[arg(long, value_name = "N")]
+    threads: usize,
 }
 
 fn summary(args: TableArgs) -> anyhow::Result<()> {
@@ -210,7 +214,7 @@ fn summary(args: TableArgs) -> anyhow::Result<()> {
     let path = table(&args, &["scores.tbl", "runs.tbl"])?;
     let out = beside(&path, args.out, "summary.tbl")?;
 
-    analyze::summary(&path, &out)?;
+    analyze::summary(&path, &out, args.threads)?;
 
     println!("wrote {}", out.display());
     Ok(())
@@ -220,7 +224,7 @@ fn coverage(args: TableArgs) -> anyhow::Result<()> {
     let path = table(&args, &["scores.tbl"])?;
     let out = beside(&path, args.out, "coverage.tbl")?;
 
-    analyze::coverage(&path, &out)?;
+    analyze::coverage(&path, &out, args.threads)?;
 
     println!("wrote {}", out.display());
     Ok(())

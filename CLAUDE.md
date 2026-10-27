@@ -576,15 +576,16 @@ question about a run rather than about a tool, and it counts a pair as found
 only if nail kept it over the family's cutoff. `summary` still counts what a
 run reported; whether it should follow is an open issue.
 
-recall's `coverage` counts what each run reported over its own cutoff. It
-does not divide by hmmer's hits, because nail at `-s 10` and above reports
-more pairs over its cutoff than hmmer does. Each count is split three ways: hmmer's best domain
-clears `hmmer_dom`, hmmer reported the pair with no domain over it, or hmmer
-did not report the pair. hmmer gets two rows, one for its sequence score
-and one for its best domain. A family missing a cutoff for any tool is left
-out of every row, and `#= left_out` lines count the families and each
-tool's pairs in them. `parse scores` keeps every reported pair in such a
-family so that count is whole.
+recall's `coverage` counts what each run reported over its own cutoff. Each
+count stands alone rather than as a fraction of hmmer's hits. It is split
+three ways: hmmer's best domain clears `hmmer_dom`, hmmer reported the pair
+with no domain over it, or hmmer did not report the pair. hmmer counts a pair
+when its sequence score clears `hmmer` or its best domain clears `hmmer_dom`.
+A family missing a cutoff for any tool is left out of every row, and
+`#= left_out` lines count the families and each tool's pairs in them.
+`parse scores` keeps every reported pair in such a family so that count is
+whole. recall's `summary` and `coverage` read `scores.tbl` on `--threads`
+threads, each over its own run of whole shard blocks.
 
     recall        parse scores → parse summary
                                → parse coverage

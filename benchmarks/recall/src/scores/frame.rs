@@ -20,10 +20,11 @@
 
 use std::collections::HashSet;
 use std::fs::File;
-use std::io::{BufReader, Read};
+use std::io::{BufReader, Read, Seek, SeekFrom};
 use std::path::Path;
 
 use anyhow::{Context, bail, ensure};
+use rayon::prelude::*;
 
 use crate::scores::{Meta, Preamble, Slots};
 
@@ -31,6 +32,7 @@ use crate::scores::{Meta, Preamble, Slots};
 const BUFFER: usize = 4 << 20;
 
 /// Where the columns every table here carries sit in a row.
+#[derive(Clone)]
 pub struct Layout {
     /// How many fields a row holds.
     //
@@ -69,6 +71,12 @@ struct State {
     rows: u64,
     line: u64,
     done: bool,
+
+    /// Whether this frame reads the whole file, rather than one part of it
+    /// that [`Frame::par_each`] hands a thread.
+    whole: bool,
+    /// The count the `#= end` line gave, for a part to hand back.
+    trailer: Option<u64>,
 }
 
 /// One row, its cells borrowed from the reader for as long as a caller looks
@@ -84,6 +92,147 @@ impl Frame<File> {
             File::open(path).with_context(|| format!("failed to open {}", path.display()))?;
 
         Frame::new(file, &path.display().to_string())
+    }
+}
+
+impl Frame<File> {
+    /// Hand every row to `f` on `threads` threads, then check the trailer
+    /// against the rows every thread read.
+    ///
+    /// Each thread reads runs of whole shard blocks with an accumulator of
+    /// its own, made by `init`. The accumulators come back in file order, for
+    /// the caller to add up.
+    pub fn par_each<A: Send>(
+        &self,
+        path: &Path,
+        threads: usize,
+        init: impl Fn() -> A + Sync,
+        f: impl Fn(&mut A, &Row) -> anyhow::Result<()> + Sync,
+    ) -> anyhow::Result<Vec<A>> {
+        let layout = self
+            .state
+            .layout
+            .clone()
+            .expect("a frame is given its layout before its first row");
+        let file = &self.state.file;
+
+        let len = std::fs::metadata(path)
+            .with_context(|| format!("failed to read {file}"))?
+            .len();
+
+        // what a part needs read before its first block: the format line,
+        // the preamble and the column header, everything above the first
+        // `#= shard` marker
+        let first = marker(path, 0)?
+            .with_context(|| format!("{file} ends before its first `#= shard` marker"))?;
+        let mut head = vec![0u8; first as usize];
+        File::open(path)?.read_exact(&mut head)?;
+
+        let pool = rayon::ThreadPoolBuilder::new()
+            .num_threads(threads)
+            .build()?;
+
+        // four parts a thread, so one that finishes early takes another
+        let parts = threads as u64 * 4;
+        let mut cuts: Vec<u64> = pool.install(|| {
+            (1..parts)
+                .into_par_iter()
+                .map(|k| Ok(marker(path, len * k / parts)?.unwrap_or(len)))
+                .collect::<anyhow::Result<_>>()
+        })?;
+        cuts.extend([first, len]);
+        cuts.sort_unstable();
+        cuts.dedup();
+
+        let done: Vec<(A, State)> = pool.install(|| {
+            cuts.par_windows(2)
+                .map(|cut| {
+                    let (from, to) = (cut[0], cut[1]);
+
+                    let mut body = File::open(path)?;
+                    body.seek(SeekFrom::Start(from))?;
+                    let src = (&head[..]).chain(body.take(to - from));
+
+                    let mut part = Frame::new(src, &format!("{file} from byte {from}"))?;
+                    part.state.whole = false;
+                    part.state.layout = Some(layout.clone());
+
+                    let mut acc = init();
+                    part.each(|row| f(&mut acc, row))?;
+
+                    Ok((acc, part.state))
+                })
+                .collect::<anyhow::Result<_>>()
+        })?;
+
+        let last = done.len() - 1;
+        let mut seen = HashSet::new();
+        let (mut rows, mut trailer) = (0u64, None);
+        let mut out = Vec::with_capacity(done.len());
+
+        for (i, (acc, state)) in done.into_iter().enumerate() {
+            for shard in state.seen {
+                ensure!(
+                    seen.insert(shard.clone()),
+                    "{file} opens shard {shard:?} a second time"
+                );
+            }
+
+            rows += state.rows;
+
+            if let Some(count) = state.trailer {
+                ensure!(i == last, "{file} has rows after its `#= end` line");
+                trailer = Some(count);
+            }
+
+            out.push(acc);
+        }
+
+        let count = trailer.with_context(|| {
+            format!("{file} ends without a `#= end` line; the run that wrote it did not finish")
+        })?;
+        ensure!(
+            count == rows,
+            "{file} says it holds {count} rows and holds {rows}"
+        );
+
+        Ok(out)
+    }
+}
+
+/// Where the first `#= shard` line at or past byte `from` starts, or `None`
+/// if none does.
+fn marker(path: &Path, from: u64) -> anyhow::Result<Option<u64>> {
+    const MARKER: &[u8] = b"\n#= shard ";
+    const CHUNK: usize = 8 << 20;
+
+    let mut file = File::open(path)?;
+    // one byte back, so a marker that starts exactly at `from` is found by
+    // the newline before it
+    let start = from.saturating_sub(1);
+    file.seek(SeekFrom::Start(start))?;
+
+    let finder = memchr::memmem::Finder::new(MARKER);
+    let mut buf = vec![0u8; CHUNK + MARKER.len()];
+    let (mut held, mut at) = (0usize, start);
+
+    loop {
+        let n = file.read(&mut buf[held..])?;
+        if n == 0 {
+            return Ok(None);
+        }
+        let filled = held + n;
+
+        if let Some(i) = finder.find(&buf[..filled]) {
+            return Ok(Some(at + i as u64 + 1));
+        }
+
+        // the tail is carried into the next read, so a marker split across
+        // two reads is still found
+        let keep = (MARKER.len() - 1).min(filled);
+        buf.copy_within(filled - keep..filled, 0);
+        at += (filled - keep) as u64;
+        held = keep;
     }
 }
 
@@ -152,6 +301,8 @@ impl<R: Read> Frame<R> {
                 rows: 0,
                 line: at as u64,
                 done: false,
+                whole: true,
+                trailer: None,
             },
         })
     }
@@ -177,6 +328,9 @@ impl<R: Read> Frame<R> {
 
         while !state.done {
             let Some((at, entry)) = reader.next_entry()? else {
+                if !state.whole {
+                    break;
+                }
                 bail!(
                     "{} ends without a `#= end` line; the run that wrote it did not finish",
                     state.file
@@ -229,13 +383,18 @@ impl State {
                     .parse()
                     .with_context(|| format!("{}:{}", self.file, self.line))?;
 
-                ensure!(
-                    count == self.rows,
-                    "{} says it holds {count} rows and holds {}",
-                    self.file,
-                    self.rows
-                );
+                // a part holds some of the rows, so only the whole count
+                // can be held to the trailer
+                if self.whole {
+                    ensure!(
+                        count == self.rows,
+                        "{} says it holds {count} rows and holds {}",
+                        self.file,
+                        self.rows
+                    );
+                }
 
+                self.trailer = Some(count);
                 self.done = true;
             }
             other => bail!("{}:{} has a `#= {other}` line", self.file, self.line),

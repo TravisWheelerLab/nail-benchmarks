@@ -117,6 +117,85 @@ beta MGYP000000000002 nhH 11.0   12.0   5.0
         assert_eq!(passed, [(true, true), (false, true)]);
     }
 
+    /// `FILE` with `shards` blocks of the same two rows, and the trailer
+    /// counting them, which `par_each` cuts into several parts.
+    fn shards(shards: usize) -> String {
+        let (head, rest) = FILE.split_once("#= shard 1\n").unwrap();
+        let (rows, _) = rest.split_once("#= end").unwrap();
+
+        let mut out = head.to_string();
+        for shard in 1..=shards {
+            out.push_str(&format!("#= shard {shard}\n{rows}"));
+        }
+        out.push_str(&format!("#= end {}\n", 2 * shards));
+        out
+    }
+
+    /// Every row `par_each` hands out, in file order, read from `text`
+    /// written to a file of its own.
+    fn par_read(text: &str, name: &str) -> anyhow::Result<Vec<String>> {
+        let path = std::env::temp_dir().join(format!("recall-{}-{name}", std::process::id()));
+        std::fs::write(&path, text)?;
+
+        let mut frame = Frame::open(&path)?;
+        frame.layout(layout(&frame.meta));
+        let parts = frame.par_each(&path, 3, Vec::new, |out, row| {
+            out.push(format!(
+                "{} {}",
+                String::from_utf8_lossy(row.field(0)),
+                String::from_utf8_lossy(row.pass()),
+            ));
+            Ok(())
+        });
+
+        std::fs::remove_file(&path)?;
+        Ok(parts?.concat())
+    }
+
+    #[test]
+    fn a_parallel_pass_reads_every_row_once() {
+        let text = shards(40);
+        let parts = par_read(&text, "every").unwrap();
+
+        let mut whole = Vec::new();
+        let mut frame = open(&text).unwrap();
+        frame
+            .each(|row| {
+                whole.push(format!(
+                    "{} {}",
+                    String::from_utf8_lossy(row.field(0)),
+                    String::from_utf8_lossy(row.pass()),
+                ));
+                Ok(())
+            })
+            .unwrap();
+
+        assert_eq!(parts.len(), 80);
+        assert_eq!(parts, whole);
+    }
+
+    #[test]
+    fn a_parallel_pass_refuses_a_broken_file() {
+        let cases = [
+            ("no trailer", shards(40).replace("#= end 80\n", "")),
+            (
+                "a trailer that counts wrong",
+                shards(40).replace("#= end 80", "#= end 81"),
+            ),
+            (
+                "a shard opened twice",
+                shards(40).replace("#= shard 31\n", "#= shard 3\n"),
+            ),
+        ];
+
+        for (i, (what, text)) in cases.iter().enumerate() {
+            assert!(
+                par_read(text, &i.to_string()).is_err(),
+                "{what} was read as a table"
+            );
+        }
+    }
+
     /// Every way the file can be wrong that would otherwise be read as an
     /// answer rather than as a fault.
     #[test]
