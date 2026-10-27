@@ -3,7 +3,7 @@
   "title": "MGnify recall and pid classify hits with `util::domains`",
   "body": "`util::domains` ports `classify_direct`, the classifier behind the May 2026 MGnify multi-domain analysis. `measure` scores a pair's domain arrangements, `classify` holds a measure against a per-family cutoff and names the paper's seven classes, and `pattern` names the arrangement that scores most. loss-decomp is its one consumer, through `cutoff-pairs.tbl`. MGnify recall and pid are the two intended consumers and neither reads it.\n\nSince 12 October `data/mgy-cutoffs.tbl` carries `hmmer_1..5` and `hmmer_dom_1..5`, so recall has a cutoff of hmmer's own to classify against. recall splits hmmer's hits on the domain letter of its pass string since commit e6744a6 and reads no class. In pid, 9 of the 12 decoys inside `hmmer.prf`'s 1% threshold score through several domains, and 126 of the top 500 do.\n\n## Open\nWhether recall still wants the classes beside its domain-letter split, or the split answers the question.",
   "type": "task",
-  "status": "open",
+  "status": "closed",
   "priority": 2,
   "labels": [],
   "parent": null,
@@ -13,16 +13,19 @@
   "lease_expires": null,
   "defer_until": null,
   "created_at": "2026-09-28T19:02:29.748357067Z",
-  "updated_at": "2026-10-13T02:23:17.621289423Z",
-  "closed_at": null,
-  "close_reason": null,
-  "resolution": null,
+  "updated_at": "2026-10-27T22:19:45.012587277Z",
+  "closed_at": "2026-10-27T22:19:45.012587277Z",
+  "close_reason": "Dropped. recall and pid will not classify hits with util::domains.",
+  "resolution": "dropped",
   "notes": [],
   "stamps": {
     "created": {
       "commit": "e080da4",
       "branch": "claude-refactor"
     },
-    "closed": null
+    "closed": {
+      "commit": "f1838ea",
+      "branch": "claude-refactor"
+    }
   }
 }
