@@ -3,7 +3,7 @@
   "title": "Every crate audited against CLAUDE.md's structure rules",
   "body": "CLAUDE.md's Structure and Method sections hold the rules written while taking pid from 2,002 lines to 1,626 and deleting the scores and search crates. No other crate has been held to them. The children are the cases found so far. A crate-by-crate audit of util, build-set, recall, cloud-search, loss-decomp, cutoffs, long-seqs, pid and thread-scaling has not started, and each crate's audit belongs here as a child. A case the rules do not settle changes the rule in CLAUDE.md in the same commit as the code.",
   "type": "milestone",
-  "status": "open",
+  "status": "closed",
   "priority": 2,
   "labels": [],
   "parent": null,
@@ -13,16 +13,19 @@
   "lease_expires": null,
   "defer_until": null,
   "created_at": "2026-09-28T19:22:16.276807849Z",
-  "updated_at": "2026-10-13T02:23:17.673217145Z",
-  "closed_at": null,
-  "close_reason": null,
-  "resolution": null,
+  "updated_at": "2026-10-27T22:19:45.04865748Z",
+  "closed_at": "2026-10-27T22:19:45.04865748Z",
+  "close_reason": "Dropped. The crate-by-crate audit will not be done.",
+  "resolution": "dropped",
   "notes": [],
   "stamps": {
     "created": {
       "commit": "e080da4",
       "branch": "claude-refactor"
     },
-    "closed": null
+    "closed": {
+      "commit": "f1838ea",
+      "branch": "claude-refactor"
+    }
   }
 }
