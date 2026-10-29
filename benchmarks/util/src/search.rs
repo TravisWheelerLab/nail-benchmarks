@@ -461,6 +461,9 @@ pub fn seed(
 
     let cmd = cmd
         .arg("--seeds-out", seeds_out)
+        // the readers match a seed to a pair by name, and nail writes
+        // record positions unless told otherwise
+        .arg("--seeds-format", "names")
         .flag("--only-seed")
         .flag("--allow-overwrite")
         .path(query_hmm)

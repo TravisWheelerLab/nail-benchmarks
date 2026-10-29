@@ -159,6 +159,7 @@ pub fn main(args: Args, paths: &crate::Paths) -> anyhow::Result<()> {
                 .arg("--mmseqs-s", &s)
                 .arg("--seed-mode", "prog")
                 .arg("--seeds-out", dirs.seeds(NAIL, &shard))
+                .arg("--seeds-format", "names")
                 .arg("-E", args.nail_evalue)
                 .arg("--tbl-out", dirs.table(NAIL, &shard))
                 .flag("--allow-overwrite")
