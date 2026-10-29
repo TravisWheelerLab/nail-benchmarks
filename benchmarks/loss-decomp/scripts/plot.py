@@ -30,28 +30,26 @@ import numpy as np
 from matplotlib.patches import PathPatch, Rectangle
 from matplotlib.path import Path as MPath
 
-ORANGE, MAGENTA, CYAN = "#EE7733", "#EE3377", "#33BBEE"
-TEAL, BLUE, RED, GREY = "#009988", "#0077BB", "#CC3311", "#BBBBBB"
-HMMER, NAIL = ORANGE, MAGENTA
-MAG_LIGHT = "#F7A8C4"
+HMMER, NAIL = "#EE7733", "#EE3377"
+BLUE, TEAL, RED, GREY = "#0077BB", "#009988", "#CC3311", "#BBBBBB"
 
 STAGES = [
-    ("lost_prefilter", "mmseqs prefilter", CYAN),
-    ("lost_stopped", "prog seeding stopped", BLUE),
-    ("lost_mmseqs", "mmseqs dropped", TEAL),
-    ("lost_align", "nail filtered", GREY),
-    ("lost_cutoff", "under nail's cutoff", MAGENTA),
+    ("lost_prefilter", "mmseqs prefilter"),
+    ("lost_stopped", "prog seeding stopped"),
+    ("lost_mmseqs", "mmseqs dropped"),
+    ("lost_align", "nail filtered"),
+    ("lost_cutoff", "under nail's cutoff"),
 ]
 
 # in order of how far a class can be trusted
 CLASSES = [
-    ("strong_match", "strong", TEAL),
-    ("colinear_match", "colinear", BLUE),
-    ("pileup:full", "pileup: full", CYAN),
-    ("pileup:mid", "pileup: mid", ORANGE),
-    ("pileup:fragment", "pileup: fragment", RED),
-    ("shuffled_match", "shuffled", MAGENTA),
-    ("weak_match", "weak", GREY),
+    ("strong_match", "strong"),
+    ("colinear_match", "colinear"),
+    ("pileup:full", "pileup: full"),
+    ("pileup:mid", "pileup: mid"),
+    ("pileup:fragment", "pileup: fragment"),
+    ("shuffled_match", "shuffled"),
+    ("weak_match", "weak"),
 ]
 
 
@@ -90,19 +88,19 @@ def load(stages):
     d = {k: int(v) for k, v in r.items() if v.isdigit()}
     d["sens"] = float(r["sens"])
     d["missed"] = d["truth"] - d["kept"]
-    assert d["missed"] == sum(d[k] for k, _, _ in STAGES)
+    assert d["missed"] == sum(d[k] for k, _ in STAGES)
     assert d["lost_cutoff"] == d["cutoff_domain"] + d["cutoff_nodomain"]
     assert d["cutoff_nodomain"] == d["nodomain_single"] + d["nodomain_multi"]
     pairs = table(Path(stages).with_name("cutoff-pairs.tbl"))
-    known = {k for k, _, _ in CLASSES}
+    known = {k for k, _ in CLASSES}
     multi = {}
     for p in pairs:
         if p["kind"] == "multi":
             if p["class"] not in known:
                 sys.exit(f"unknown class {p['class']}")
             multi[p["class"]] = multi.get(p["class"], 0) + 1
-    d["classes"] = [(k, name, c, multi[k]) for k, name, c in CLASSES if multi.get(k)]
-    d["class_total"] = sum(n for *_, n in d["classes"])
+    d["classes"] = [(name, multi[k]) for k, name in CLASSES if multi.get(k)]
+    d["class_total"] = sum(n for _, n in d["classes"])
     if d["class_total"] != d["nodomain_multi"]:
         print(f"warning: classes sum to {d['class_total']:,}, stages.tbl says {d['nodomain_multi']:,}",
               file=sys.stderr)
@@ -112,6 +110,12 @@ def load(stages):
 def pct(n, of):
     p = 100 * n / of
     return f"{p:.1f}%" if p >= 0.1 else f"{p:.2f}%" if p >= 0.01 else "<0.01%"
+
+
+def shades(hue, n):
+    """n shades of one hue, the hue itself first and paler after."""
+    rgb = np.array(mpl.colors.to_rgb(hue))
+    return [tuple(rgb + (1 - rgb) * t) for t in np.linspace(0, 0.6, n)] if n > 1 else [hue]
 
 
 def heights(counts, total, gap, least):
@@ -146,18 +150,24 @@ def draw(stages, out):
     ax.axis("off")
     r = fig.canvas.get_renderer()
 
-    # a column is its header, its slices top to bottom, and which slice the
-    # next column splits
-    stage = [(name, d[key], colour) for key, name, colour in STAGES]
+    # a column is its header, its slices top to bottom and which of them the
+    # next column splits. the split slice is grey, and the rest are shades
+    # of the column's own hue in slice order
+    def column(header, hue, slices, cont):
+        rest = iter(shades(hue, len(slices) - (cont is not None)))
+        return header, [(name, n, GREY if i == cont else next(rest))
+                        for i, (name, n) in enumerate(slices)], cont
+
+    stage = [(name, d[key]) for key, name in STAGES]
     cols = [
         ("HMMER hits\n" + f"{d['truth']:,}", [("HMMER hits", d["truth"], HMMER)], 0),
-        ("Found by nail", [("found by nail", d["kept"], NAIL), ("missed", d["missed"], "0.35")], 1),
-        ("Stage lost at", stage, len(stage) - 1),
-        ("HMMER's best\ndomain", [("a domain clears", d["cutoff_domain"], MAG_LIGHT),
-                                  ("no domain clears", d["cutoff_nodomain"], "#A1224F")], 1),
-        ("Domains HMMER\nreported", [("1 domain", d["nodomain_single"], "#C77CA0"),
-                                     ("2+ domains", d["nodomain_multi"], "#6E1A3A")], 1),
-        ("How 2+ domains\nadd up", [(name, n, colour) for _, name, colour, n in d["classes"]], None),
+        column("Found by nail", NAIL, [("found by nail", d["kept"]), ("missed", d["missed"])], 1),
+        column("Stage lost at", BLUE, stage, len(stage) - 1),
+        column("HMMER's best\ndomain", TEAL,
+               [("a domain clears", d["cutoff_domain"]), ("no domain clears", d["cutoff_nodomain"])], 1),
+        column("Domains HMMER\nreported", TEAL,
+               [("1 domain", d["nodomain_single"]), ("2+ domains", d["nodomain_multi"])], 1),
+        column("How 2+ domains\nadd up", RED, d["classes"], None),
     ]
     XS = np.linspace(0.3, W - 0.3 - NW, len(cols))
 
