@@ -1,0 +1,28 @@
+{
+  "id": "nail-benchmarks-052ada",
+  "title": "A cells benchmark compares nail's cell fraction on original, reversed and shuffled TrEMBL",
+  "body": "## What exists today\n\npid carries a cells figure that answers a question other than recall against identity. `pid parse cells` reads one nail run's table into `cells.true.tbl` and `cells.decoy.tbl`, nail's cell fraction against query length × target length, and `scripts/plot_cell_frac.py` overlays them as two log-density heatmaps.\n\n## The change\n\nA benchmark of its own, `cells`, for how much of the dynamic-programming matrix nail's cloud search fills depending on whether the target carries signal. Jack decided:\n\n- Targets: one draw of 1,000,000 TrEMBL sequences, in three forms: original, reversed, and each sequence shuffled on its own.\n- The draw is sampled by length to cover as wide a range as TrEMBL allows: equal counts per doubling length bin, a bin that runs short handing its quota to the rest.\n- Queries: all of Pfam.\n- nail at its defaults, with the reporting threshold opened so every pair it aligns is reported.\n- The figure is the existing one: cell fraction against query length × target length, one overlaid log-density colormap per form.\n\npid's `parse cells` and its plot move here. The score figure gets a benchmark of its own separately.",
+  "type": "feature",
+  "status": "open",
+  "priority": 1,
+  "labels": [],
+  "parent": "nail-benchmarks-1c3791",
+  "blocked_by": [],
+  "related": [],
+  "assignee": null,
+  "lease_expires": null,
+  "defer_until": null,
+  "created_at": "2026-10-29T19:35:15.471383875Z",
+  "updated_at": "2026-10-29T19:35:15.471383875Z",
+  "closed_at": null,
+  "close_reason": null,
+  "resolution": null,
+  "notes": [],
+  "stamps": {
+    "created": {
+      "commit": "c9c9e4c",
+      "branch": "claude-refactor"
+    },
+    "closed": null
+  }
+}
