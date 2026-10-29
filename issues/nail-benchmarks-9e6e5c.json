@@ -3,7 +3,7 @@
   "title": "No label overlaps another on pid's plots",
   "body": "## What exists today\n\npid draws `pid.pdf`, `roc.pdf`, `time.pdf` and `cells.pdf` through the scripts under `benchmarks/pid/scripts/`.\n\n## The change\n\nThe labels on every pid plot overlap each other. Fix them so none overlap.",
   "type": "task",
-  "status": "open",
+  "status": "closed",
   "priority": 1,
   "labels": [],
   "parent": "nail-benchmarks-1c3791",
@@ -13,16 +13,19 @@
   "lease_expires": null,
   "defer_until": null,
   "created_at": "2026-10-27T22:44:54.655314076Z",
-  "updated_at": "2026-10-27T22:44:54.655314076Z",
-  "closed_at": null,
-  "close_reason": null,
-  "resolution": null,
+  "updated_at": "2026-10-29T21:58:51.201193874Z",
+  "closed_at": "2026-10-29T21:58:51.201193874Z",
+  "close_reason": "e6ceee4 moved the labels on pid's identity, ROC and runtime plots. Jack confirmed that none overlap.",
+  "resolution": "done",
   "notes": [],
   "stamps": {
     "created": {
       "commit": "2a9c3d5",
       "branch": "claude-refactor"
     },
-    "closed": null
+    "closed": {
+      "commit": "9feb692",
+      "branch": "claude-refactor"
+    }
   }
 }
