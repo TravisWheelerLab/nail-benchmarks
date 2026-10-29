@@ -17,11 +17,9 @@ use std::{
 };
 
 use libsail::collection::Iterable;
-use libsail::seq::fasta::IndexedFasta;
-use libsail::seq::p7hmm::Hmm;
 use libsail::tbl::blast::BlastTable;
 use libsail::tbl::hmmer::HmmerTable;
-use libsail::tbl::nail::{NailRow, NailTable};
+use libsail::tbl::nail::NailTable;
 use libsail::tbl::{Hit, HitColumns, HitParser, Table};
 
 use anyhow::Context;
@@ -86,20 +84,6 @@ pub struct RecallArgs {
 }
 
 #[derive(Parser)]
-pub struct CellsArgs {
-    /// Which label of paths.toml to read. Omit to list them
-    #[arg(long = "in", value_name = "label")]
-    pub label: Option<String>,
-
-    #[command(flatten)]
-    which: Which,
-
-    /// Which run's table to read cell fractions from. Only nail reports them
-    #[arg(long, value_name = "NAME", default_value = "nail-s12.0-ms2000.prf")]
-    run: String,
-}
-
-#[derive(Parser)]
 pub struct ScoreArgs {
     /// Which label of paths.toml to read. Omit to list them
     #[arg(long = "in", value_name = "label")]
@@ -120,7 +104,6 @@ pub struct ScoreArgs {
 #[derive(Subcommand)]
 pub enum Cmd {
     Recall(RecallArgs),
-    Cells(CellsArgs),
     Score(ScoreArgs),
 }
 
@@ -128,9 +111,6 @@ pub fn main(cmd: Cmd, paths: &crate::Paths) -> anyhow::Result<()> {
     match cmd {
         Cmd::Recall(args) => {
             recall(args, paths)?;
-        }
-        Cmd::Cells(args) => {
-            cells(args, paths)?;
         }
         Cmd::Score(args) => {
             score(args, paths)?;
@@ -179,75 +159,6 @@ fn score(args: ScoreArgs, paths: &crate::Paths) -> anyhow::Result<()> {
     table
         .write(&path)
         .with_context(|| format!("failed to write {}", path.display()))
-}
-
-fn cells(args: CellsArgs, paths: &crate::Paths) -> anyhow::Result<()> {
-    let runs = runs(&paths.search())?;
-    let hits = run_named(&runs, &args.run)?.nail_rows()?;
-
-    // read out of the files rather than shelled out to hmmstat and
-    // esl-seqstat: neither is a dependency this benchmark declares, and both
-    // were being found on PATH rather than through `tools`
-    let inp = crate::Inputs::open(&paths.set)?;
-    let query_lens: HashMap<String, usize> = Hmm::open(&inp.query_hmm)
-        .with_context(|| format!("failed to parse {}", inp.query_hmm.display()))?
-        .iter()
-        .map(|model| {
-            (
-                String::from_utf8_lossy(&model.header.name).into_owned(),
-                model.header.leng,
-            )
-        })
-        .collect();
-
-    let mut target_lens: HashMap<String, usize> = HashMap::new();
-    let target_fa = IndexedFasta::open(&inp.target_fa)
-        .with_context(|| format!("failed to open {}", inp.target_fa.display()))?;
-    for rec in target_fa.iter() {
-        target_lens.insert(rec.name_str()?.to_string(), rec.seq.len());
-    }
-
-    let figures = args.which.out_dir(&paths.analysis);
-    std::fs::create_dir_all(&figures)?;
-
-    let points = || toil::Table::new(toil::Schema::new(["cells", "fraction"]));
-    let (mut true_out, mut decoy_out) = (points(), points());
-
-    hits.iter().try_for_each(|h| -> anyhow::Result<()> {
-        let intended_query = h
-            .target
-            .split('|')
-            .next()
-            .with_context(|| format!("failed to split query from: {}", h.target))?;
-
-        let qlen = query_lens
-            .get(&h.query)
-            .with_context(|| format!("no query len for: {}", h.query))?;
-
-        let tlen = target_lens
-            .get(&h.target)
-            .with_context(|| format!("no target len for: {}", h.target))?;
-
-        let x = toil::Cell::from(qlen * tlen);
-        let y = toil::Cell::from(h.cell_fraction);
-
-        if h.target.starts_with("decoy") {
-            decoy_out.row([x, y]);
-        } else if h.query == intended_query {
-            true_out.row([x, y]);
-        }
-
-        Ok(())
-    })?;
-
-    for (table, name) in [(true_out, "cells.true.tbl"), (decoy_out, "cells.decoy.tbl")] {
-        let path = figures.join(name);
-        table
-            .write(&path)
-            .with_context(|| format!("failed to write {}", path.display()))?;
-    }
-
-    Ok(())
 }
 
 fn recall(args: RecallArgs, paths: &crate::Paths) -> anyhow::Result<()> {
@@ -356,22 +267,22 @@ impl Run {
         }
         .with_context(|| format!("failed to read {}", self.table.display()))
     }
+}
 
-    /// Its rows with every column nail writes, for the cell fraction no
-    /// other tool reports.
-    pub fn nail_rows(&self) -> anyhow::Result<Vec<NailRow>> {
-        anyhow::ensure!(
-            self.tool == "nail",
-            "run {:?} is {}'s, and only nail reports cell fractions",
-            self.name,
-            self.tool
-        );
-        Ok(Table::<NailRow>::open(&self.table)
-            .with_context(|| format!("failed to read {}", self.table.display()))?
-            .iter()
-            .cloned()
-            .collect())
-    }
+/// hmmsearch's and phmmer's `--tblout` read at the best single domain: the
+/// rows `HmmerTable` reads, with the best domain's E-value and score.
+struct HmmerBestDomain;
+
+impl HitColumns for HmmerBestDomain {
+    const QUERY: usize = 2;
+    const TARGET: usize = 0;
+    const Q_START: Option<usize> = None;
+    const Q_END: Option<usize> = None;
+    const T_START: Option<usize> = None;
+    const T_END: Option<usize> = None;
+    const SCORE: usize = 8;
+    const E_VALUE: usize = 7;
+    const N_COLUMNS: usize = 18;
 }
 
 /// Every row of a table read as layout `C`.
@@ -660,6 +571,20 @@ impl RecallData {
                 rejected,
             ));
             times.push(run.wall_s);
+
+            // hmmer's table holds a second E-value per pair, its best single
+            // domain's, which is ranked and thresholded as a run of its own:
+            // `hmmer.prf` gets `hmmer-dom.prf` beside it
+            if matches!(run.tool.as_str(), "hmmer" | "phmmer") {
+                let name = match run.name.rsplit_once('.') {
+                    Some((stem, mode)) => format!("{stem}-dom.{mode}"),
+                    None => format!("{}-dom", run.name),
+                };
+                let hits = read_hits::<HmmerBestDomain>(&run.table)
+                    .with_context(|| format!("failed to read {}", run.table.display()))?;
+                tables.push(HitTable2::new(&hits, &name, bm, &run.mode, rejected));
+                times.push(run.wall_s);
+            }
         }
 
         Ok(Self {

@@ -2,7 +2,7 @@
 import argparse
 from pathlib import Path
 
-from plot import axes, read_tbl, Curve, TOOL_COLORS, prefix_label, annotate
+from plot import axes, read_tbl, Curve, TOOL_COLORS, prefix_label, annotate, theta
 
 
 import matplotlib.pyplot as plt
@@ -11,7 +11,7 @@ import matplotlib.pyplot as plt
 X_MIN = 1e-3
 X_MAX = 1.0
 
-Y_MIN = 0.2
+Y_MIN = 0.35
 Y_MAX = 0.8
 
 X_LABEL = 3.0e-2
@@ -63,6 +63,14 @@ PLOTTED = [
 ]
 
 
+def sloped(ax, curve, x):
+    """The point on `curve` at `x`, and the angle of the curve there on the
+    page, measured over a factor of three either side since the steps make
+    the slope at one point meaningless."""
+    x1, x2 = x / 3.0, min(x * 3.0, X_MAX)
+    return (x, curve.approx_y(x)), theta(ax, x1, curve.approx_y(x1), x2, curve.approx_y(x2))
+
+
 def main(args):
     curves = []
 
@@ -103,7 +111,8 @@ def main(args):
             rotation = 0
             if curve.search_type == "prf":
                 if curve.tool == "hmmer":
-                    offset = (0, 20)
+                    pt, rotation = sloped(ax, curve, X_LABEL * 5.0)
+                    offset = (0, 5)
                 elif curve.tool == "nail":
                     offset = (0, 20)
                 elif curve.tool == "mmseqs":
@@ -112,7 +121,8 @@ def main(args):
                     offset = (0, 20)
             elif curve.search_type == "seq":
                 if curve.tool == "hmmer":
-                    offset = (0, 20)
+                    pt, rotation = sloped(ax, curve, X_LABEL * 5.0)
+                    offset = (0, 5)
                 elif curve.tool == "nail":
                     x = X_LABEL * 2.0
                     pt = (x, curve.approx_y(x))

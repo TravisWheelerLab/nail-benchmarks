@@ -11,7 +11,7 @@ import numpy as np
 
 
 X_MIN = 25
-X_MAX = 3
+X_MAX = 10
 
 Y_MIN = 0.0
 Y_MAX = 1.0
@@ -137,9 +137,12 @@ def main(args):
         x = X_LABEL
         if curve.search_type == "prf":
             x = 16
+            if curve.tool == "hmmer":
+                offset = (0, 1)
         elif curve.search_type == "seq":
             if curve.tool == "hmmer":
                 x = 16
+                offset = (0, -20)
             elif curve.tool == "nail":
                 x = 17
                 offset = (0, -20)

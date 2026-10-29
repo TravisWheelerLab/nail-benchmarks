@@ -155,7 +155,7 @@ def plot(args):
 
     ax.set_ylabel(f"Recall at {fpr} FP per search")
 
-    ax.set_xlim(1.0, 2e3)
+    ax.set_xlim(1.0, 1e4)
     ax.set_ylim(0.2, 0.75)
 
     ax.grid(True)
@@ -186,10 +186,9 @@ def plot(args):
             linestyle = '--'
             arrowstyle = '-|>'
         elif pt.prefix == "hmmer.prf":
-            offset = (0, 10)
+            offset = (12, 0)
         elif pt.prefix == "hmmer.seq":
-            offset = (-60, 10)
-            va = "center"
+            offset = (12, 0)
         elif pt.prefix == "diamond-ultra-sensitive.seq":
             offset = (0, 45)
             # va = "center"
