@@ -235,12 +235,12 @@ impl Tally {
     }
 }
 
-/// What every run reported over its own cutoff, split by what hmmer made of
-/// the same pairs: its best domain over `hmmer_dom`, reported with no domain
-/// over it, or not reported at all.
+/// What every run reported over its own cutoff, split by hmmer's verdict on
+/// the same pairs: its best domain clears `hmmer_dom`, only its sequence
+/// score clears `hmmer`, or neither does.
 ///
-/// Nothing here is a fraction of hmmer's hits. hmmer counts a pair when its
-/// sequence score clears `hmmer` or its best domain clears `hmmer_dom`. A
+/// hmmer counts a pair when either clears, so a run's first two counts are
+/// subsets of hmmer's own and divide by them exactly. A
 /// family short of any cutoff is left out of every row, and `#= left_out`
 /// counts it and the pairs each tool reported in it.
 pub fn coverage(path: &Path, out: &Path, threads: usize) -> anyhow::Result<()> {
@@ -256,7 +256,6 @@ pub fn coverage(path: &Path, out: &Path, threads: usize) -> anyhow::Result<()> {
     scores.layout(read::layout(&scores.meta));
 
     let hmmer = scores.meta.hmmer()?;
-    let hmmer_score = read::score(&scores.meta, Tool::Hmmer).context("no hmmer score column")?;
     let complete = crate::scores::complete(&scores.meta.cutoffs, scores.meta.c)?;
 
     let tools = scores.meta.tools();
@@ -281,7 +280,7 @@ pub fn coverage(path: &Path, out: &Path, threads: usize) -> anyhow::Result<()> {
             }
 
             let by_domain = row.domain_passed(hmmer);
-            let class = match (by_domain, row.field(hmmer_score) != b"-") {
+            let class = match (by_domain, row.passed(hmmer)) {
                 (true, _) => 0,
                 (false, true) => 1,
                 (false, false) => 2,
@@ -319,7 +318,7 @@ pub fn coverage(path: &Path, out: &Path, threads: usize) -> anyhow::Result<()> {
     let mut headers = vec!["name".to_string(), "tool".to_string()];
     headers.extend(keys.iter().map(|k| k.to_string()));
     headers.extend(
-        ["wall_s", "hits", "dom_over", "dom_under", "no_hmmer"]
+        ["wall_s", "hits", "dom_over", "seq_only", "not_hmmer"]
             .iter()
             .map(|h| h.to_string()),
     );
@@ -347,7 +346,7 @@ pub fn coverage(path: &Path, out: &Path, threads: usize) -> anyhow::Result<()> {
 
 /// What one part of a coverage pass counted.
 struct Cover {
-    /// Per run: dom_over, dom_under, no_hmmer.
+    /// Per run: dom_over, seq_only, not_hmmer.
     counts: Vec<[usize; 3]>,
     left: Left,
 }

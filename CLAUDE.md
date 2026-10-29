@@ -576,14 +576,16 @@ question about a run rather than about a tool, and it counts a pair as found
 only if nail kept it over the family's cutoff. `summary` still counts what a
 run reported; whether it should follow is an open issue.
 
-recall's `coverage` counts what each run reported over its own cutoff. Each
-count stands alone rather than as a fraction of hmmer's hits. It is split
-three ways: hmmer's best domain clears `hmmer_dom`, hmmer reported the pair
-with no domain over it, or hmmer did not report the pair. hmmer counts a pair
-when its sequence score clears `hmmer` or its best domain clears `hmmer_dom`.
+recall's `coverage` counts what each run reported over its own cutoff.
+hmmer counts a pair when its sequence score clears `hmmer` or its best domain
+clears `hmmer_dom`. Each count is split by hmmer's verdict on the pair:
+`dom_over` where the best domain clears, `seq_only` where only the sequence
+score clears, and `not_hmmer` where neither does. A run's first two counts
+are subsets of hmmer's own, so they divide by hmmer's exactly.
 A family missing a cutoff for any tool is left out of every row, and
 `#= left_out` lines count the families and each tool's pairs in them. Every
-analysis in recall, cloud-search and loss-decomp leaves such families out. In
+analysis in recall and loss-decomp leaves such families out. cloud-search runs
+nail alone, so it leaves out only the families with no nail cutoff. In
 cloud-search and loss-decomp a table with a row per run also gets a
 `left_out` column. recall's tables get only the per-tool lines, because
 `scores.tbl` keeps one score per tool. The writers of `scores.tbl` and
