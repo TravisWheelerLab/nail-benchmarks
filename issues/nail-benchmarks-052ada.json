@@ -13,11 +13,20 @@
   "lease_expires": null,
   "defer_until": null,
   "created_at": "2026-10-29T19:35:15.471383875Z",
-  "updated_at": "2026-10-29T19:35:15.471383875Z",
+  "updated_at": "2026-10-29T22:01:42.227337913Z",
   "closed_at": null,
   "close_reason": null,
   "resolution": null,
-  "notes": [],
+  "notes": [
+    {
+      "id": "42d5fe8f",
+      "at": "2026-10-29T22:01:42.227336751Z",
+      "author": "jackroddy/8a8c213b",
+      "text": "`benchmarks/cells/scripts/plot.py` draws the three forms with matplotlib's `Blues`, `Reds` and `Greens` colormaps. Jack wants them built from Paul Tol's palette instead, the one every other figure uses. Original takes blue `#0077BB` and reversed takes red `#CC3311`. Tol's vibrant set has no green, so shuffled needs another of its colours. Teal `#009988` is the nearest.",
+      "commit": "9feb692",
+      "branch": "claude-refactor"
+    }
+  ],
   "stamps": {
     "created": {
       "commit": "c9c9e4c",
