@@ -1,0 +1,10 @@
+{
+  "slug": "cloud-search-1m-2026-10-28",
+  "text": "cloud-search real, 28 Oct 2026: nail alone on Pfam against 1,000,000 MGnify, 3 reps a cell, node 1, 48 threads, 6 h 18 min. The full (--full-dp) run found 854,031 hits over nail's cutoff in a median 394.6 s. The default -A 10 -B 16 reaches 99.54% of them in 69.3 s, and -A 8 -B 16 reaches 99.47% in 51.2 s. The widest spread across a cell's reps is 8.9%, at A10 B48.",
+  "created_at": "2026-10-29T17:36:46.939548912Z",
+  "updated_at": "2026-10-29T17:36:46.939548912Z",
+  "stamp": {
+    "commit": "c9c9e4c",
+    "branch": "claude-refactor"
+  }
+}
