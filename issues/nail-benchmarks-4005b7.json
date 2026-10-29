@@ -3,7 +3,7 @@
   "title": "Every figure shares one design and one color palette",
   "body": "## What exists today\n\nFour benchmarks draw figures. Each one carries its own matplotlib scripts under `scripts/`, and the pdfs go flat into `figures/`.\n\n| benchmark | scripts | figures |\n|---|---|---|\n| cloud-search | `plot.py` | the `(A, B)` heatmaps |\n| loss-decomp | `plot.py`, `plot_depth.py` | `loss-decomp-hits.pdf`, `loss-decomp-depth-binned.pdf`, `loss-decomp-depth-cumulative.pdf` |\n| pid | `plot.py`, `plot_pid.py`, `plot_roc.py`, `plot_time.py`, `plot_score.py`, `plot_cell_frac.py` | `pid.pdf`, `roc.pdf`, `time.pdf`, `cells.pdf` |\n| thread-scaling | `plot.py` | `thread-scaling.pdf` |\n\n## The change\n\nEvery figure looks like it belongs with the others. The design and the color palette are consistent across all of them.",
   "type": "task",
-  "status": "open",
+  "status": "closed",
   "priority": 1,
   "labels": [],
   "parent": "nail-benchmarks-1c3791",
@@ -13,16 +13,19 @@
   "lease_expires": null,
   "defer_until": null,
   "created_at": "2026-10-27T22:39:22.80117185Z",
-  "updated_at": "2026-10-27T22:39:22.80117185Z",
-  "closed_at": null,
-  "close_reason": null,
-  "resolution": null,
+  "updated_at": "2026-10-29T22:01:42.258040918Z",
+  "closed_at": "2026-10-29T22:01:42.258040918Z",
+  "close_reason": "Every plot script uses a font scale of 1.75 and Paul Tol's palette, with nail magenta `#EE3377`, hmmer orange `#EE7733` and mmseqs cyan `#33BBEE`. loss-decomp's flow was recoloured onto it, with grey for the slice the next column splits and one Tol hue per column; that change is in the working tree after a906644. cells still uses matplotlib's colormaps, noted on nail-benchmarks-052ada.",
+  "resolution": "done",
   "notes": [],
   "stamps": {
     "created": {
       "commit": "2a9c3d5",
       "branch": "claude-refactor"
     },
-    "closed": null
+    "closed": {
+      "commit": "9feb692",
+      "branch": "claude-refactor"
+    }
   }
 }
