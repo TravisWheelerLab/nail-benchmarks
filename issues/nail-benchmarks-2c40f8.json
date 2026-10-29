@@ -13,11 +13,20 @@
   "lease_expires": null,
   "defer_until": null,
   "created_at": "2026-10-27T22:47:43.929135754Z",
-  "updated_at": "2026-10-27T22:47:51.657896287Z",
+  "updated_at": "2026-10-29T17:53:00.047368384Z",
   "closed_at": null,
   "close_reason": null,
   "resolution": null,
-  "notes": [],
+  "notes": [
+    {
+      "id": "13575109",
+      "at": "2026-10-29T17:53:00.047367072Z",
+      "author": "jackroddy/6422e305",
+      "text": "Jack chose v2, the sankey of the five prototypes in tmp-claude/2026-10-29-ld-figure/, with many changes still to come. The changes wait until pid's hmmer scoring (nail-benchmarks-e36d72) is settled.",
+      "commit": "c9c9e4c",
+      "branch": "claude-refactor"
+    }
+  ],
   "stamps": {
     "created": {
       "commit": "2a9c3d5",
