@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""The cloud-search figures, out of the summary.tbl `mgy parse summary` writes.
+"""The cloud-search figures, out of the summary.tbl `cloud-search parse summary` writes.
 
     plot.py summary.tbl --out figures/
 
@@ -7,17 +7,12 @@ One row per run, and the settings a run was swept over are columns. These want
 -A and -B among them, so they draw for cloud-search and skip themselves for the
 pipelines that swept something else.
 
-One figure. `heatmaps` is the surface -- sensitivity and wall time over the
-(A, B) grid -- with the unpruned `--full-dp` run in the far corner. It records
-no -A and no -B, so it has no cell of its own; the corner is where the surface
-is heading as the pruning relaxes, and it is the ceiling every pruned cell is
-read against.
-
-A table holding two -a draws each field at each of them and then the difference,
-six panels in two rows. The difference panel is the one to read: it says where
-on the grid the sensitivity credited to -A and -B was recovered by retrying
-disjoint clouds instead. A table holding one -a draws the two panels alone, so
-a summary written before that axis existed plots as what it is.
+One figure. `cloud-search` is the surface over the (A, B) grid, with the unpruned
+`--full-dp` run in the far corner. A cell's colour is its coverage, its hits
+over nail's cutoff as a percentage of the full run's, and its text is its
+median wall time over the reps. The full run records no -A and no -B, so it
+has no cell of its own; the corner is where the surface is heading as the
+pruning relaxes, and it is the ceiling every pruned cell is read against.
 
 A `tradeoff` figure used to plot the same runs as points in wall time against
 sensitivity. The points overlapped, each carried two parameters, and no reading
@@ -34,24 +29,29 @@ mpl.use("Agg")
 
 import matplotlib.pyplot as plt
 import numpy as np
-from matplotlib.colors import Normalize
+from matplotlib.colors import LinearSegmentedColormap, LogNorm
 
 # a big canvas with the text scaled up to match, so a figure dropped into a
 # document or a slide is legible without anyone zooming
 SCALE = 1.75
 mpl.rcParams.update({"font.size": mpl.rcParams["font.size"] * SCALE})
 
-PANELS = (22, 9)
-SIX = (30, 17)
+# pid's canvas, so the figures sit together
+FIGSIZE = (16, 9)
 
 # small enough to fit inside a heatmap cell, which the base size does not
-CELL_SIZE = 11
+CELL_SIZE = 13
 
-# the palette the pid and mgnify benchmarks use, so figures from all three sit
-# together
-TOL_RED = "#CC3311"
+# pid's palette, where nail is magenta. coverage runs from pale through
+# nail's magenta to a dark purple, several hues so the top few percent still
+# read apart, and the default cell is boxed in the palette's blue
+TOL_MAGENTA = "#EE3377"
+TOL_BLUE = "#0077BB"
+NAIL_MAP = LinearSegmentedColormap.from_list(
+    "nail", ["#FDF0E6", "#F6B48F", TOL_MAGENTA, "#7B1F6A", "#2B0A3D"]
+)
 
-HMMER_COLOR = TOL_RED
+DEFAULT_COLOR = TOL_BLUE
 
 
 def save(fig, out, name):
@@ -61,7 +61,9 @@ def save(fig, out, name):
     is only what keeps this from wanting a display.
     """
     path = out / f"{name}.pdf"
-    fig.savefig(path)
+    # cropped to what is drawn: the grid is square, so a fixed canvas leaves
+    # blank bands either side of it
+    fig.savefig(path, bbox_inches="tight", pad_inches=0.15)
     plt.close(fig)
     return path
 
@@ -74,7 +76,7 @@ def colorbar(fig, mappable, ax, **kw):
     off leaves quads, and giving them a face-coloured edge covers the hairlines
     that otherwise show between them.
     """
-    cb = fig.colorbar(mappable, ax=ax, **kw)
+    cb = fig.colorbar(mappable, ax=ax, **kw) if ax is not None else fig.colorbar(mappable, **kw)
     cb.solids.set_rasterized(False)
     cb.solids.set_edgecolor("face")
     return cb
@@ -85,11 +87,15 @@ class Run:
     """One row: a named run, what it found, and what it cost."""
 
     name: str
-    tool: str
     params: dict
+    reps: int
     wall_s: float
     hits: int
-    sens: float
+    coverage: float
+
+    @property
+    def percent(self):
+        return 100 * self.coverage
 
     def param(self, key):
         """A swept setting as a number, or nan where this run has no such
@@ -107,28 +113,18 @@ class Run:
     def b(self):
         return self.param("B")
 
-    @property
-    def attempts(self):
-        return self.param("attempts")
-
 
 @dataclass
 class Table:
     runs: list
     query_count: int
     target_count: int
-    hmmer_hits: int
-
-    @property
-    def searches(self):
-        """Everything but hmmer, which is the thing they are measured
-        against rather than one of them."""
-        return [r for r in self.runs if r.tool != "hmmer"]
+    full_hits: int
 
     @property
     def cells(self):
         """The runs that sit on the (A, B) grid."""
-        return [r for r in self.searches if np.isfinite(r.a) and np.isfinite(r.b)]
+        return [r for r in self.runs if np.isfinite(r.a) and np.isfinite(r.b)]
 
     @property
     def full(self):
@@ -137,7 +133,7 @@ class Table:
         It is a search like any other and sits in the table like one; what
         keeps it off the grid is that `--full-dp` records no -A and no -B.
         """
-        off = [c for c in self.searches if not (np.isfinite(c.a) and np.isfinite(c.b))]
+        off = [c for c in self.runs if not (np.isfinite(c.a) and np.isfinite(c.b))]
         return off[0] if off else None
 
     @property
@@ -148,36 +144,21 @@ class Table:
     def betas(self):
         return sorted({c.b for c in self.cells})
 
-    @property
-    def attempts(self):
-        """The -a the grid was run at, ascending.
-
-        Empty for a run made before -a was swept, which is what keeps those
-        summaries drawing as the single surface they are.
-        """
-        return sorted({c.attempts for c in self.cells if np.isfinite(c.attempts)})
-
-    def surface(self, field, attempts=None, corner=True):
+    def surface(self, field):
         """The grid as a 2d array, alpha down the rows and beta across.
 
         One row and one column wider than the grid, holding nothing but the
         unpruned run in the far corner. It records no -A and no -B, so it has
         no cell of its own; the corner is where the surface is heading as the
         pruning relaxes, which is the only place it can be read against.
-
-        `corner` is off for a difference of two surfaces: the unpruned run is
-        one run at neither -a, so it cancels to a zero that reads as a measured
-        result rather than as an absence.
         """
         alphas, betas = self.alphas, self.betas
         out = np.full((len(alphas) + 1, len(betas) + 1), np.nan)
 
         for c in self.cells:
-            if attempts is not None and c.attempts != attempts:
-                continue
             out[alphas.index(c.a), betas.index(c.b)] = getattr(c, field)
 
-        if corner and self.full is not None:
+        if self.full is not None:
             out[len(alphas), len(betas)] = getattr(self.full, field)
 
         return out
@@ -187,13 +168,12 @@ class Table:
 # header is a setting, and becomes a param on the run.
 FIXED = (
     "name",
-    "tool",
+    "reps",
     "wall_s",
-    "found",
+    "wall_min",
+    "wall_max",
     "hits",
-    "sens",
-    "hits_sd",
-    "sens_sd",
+    "coverage",
     "left_out",
 )
 
@@ -201,7 +181,7 @@ FIXED = (
 def read(path):
     """summary.tbl: `#` lines are metadata and the header, the rest are rows.
 
-    The columns between `tool` and `wall_s` are whatever the pipeline swept, so
+    The columns between `name` and `wall_s` are whatever the pipeline swept, so
     they are read off the header rather than known in advance.
     """
     meta, names, runs = {}, None, []
@@ -210,7 +190,7 @@ def read(path):
         if line.startswith("#"):
             f = line.lstrip("#").split()
             # `query 200 families 38061 residues ...` and friends
-            if len(f) >= 2 and f[0] in ("query", "target", "pairs", "hmmer", "seed"):
+            if len(f) >= 2 and f[0] in ("query", "target", "pairs", "full", "seed"):
                 meta[f[0]] = f[1:]
             elif names is None and f and f[0] == "name":
                 names = f
@@ -226,11 +206,11 @@ def read(path):
         runs.append(
             Run(
                 name=row["name"],
-                tool=row["tool"],
                 params={k: v for k, v in row.items() if k not in FIXED and v != "-"},
+                reps=int(row["reps"]),
                 wall_s=float(row["wall_s"]),
                 hits=int(row["hits"]),
-                sens=float(row["sens"]),
+                coverage=float(row["coverage"]),
             )
         )
 
@@ -247,33 +227,41 @@ def read(path):
         runs=runs,
         query_count=int(num("query")),
         target_count=int(num("target")),
-        hmmer_hits=int(num("hmmer")),
-    )
-
-
-def subtitle(g):
-    return (
-        f"{g.query_count:,} profiles x {g.target_count:,} sequences"
-        f"   |   hmmer found {g.hmmer_hits:,}"
+        full_hits=int(num("full")),
     )
 
 
 # ------------------------------------------------------------------ figures
 
 
-# a field, the panel title it gets, and how its numbers are written
-PANELS_BY_FIELD = [
-    ("sens", "sensitivity vs hmmer", "viridis", "{:.2f}"),
-    ("wall_s", "wall time (s)", "magma_r", "{:.2f}"),
-]
-
 # where nail ships
 DEFAULT_CELL = (10.0, 16.0)
 
 
-def panel(ax, g, data, cmap, fmt, title, norm):
-    """One surface: the quads, the ticks, a number in every cell."""
+def wall(v):
+    """A wall time short enough for a cell: three significant figures or so."""
+    return (f"{v:.2f}" if v < 10 else f"{v:.1f}" if v < 100 else f"{v:.0f}") + "s"
+
+
+def heatmap(g, out):
+    """Coverage as colour and median wall time as text over the (A, B) grid.
+    Wants a grid."""
+    if not g.cells:
+        return None
+
     alphas, betas = g.alphas, g.betas
+    # coloured by the share of the full run's hits a cell misses, on a log
+    # scale, so 99.5% and 99.9% read apart as clearly as 60% and 90% do. the
+    # full run misses none, so it takes the scale's floor
+    colour = 100.0 - g.surface("percent")
+    floor = 0.05
+    colour = np.where(np.isnan(colour), np.nan, np.maximum(colour, floor))
+    text = g.surface("wall_s")
+
+    fig, ax = plt.subplots(figsize=FIGSIZE)
+    # the grid is square, so it is centred on the canvas with its colorbar
+    # beside it rather than laid out by an engine that pushes it to one side
+    fig.subplots_adjust(left=0.075, right=0.925, bottom=0.14, top=0.92)
 
     # cell edges either side of each integer, so the centres stay on 0..n-1 and
     # the ticks and the default-cell box can be placed by index
@@ -282,37 +270,44 @@ def panel(ax, g, data, cmap, fmt, title, norm):
 
     # pcolormesh rather than imshow: imshow resamples the grid into a bitmap
     # and embeds that, which is what made the pdf pixelate. this draws one quad
-    # per cell and stays vector at any zoom. the edge has to actually be drawn
-    # for edgecolors="face" to do its job -- at zero width the quads keep the
-    # hairline seams between them.
+    # per cell and stays vector at any zoom. a white edge separates the cells
+    # and covers the hairline seams between quads
     im = ax.pcolormesh(
-        edges_x, edges_y, data, cmap=cmap, norm=norm,
-        edgecolors="face", linewidth=0.4, rasterized=False,
+        edges_x, edges_y, colour, cmap=NAIL_MAP.reversed(),
+        norm=LogNorm(floor, max(np.nanmax(colour), 1.0)),
+        edgecolors="white", linewidth=1.5, rasterized=False,
     )
     ax.set_ylim(edges_y[0], edges_y[-1])
+    ax.set_aspect("equal")
+    # a frame and ticks like pid's axes, round the grid and its full row
+    for side in ax.spines.values():
+        side.set_visible(True)
+        side.set_color("black")
 
     # the last tick on each axis is the unpruned run, which is what -A and -B
     # are approaching rather than a value either of them takes
     ax.set_xticks(range(len(betas) + 1), [f"{b:g}" for b in betas] + ["full"])
     ax.set_yticks(range(len(alphas) + 1), [f"{a:g}" for a in alphas] + ["full"])
-    ax.set_xlabel("-B   (global pruning)")
-    ax.set_ylabel("-A   (local pruning)")
-    ax.set_title(title)
+    ax.set_xlabel("Global pruning threshold (-B)")
+    ax.set_ylabel("Local pruning threshold (-A)")
 
-    # a number in every cell: the surface is small enough to read
-    for i in range(data.shape[0]):
-        for j in range(data.shape[1]):
-            v = data[i, j]
-            if np.isnan(v):
+    for i in range(colour.shape[0]):
+        for j in range(colour.shape[1]):
+            if np.isnan(colour[i, j]):
+                # the full row and column hold one run, in the corner; the
+                # rest of them are settings no run took
+                if i == len(alphas) or j == len(betas):
+                    ax.text(j, i, "\u2013", ha="center", va="center",
+                            fontsize=CELL_SIZE * 2, color="0.4")
                 continue
             # against the colour actually painted, so the text stays legible
             # whichever end of the map the cell landed on. the weights are
             # relative luminance: green carries most of the brightness the eye
-            # sees, and an unweighted mean calls mid magma light when it is not
-            r, gr, bl = im.cmap(im.norm(v))[:3]
+            # sees
+            r, gr, bl = im.cmap(im.norm(colour[i, j]))[:3]
             light = 0.299 * r + 0.587 * gr + 0.114 * bl
             ax.text(
-                j, i, fmt.format(v), ha="center", va="center",
+                j, i, wall(text[i, j]), ha="center", va="center",
                 fontsize=CELL_SIZE, color="black" if light > 0.55 else "white",
             )
 
@@ -321,84 +316,27 @@ def panel(ax, g, data, cmap, fmt, title, norm):
         ax.add_patch(
             plt.Rectangle(
                 (betas.index(b) - 0.5, alphas.index(a) - 0.5), 1, 1,
-                fill=False, edgecolor=HMMER_COLOR, linewidth=3.5,
+                fill=False, edgecolor=DEFAULT_COLOR, linewidth=3.5,
             )
         )
-
-    return im
-
-
-def heatmaps(g, out):
-    """The surfaces, annotated. Wants an (A, B) grid.
-
-    Two panels for one -a, and six for two: each field at each -a, then the
-    difference between them. The difference is the panel the second arm was run
-    for -- it says where on the grid nail's disjoint-cloud recovery is doing
-    the work, which is sensitivity that -A and -B are credited with and did not
-    earn.
-    """
-    if not g.cells:
-        return None
-
-    arms = g.attempts
-    if len(arms) < 2:
-        return one_arm(g, out)
-
-    lo, hi = arms[0], arms[-1]
-    if len(arms) > 2:
-        raise SystemExit(f"{len(arms)} -a values in the table; the figure draws two")
-
-    fig, axes = plt.subplots(2, 3, figsize=SIX, constrained_layout=True)
-
-    for row, (field, title, cmap, fmt) in zip(axes, PANELS_BY_FIELD):
-        at_hi = g.surface(field, hi)
-        at_lo = g.surface(field, lo)
-        # the arms share a scale, so the two panels can be read against each
-        # other rather than each against itself
-        both = Normalize(np.nanmin([at_lo, at_hi]), np.nanmax([at_lo, at_hi]))
-
-        panel(row[0], g, at_hi, cmap, fmt, f"{title}   -a {hi:g}", both)
-        im = panel(row[1], g, at_lo, cmap, fmt, f"{title}   -a {lo:g}", both)
-        # one bar for the pair, since the point of the shared scale is that
-        # there is only one scale to read
-        colorbar(fig, im, [row[0], row[1]], shrink=0.9)
-
-        # the corner is dropped rather than differenced: the unpruned run is
-        # one run at neither -a, so subtracting it from itself would draw a
-        # zero that reads as a measured result
-        diff = g.surface(field, hi, corner=False) - g.surface(field, lo, corner=False)
-        span = np.nanmax(np.abs(diff)) or 1.0
-        im = panel(
-            row[2], g, diff, "RdBu_r", fmt,
-            f"{title}   -a {hi:g} minus -a {lo:g}",
-            Normalize(-span, span),
+        ax.legend(
+            [plt.Rectangle((0, 0), 1, 1, fill=False, edgecolor=DEFAULT_COLOR, linewidth=3)],
+            [f"nail default (-A {a:g} -B {b:g})"],
+            loc="upper center", bbox_to_anchor=(0.5, -0.1), frameon=False,
+            handlelength=1.2, handleheight=1.2,
         )
-        colorbar(fig, im, row[2], shrink=0.9)
 
-    fig.suptitle(
-        f"cloud search pruning: what -A and -B cost, and what -a recovers\n"
-        f"{subtitle(g)}   |   red box is nail's default (-A 10 -B 16)"
-    )
-    return save(fig, out, "heatmaps")
+    cb = colorbar(fig, im, None, cax=ax.inset_axes([1.06, 0.0, 0.035, 0.88]))
+    cb.set_label("Coverage (% of hits recovered with --full-dp)")
+    # ticks placed by what a cell misses and labelled by what it covers
+    misses = [m for m in (0.05, 0.1, 0.2, 0.5, 1, 2, 5, 10, 20, 50) if m <= np.nanmax(colour)]
+    cb.set_ticks(misses, labels=[f"{100 - m:g}%" for m in misses])
+    cb.ax.yaxis.set_minor_locator(mpl.ticker.NullLocator())
+    cb.ax.invert_yaxis()
+    cb.outline.set_visible(False)
 
-
-def one_arm(g, out):
-    """Both fields side by side, for a table with a single -a in it."""
-    fig, axes = plt.subplots(1, 2, figsize=PANELS, constrained_layout=True)
-
-    for ax, (field, title, cmap, fmt) in zip(axes, PANELS_BY_FIELD):
-        data = g.surface(field)
-        im = panel(
-            ax, g, data, cmap, fmt, title,
-            Normalize(np.nanmin(data), np.nanmax(data)),
-        )
-        colorbar(fig, im, ax, shrink=0.9)
-
-    fig.suptitle(
-        f"cloud search pruning: what -A and -B cost\n"
-        f"{subtitle(g)}   |   red box is nail's default (-A 10 -B 16)"
-    )
-    return save(fig, out, "heatmaps")
+    ax.set_title("Cloud Search: tradeoff between sensitivity and runtime", pad=14)
+    return save(fig, out, "cloud-search")
 
 
 def main():
@@ -413,7 +351,7 @@ def main():
     # a table with no grid in it draws nothing and says so, rather than failing
     # the run: what a pipeline can be plotted as is a property of what it swept
     g = read(args.summary)
-    drawn = [path for path in (heatmaps(g, out),) if path]
+    drawn = [path for path in (heatmap(g, out),) if path]
 
     for path in drawn:
         print(f"wrote {path}")

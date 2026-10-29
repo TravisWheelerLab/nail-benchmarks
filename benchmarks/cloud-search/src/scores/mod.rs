@@ -1,66 +1,14 @@
-//! One row per query/target pair, and what the runs made of it.
+//! One row per query/target pair, and what nail's runs made of it.
 //!
-//! Two tables are written in this shape and share everything but their
-//! columns. [`write`] holds recall's, a score per tool; [`runs`] holds the
-//! sweeps', a score per run. What is in this module is what neither owns: the
-//! tools, the runs a ledger declares, the query numbering, the cutoffs, and
-//! the preamble both write. [`shard`] reads a shard's results into pairs and
-//! [`collect`] turns shards into a file; [`frame`] reads one back.
+//! [`runs`] holds the table, a score per run. What is in this module is what
+//! the writer and the reader share: the runs a ledger declares, the query
+//! numbering, the cutoffs, and the preamble. [`shard`] reads a shard's results
+//! into pairs and [`collect`] turns shards into a file; [`frame`] reads one
+//! back.
 //!
-//! ```text
-//! #= format scores 2
-//! #= query <count> <residues> <bytes>
-//! #= target <shard> <count> <residues> <bytes>
-//! #= seed <shard> <wall_s>
-//! #= cutoffs <path> c=<n>
-//! #= run <name> <tool> <wall_s> [k=v ...]
-//! #= pass <run name> ...
-//! # query target           pass   nail   mmseqs hmmer  inc dom
-//! # ----- ---------------- ------ ------ ------ ------ --- ---
-//! #= shard 1
-//! 2-Hacid_dh_C MGYP000522683479 NNNMMH 98.8   94.0   98.7   1   98.1
-//! 2-Hacid_dh_C MGYP000715666710 nnnmmh -      -      13.7   0   9.3,2.8
-//! 2-oxoacid_dh MGYP000987338150 NNNMMH 145.6  140.0  145.5  1   145.2
-//! #= shard 2
-//! ...
-//! #= end <rows>
-//! ```
-//!
-//! One `#= target` line per shard and one `#= run` line per run, both in
-//! ledger order; `#= seed` says what seeding cost, and is absent for a
-//! pipeline that never seeds; `#= cutoffs` records the file and the column the
-//! pass letters were judged by; `#= pass` names the run behind each character
-//! of the `pass` column. A reader refuses a file that does not open the format
-//! line its table expects.
-//!
-//! Rows sit in a block per shard, sorted by (query, target) within the block.
-//! A sequence lives in exactly one shard, so the blocks partition the pairs
-//! and nothing has to sort the whole file at once.
-//!
-//! `pass` holds one character per run: `n`, `m` or `h` for the tool, uppercase
-//! where that run reported the pair at or above its family's cutoff and
-//! lowercase otherwise, so a pair no run passed reads `nnnmmh`. hmmer is held
-//! to nail's cutoff, as it is in the calibration.
-//!
-//! Which axis the score columns run along is the one thing the two tables
-//! disagree about, and [`write`] and [`runs`] each say why. `-` means no score:
-//! absent is not one, and a zero or a NaN would compare against a threshold
-//! and look like one.
-//!
-//! `inc` is hmmer's tblout inclusion count and `dom` its per-domain scores in
-//! domtbl order, so the k-th score is the k-th row of
-//! `results/<run>.<shard>.domtbl` and the coordinates stay there.
-//!
-//! A pair earns a row by clearing some run's cutoff, or by hmmer having
-//! reported it at all. hmmer's whole reported set is kept because it is what
-//! everything else is measured against: a pair it found weakly is still a
-//! pair they can be asked about. A family short of any cutoff keeps every
-//! pair a run reported, so an analysis that leaves it out can count what it
-//! left.
-//!
-//! Every column is padded to its width except `query`, which is unpadded
-//! because a query's rows are adjacent and so line up without it, and `dom`,
-//! which is as wide as the pair has domains.
+//! A pair earns a row by clearing some run's cutoff. A family short of any
+//! cutoff keeps every pair a run reported, so an analysis that leaves it out
+//! can count what it left.
 
 pub mod analyze;
 pub mod collect;
@@ -71,7 +19,6 @@ mod scan;
 pub mod shard;
 
 use std::collections::{BTreeMap, HashMap, HashSet};
-use std::fmt;
 use std::path::{Path, PathBuf};
 
 use anyhow::{Context, bail, ensure};
@@ -82,55 +29,6 @@ use libsail::seq::p7hmm::leng_of;
 
 use util::ledger::{self, Ledger};
 use util::set::Set;
-
-/// What recall's table opens with. The sweeps' is [`runs::FORMAT`].
-pub const FORMAT: &str = "scores 2";
-
-/// A tenth of the best domain, which is mgnify's threshold for a domain
-/// carrying enough of a hit to count as its own.
-pub const SIGNIFICANT: f32 = 0.1;
-
-// ---
-
-/// Which program produced a results table, which settles both how to read it
-/// and which cutoff its scores are held against.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
-pub enum Tool {
-    Nail,
-    Mmseqs,
-    Hmmer,
-}
-
-impl Tool {
-    pub fn parse(name: &str) -> anyhow::Result<Tool> {
-        match name {
-            "nail" => Ok(Tool::Nail),
-            "mmseqs" => Ok(Tool::Mmseqs),
-            "hmmer" => Ok(Tool::Hmmer),
-            other => bail!("unknown tool {other:?} in ledger.tbl"),
-        }
-    }
-
-    /// This tool's character in a `pass` string, lowercase.
-    pub fn letter(self) -> u8 {
-        match self {
-            Tool::Nail => b'n',
-            Tool::Mmseqs => b'm',
-            Tool::Hmmer => b'h',
-        }
-    }
-}
-
-impl fmt::Display for Tool {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        let name = match self {
-            Tool::Nail => "nail",
-            Tool::Mmseqs => "mmseqs",
-            Tool::Hmmer => "hmmer",
-        };
-        write!(f, "{name}")
-    }
-}
 
 /// How big one side of a search is.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -168,15 +66,16 @@ pub fn target_sizes(set: &Set, shards: &[String]) -> anyhow::Result<Vec<(String,
         .collect()
 }
 
-/// One column: a named run of one tool at one parameterization.
+/// One column: a named cell of nail at one parameterization, over every rep
+/// it ran.
 #[derive(Clone, Debug)]
 pub struct Run {
+    /// The cell's name, without the rep.
     pub name: String,
-    pub tool: Tool,
-    /// What the column cost, summed over every shard it covered.
-    pub wall_s: f64,
-    /// Whatever else the commands recorded -- the settings that tell this run
-    /// apart from the others of the same tool.
+    /// What each rep cost, summed over every shard it covered, in rep order.
+    pub walls: Vec<f64>,
+    /// Whatever else the commands recorded: the settings that tell this run
+    /// apart from the others.
     pub params: BTreeMap<String, String>,
     /// Which seed list this run replayed, `None` where it did not replay one.
     ///
@@ -191,46 +90,177 @@ pub struct Run {
 /// pipeline, listed once in its `#= target` lines rather than once per column.
 pub struct Column {
     pub run: Run,
+    /// The name rep 1's results tables are written under.
+    pub file: String,
     /// In manifest order. Empty string for a pipeline that never named one.
     pub shards: Vec<String>,
 }
 
-/// The runs a pipeline declared, in the order it declared them.
+/// One rep of a cell, as the ledger holds it.
+struct Rep {
+    rep: usize,
+    name: String,
+    wall_s: f64,
+    shards: Vec<String>,
+}
+
+/// The cells a pipeline declared, in the order it declared them, each with
+/// every rep it ran.
 ///
-/// The grouping and the wall clock are [`util::ledger`]'s work; what is left
-/// here is which tool a column's name belongs to, since that is what says how
-/// to read its table.
-pub fn runs(ran: &Ledger) -> anyhow::Result<Vec<Column>> {
-    let columns = ran.columns()?;
+/// # Errors
+///
+/// Fails naming the cell where a rep reported a different number of hits on
+/// some shard than rep 1 did: nail is deterministic, so the reps differ only
+/// in what they cost.
+pub fn runs(ran: &Ledger, results: &Path) -> anyhow::Result<Vec<Column>> {
+    let mut cells: Vec<(Run, Vec<Rep>)> = Vec::new();
 
-    columns
-        .into_iter()
-        .map(|column| {
-            // a run whose rows are all `*` says what it cost without saying
-            // which targets it searched, and a table read by shard has nothing
-            // to open. every row of its column would be a dash
-            ensure!(
-                !column.shards.is_empty(),
-                "run {:?} covers no shard of its own in ledger.tbl: every row of it is `{}`",
-                column.name,
-                ledger::EVERY_SHARD,
-            );
+    for column in ran.columns()? {
+        // a run whose rows are all `*` says what it cost without saying
+        // which targets it searched, and a table read by shard has nothing
+        // to open. every row of its column would be a dash
+        ensure!(
+            !column.shards.is_empty(),
+            "run {:?} covers no shard of its own in ledger.tbl: every row of it is `{}`",
+            column.name,
+            ledger::EVERY_SHARD,
+        );
 
-            let mut params = column.params;
-            let seeds = params.remove(util::manifest::SEEDS);
+        // every table is read as nail's, so another tool's would read
+        // as hits in the wrong columns rather than fail
+        ensure!(
+            column.tool == "nail",
+            "run {:?} is {}'s, and this reads nail's tables only",
+            column.name,
+            column.tool,
+        );
 
-            Ok(Column {
-                run: Run {
-                    name: column.name,
-                    tool: Tool::parse(&column.tool)?,
-                    wall_s: column.wall_s,
+        let mut params = column.params;
+        let seeds = params.remove(util::manifest::SEEDS);
+
+        // a ledger written before reps has no `rep` setting, and is one rep
+        let (cell, rep) = match params.remove(crate::run::REP) {
+            Some(rep) => {
+                let rep: usize = rep
+                    .parse()
+                    .with_context(|| format!("run {:?} has rep {rep:?}", column.name))?;
+                let cell = column
+                    .name
+                    .strip_suffix(&format!("-r{rep}"))
+                    .with_context(|| {
+                        format!(
+                            "run {:?} is rep {rep} and its name does not end -r{rep}",
+                            column.name
+                        )
+                    })?;
+                (cell.to_string(), rep)
+            }
+            None => (column.name.clone(), 1),
+        };
+
+        let rep = Rep {
+            rep,
+            name: column.name,
+            wall_s: column.wall_s,
+            shards: column.shards,
+        };
+
+        match cells.iter_mut().find(|(run, _)| run.name == cell) {
+            Some((run, reps)) => {
+                ensure!(
+                    run.params == params,
+                    "the reps of {cell} were run with different settings"
+                );
+                reps.push(rep);
+            }
+            None => cells.push((
+                Run {
+                    name: cell,
+                    walls: Vec::new(),
                     params,
                     seeds,
                 },
-                shards: column.shards,
+                vec![rep],
+            )),
+        }
+    }
+
+    cells
+        .into_iter()
+        .map(|(mut run, mut reps)| {
+            reps.sort_by_key(|rep| rep.rep);
+
+            ensure!(
+                reps[0].rep == 1,
+                "{} has no rep 1 in the ledger to read its hits from",
+                run.name
+            );
+            for pair in reps.windows(2) {
+                ensure!(
+                    pair[0].rep != pair[1].rep,
+                    "{} has rep {} twice",
+                    run.name,
+                    pair[0].rep
+                );
+            }
+
+            let first = &reps[0];
+            for rep in &reps[1..] {
+                same_hits(results, &run.name, first, rep)?;
+            }
+
+            run.walls = reps.iter().map(|rep| rep.wall_s).collect();
+            let first = reps.swap_remove(0);
+
+            Ok(Column {
+                run,
+                file: first.name,
+                shards: first.shards,
             })
         })
         .collect()
+}
+
+/// Whether `rep` reported as many hits as `first` on every shard.
+fn same_hits(results: &Path, cell: &str, first: &Rep, rep: &Rep) -> anyhow::Result<()> {
+    let mut want = first.shards.clone();
+    let mut got = rep.shards.clone();
+    want.sort();
+    got.sort();
+    ensure!(
+        want == got,
+        "{cell}: rep {} searched other shards than rep 1",
+        rep.rep
+    );
+
+    for shard in &first.shards {
+        let want = hits(&util::manifest::table_path(results, &first.name, shard))?;
+        let got = hits(&util::manifest::table_path(results, &rep.name, shard))?;
+
+        ensure!(
+            want == got,
+            "{cell}: rep {} reported {got} hits on shard {shard:?} and rep 1 reported {want}",
+            rep.rep
+        );
+    }
+
+    Ok(())
+}
+
+/// The rows of a results table: every line but blanks and `#` lines.
+fn hits(path: &Path) -> anyhow::Result<usize> {
+    use std::io::BufRead;
+
+    let file =
+        std::fs::File::open(path).with_context(|| format!("failed to open {}", path.display()))?;
+
+    let mut n = 0;
+    for line in std::io::BufReader::new(file).split(b'\n') {
+        let line = line.with_context(|| format!("failed to read {}", path.display()))?;
+        n += usize::from(!line.is_empty() && line[0] != b'#');
+    }
+
+    Ok(n)
 }
 
 // -------------------------------------------------------------------- query
@@ -329,64 +359,38 @@ impl Queries {
 
 // ------------------------------------------------------------------ cutoffs
 
-/// The score each family's hits are held to, by query id.
-///
-/// hmmer takes nail's: nail approximates hmmer's model, and the calibration
-/// learns no threshold of hmmer's own that anything reads.
+/// nail's score threshold on each family, by query id.
 pub struct Cutoffs {
     nail: Vec<Option<f32>>,
-    mmseqs: Vec<Option<f32>>,
-    /// Whether the family has a threshold in all four columns [`complete`]
-    /// reads.
-    complete: Vec<bool>,
 }
 
 impl Cutoffs {
-    /// The threshold a run of `tool` is held to on one family.
-    pub fn get(&self, tool: Tool, query: u32) -> Option<f32> {
-        let column = match tool {
-            Tool::Nail | Tool::Hmmer => &self.nail,
-            Tool::Mmseqs => &self.mmseqs,
-        };
-
-        column.get(query as usize).copied().flatten()
+    /// The threshold a run is held to on one family.
+    pub fn get(&self, query: u32) -> Option<f32> {
+        self.nail.get(query as usize).copied().flatten()
     }
 
-    /// Whether nail, mmseqs, hmmer and hmmer's best domain all have a
-    /// threshold on one family.
+    /// Whether nail has a threshold on one family.
     pub fn complete(&self, query: u32) -> bool {
-        self.complete.get(query as usize).copied().unwrap_or(false)
+        self.get(query).is_some()
     }
 
-    /// One score per family per tool, out of the decoys the calibration scored
-    /// it against.
-    ///
-    /// A zero means the family had fewer decoys than the file has slots, so
-    /// that tool learned nothing about it and gets no cutoff. The two tools are
-    /// kept apart rather than dropped together: a family nail has a threshold
-    /// for is still measurable against nail, whatever mmseqs made of it.
-    ///
-    /// `cutoffs.tbl` names its columns `<tool>_1..<tool>_5` and `<tool>_n`, so
-    /// the column to read is found by name rather than by counting -- which is
-    /// what lets the calibration add a tool without moving anything here.
+    /// One score per family, out of the decoys the calibration scored it
+    /// against.
     pub fn read(path: &Path, c: usize, queries: &Queries) -> anyhow::Result<Cutoffs> {
         let mut out = Cutoffs {
             nail: vec![None; queries.len()],
-            mmseqs: vec![None; queries.len()],
-            complete: vec![false; queries.len()],
         };
 
-        parse(path, c, |family, scores| {
+        parse(path, c, |family, nail| {
             // a family the calibration knows and this query set does not is
             // not an error: the calibration covers every family Pfam has
             if let Some(id) = queries.id(family) {
-                out.nail[id as usize] = scores[0];
-                out.mmseqs[id as usize] = scores[1];
-                out.complete[id as usize] = scores.iter().all(Option::is_some);
+                out.nail[id as usize] = nail;
             }
         })?;
 
-        if out.nail.iter().all(Option::is_none) && out.mmseqs.iter().all(Option::is_none) {
+        if out.nail.iter().all(Option::is_none) {
             bail!(
                 "no usable cutoffs at index {c} in {} for any of the {} families searched",
                 path.display(),
@@ -402,25 +406,23 @@ impl Cutoffs {
 ///
 /// A reader has the names the table was written with and not the query set
 /// the search numbered them by, so it cannot index [`Cutoffs`].
-pub struct Named(HashMap<String, (Option<f32>, Option<f32>)>);
+pub struct Named(HashMap<String, Option<f32>>);
 
 impl Named {
-    /// Both tools' thresholds on one family, for a reader that asks once per
-    /// family and then answers per run.
-    pub fn pair(&self, family: &str) -> (Option<f32>, Option<f32>) {
-        self.0.get(family).copied().unwrap_or((None, None))
+    /// nail's threshold on one family.
+    pub fn get(&self, family: &str) -> Option<f32> {
+        self.0.get(family).copied().flatten()
     }
 
     pub fn read(path: &Path, c: usize) -> anyhow::Result<Named> {
         let mut out = HashMap::new();
 
-        parse(path, c, |family, scores| {
-            out.insert(family.to_string(), (scores[0], scores[1]));
+        parse(path, c, |family, nail| {
+            out.insert(family.to_string(), nail);
         })?;
 
         ensure!(
-            out.values()
-                .any(|(nail, mmseqs)| nail.is_some() || mmseqs.is_some()),
+            out.values().any(Option::is_some),
             "no usable cutoffs at index {c} in {}",
             path.display()
         );
@@ -429,13 +431,12 @@ impl Named {
     }
 }
 
-/// The families `cutoffs.tbl` gives a threshold for nail, mmseqs, hmmer and
-/// hmmer's best domain at index `c`. Every other family is left out of the
-/// analyses.
+/// The families `cutoffs.tbl` gives nail a threshold for at index `c`. Every
+/// other family is left out of the analyses.
 pub fn complete(path: &Path, c: usize) -> anyhow::Result<HashSet<String>> {
     let mut out = HashSet::new();
-    parse(path, c, |family, scores| {
-        if scores.iter().all(Option::is_some) {
+    parse(path, c, |family, nail| {
+        if nail.is_some() {
             out.insert(family.to_string());
         }
     })?;
@@ -443,44 +444,32 @@ pub fn complete(path: &Path, c: usize) -> anyhow::Result<HashSet<String>> {
     Ok(out)
 }
 
-/// Read `cutoffs.tbl`, handing each family its thresholds at index `c`: nail,
-/// mmseqs, hmmer's sequence score and hmmer's best domain, in that order.
+/// Read `cutoffs.tbl`, handing each family nail's threshold at index `c`.
 ///
 /// `cutoffs.tbl` names its columns `<tool>_1..<tool>_5` and `<tool>_n`, so the
 /// column to read is found by name rather than by counting -- which is what
 /// lets the calibration add a tool without moving anything here.
-fn parse(path: &Path, c: usize, mut row: impl FnMut(&str, [Option<f32>; 4])) -> anyhow::Result<()> {
+fn parse(path: &Path, c: usize, mut row: impl FnMut(&str, Option<f32>)) -> anyhow::Result<()> {
     let table =
         toil::Table::read(path).with_context(|| format!("failed to read {}", path.display()))?;
 
-    let column = |tool: &str| -> anyhow::Result<usize> {
-        let name = format!("{tool}_{}", c + 1);
-        table
-            .index(&name)
-            .with_context(|| format!("{} has no {name} column", path.display()))
-    };
-
-    let at = [
-        column("nail")?,
-        column("mmseqs")?,
-        column("hmmer")?,
-        column("hmmer_dom")?,
-    ];
+    let name = format!("nail_{}", c + 1);
+    let at = table
+        .index(&name)
+        .with_context(|| format!("{} has no {name} column", path.display()))?;
 
     for cells in table.rows() {
         let Some(family) = cells.get(0) else {
             continue;
         };
 
-        // a zero is a family that tool learned nothing about
-        let score = |at: usize| {
-            cells
-                .get(at)
-                .and_then(|x| x.parse::<f32>().ok())
-                .filter(|s| *s > 0.0)
-        };
+        // a zero is a family nail learned nothing about
+        let nail = cells
+            .get(at)
+            .and_then(|x| x.parse::<f32>().ok())
+            .filter(|s| *s > 0.0);
 
-        row(family, at.map(score));
+        row(family, nail);
     }
 
     Ok(())
@@ -488,7 +477,7 @@ fn parse(path: &Path, c: usize, mut row: impl FnMut(&str, [Option<f32>; 4])) -> 
 
 // --------------------------------------------------------------------- meta
 
-/// What a `scores.tbl` says about itself, above the header.
+/// What a `runs.tbl` says about itself, above the header.
 pub struct Meta {
     pub query: Size,
     /// One per shard the runs covered, in ledger order.
@@ -507,15 +496,8 @@ pub struct Meta {
 }
 
 impl Meta {
-    /// `format` is the table's own `#= format` line. Everything under it is
-    /// the same whatever the columns turn out to be, which is why the two
-    /// tables share a preamble and not a schema.
-    pub fn write<W: std::io::Write>(
-        &self,
-        format: &str,
-        out: &mut toil::Stream<W>,
-    ) -> std::io::Result<()> {
-        out.meta("format", [format])?;
+    pub fn write<W: std::io::Write>(&self, out: &mut toil::Stream<W>) -> std::io::Result<()> {
+        out.meta("format", [runs::FORMAT])?;
 
         let size = |size: &Size| {
             [
@@ -547,48 +529,20 @@ impl Meta {
         for run in &self.runs {
             // written with the settings and read back out of them, so the
             // line stays one shape and a reader needs no new field
-            let words = [
-                run.name.clone(),
-                run.tool.to_string(),
-                format!("{:.4}", run.wall_s),
-            ]
-            .into_iter()
-            .chain(
-                run.seeds
-                    .iter()
-                    .map(|name| format!("{}={name}", util::manifest::SEEDS)),
-            )
-            .chain(run.params.iter().map(|(k, v)| format!("{k}={v}")));
+            let walls: Vec<String> = run.walls.iter().map(|w| format!("{w:.4}")).collect();
+            let words = [run.name.clone(), walls.join(",")]
+                .into_iter()
+                .chain(
+                    run.seeds
+                        .iter()
+                        .map(|name| format!("{}={name}", util::manifest::SEEDS)),
+                )
+                .chain(run.params.iter().map(|(k, v)| format!("{k}={v}")));
 
             out.meta("run", words)?;
         }
 
-        // the legend belongs to the pass string, so a table without one gets
-        // no line: `#= run` already gives the order, and a legend beside no
-        // column would read as saying the column is there
-        if format == FORMAT {
-            out.meta("pass", self.runs.iter().map(|run| run.name.as_str()))?;
-        }
-
         Ok(())
-    }
-
-    /// Which column is hmmer's, which is what everything else is measured
-    /// against.
-    ///
-    /// A pipeline runs one, so more than one is a table the analyses have no
-    /// answer for rather than a choice to make quietly.
-    pub fn hmmer(&self) -> anyhow::Result<usize> {
-        let mut it = self
-            .runs
-            .iter()
-            .enumerate()
-            .filter(|(_, run)| run.tool == Tool::Hmmer);
-
-        let (i, _) = it.next().context("no hmmer run to measure against")?;
-        ensure!(it.next().is_none(), "more than one hmmer run");
-
-        Ok(i)
     }
 }
 
@@ -602,7 +556,6 @@ pub struct Preamble {
     c: Option<usize>,
     runs: Vec<Run>,
     tools: Vec<util::tools::Identity>,
-    pass: Vec<String>,
 }
 
 impl Preamble {
@@ -637,7 +590,6 @@ impl Preamble {
                 });
             }
             "run" => self.runs.push(run(row)?),
-            "pass" => self.pass = words(row).map(str::to_string).collect(),
             other => bail!("unknown `#= {other}` line"),
         }
 
@@ -658,18 +610,6 @@ impl Preamble {
 
         ensure!(!meta.runs.is_empty(), "no `#= run` lines");
         ensure!(!meta.targets.is_empty(), "no `#= target` lines");
-
-        // the pass string is read by position, so a legend that disagrees with
-        // the runs is a file that cannot be read rather than one to guess at.
-        // a table with no pass string has no legend, and the `#= run` lines
-        // are the order there
-        let names: Vec<&str> = meta.runs.iter().map(|run| run.name.as_str()).collect();
-        ensure!(
-            self.pass.is_empty() || self.pass == names,
-            "`#= pass` names {:?}, the runs are {:?}",
-            self.pass,
-            names
-        );
 
         Ok(meta)
     }
@@ -705,15 +645,15 @@ fn size(row: &toil::MetaRow, from: usize) -> anyhow::Result<Size> {
     })
 }
 
-/// One `#= run` line: a name, a tool, a wall time, then whatever settings told
-/// this run apart from the others.
+/// One `#= run` line: a name, a wall time per rep joined by commas, then
+/// whatever settings told this run apart from the others.
 fn run(row: &toil::MetaRow) -> anyhow::Result<Run> {
-    let (Some(name), Some(tool), Some(wall)) = (row.get(0), row.get(1), row.get(2)) else {
-        bail!("a `#= run` line wants a name, a tool and a wall time");
+    let (Some(name), Some(wall)) = (row.get(0), row.get(1)) else {
+        bail!("a `#= run` line wants a name and a wall time");
     };
 
     let mut params: BTreeMap<String, String> = words(row)
-        .skip(3)
+        .skip(2)
         .filter_map(|p| p.split_once('='))
         .map(|(k, v)| (k.to_string(), v.to_string()))
         .collect();
@@ -722,9 +662,77 @@ fn run(row: &toil::MetaRow) -> anyhow::Result<Run> {
 
     Ok(Run {
         name: name.to_string(),
-        tool: Tool::parse(tool)?,
-        wall_s: wall.parse()?,
+        walls: wall
+            .split(',')
+            .map(str::parse)
+            .collect::<Result<_, _>>()
+            .with_context(|| format!("run {name:?} has wall times {wall:?}"))?,
         params,
         seeds,
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// A ledger of one cell run twice on shard `s`, and the results directory
+    /// holding its tables, with rep 2's carrying `second` hits to rep 1's two.
+    fn twice(name: &str, second: usize) -> (Ledger, PathBuf) {
+        let results =
+            std::env::temp_dir().join(format!("cloud-search-reps-{}-{name}", std::process::id()));
+        std::fs::create_dir_all(&results).unwrap();
+
+        let table = |hits: usize| {
+            let mut text = String::from("# query target score\n");
+            for i in 0..hits {
+                text.push_str(&format!("alpha MGYP{i:012} 30.0\n"));
+            }
+            text
+        };
+        let r1 = util::manifest::table_path(&results, "A2.0-B4.0-r1", "s");
+        let r2 = util::manifest::table_path(&results, "A2.0-B4.0-r2", "s");
+        std::fs::write(r1, table(2)).unwrap();
+        std::fs::write(r2, table(second)).unwrap();
+
+        let row = |rep: usize, wall: f64| ledger::Row {
+            name: format!("A2.0-B4.0-r{rep}"),
+            tool: "nail".to_string(),
+            shard: "s".to_string(),
+            stage: String::new(),
+            params: BTreeMap::from([
+                ("A".to_string(), "2.0".to_string()),
+                ("B".to_string(), "4.0".to_string()),
+                (crate::run::REP.to_string(), rep.to_string()),
+            ]),
+            wall_s: Some(wall),
+            cpu_s: None,
+            max_rss_kb: None,
+        };
+
+        (Ledger::from_rows(vec![row(2, 5.0), row(1, 3.0)]), results)
+    }
+
+    #[test]
+    fn reps_fold_into_one_column_read_from_rep_1() {
+        let (ran, results) = twice("same", 2);
+        let columns = runs(&ran, &results).unwrap();
+
+        assert_eq!(columns.len(), 1);
+        assert_eq!(columns[0].run.name, "A2.0-B4.0");
+        assert_eq!(columns[0].file, "A2.0-B4.0-r1");
+        assert_eq!(columns[0].run.walls, [3.0, 5.0]);
+        assert!(!columns[0].run.params.contains_key(crate::run::REP));
+    }
+
+    #[test]
+    fn a_rep_with_other_hits_than_rep_1_fails_naming_the_cell() {
+        let (ran, results) = twice("differ", 3);
+        let Err(err) = runs(&ran, &results) else {
+            panic!("rep 2 found a hit rep 1 did not, and nothing failed");
+        };
+        let err = err.to_string();
+
+        assert!(err.contains("A2.0-B4.0: rep 2 reported 3 hits"), "{err}");
+    }
 }

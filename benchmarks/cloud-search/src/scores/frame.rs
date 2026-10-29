@@ -1,20 +1,15 @@
-//! The shape every table in this family has, without the columns that tell
-//! them apart.
+//! The envelope of a runs table, without its score columns.
 //!
 //! A file is a format line, a preamble, one block per shard, rows sorted by
-//! (query, target) within a block, and a counted trailer. That much is the
-//! same whether a row carries a score per tool or a score per run, so it is
-//! read here once rather than in each table's reader.
+//! (query, target) within a block, and a counted trailer.
 //!
 //! The file is bigger than the machine, so an analysis is a pass over it
 //! rather than a structure built from it. toil's `Reader` cuts each line into
 //! cells, and [`Frame::each`] hands a caller each row still borrowed from the
-//! reader's buffer. What a cell means is worked out when it is asked for: a
-//! summary reads the pass string and never parses a score at all.
+//! reader's buffer. What a cell means is worked out when it is asked for.
 //!
 //! What is rejected here is what would make an answer wrong rather than
-//! merely odd: a legend that disagrees with the runs, a row of the wrong
-//! width, a block out of order, a shard twice, a count that does not match
+//! merely odd: a row of the wrong width, a block out of order, a shard twice, a count that does not match
 //! the trailer. Which format line a file must open with is left to the
 //! caller.
 
@@ -25,7 +20,7 @@ use std::path::Path;
 
 use anyhow::{Context, bail, ensure};
 
-use crate::scores::{Meta, Named, Preamble, SIGNIFICANT, Tool};
+use crate::scores::{Meta, Named, Preamble};
 
 /// How much of the file is held at once.
 const BUFFER: usize = 4 << 20;
@@ -38,7 +33,6 @@ pub struct Layout {
     // moves between tables; each table computes its own start,
     // and what is here is only what the envelope checks
     pub fields: usize,
-    pub dom: usize,
 }
 
 /// Where the score columns start, and the cutoffs a score is held against.
@@ -71,11 +65,11 @@ struct State {
     layout: Option<Layout>,
     verdict: Option<Verdict>,
 
-    /// The nail and mmseqs cutoffs of the family the row in hand names.
+    /// nail's cutoff on the family the row in hand names.
     //
     // a query's rows are adjacent, so this is one lookup per family
     // rather than one per cell, which at 164 runs is 164 times fewer
-    cutoff: (Option<f32>, Option<f32>),
+    cutoff: Option<f32>,
     /// Which family those are for.
     cutoff_for: Vec<u8>,
 
@@ -90,7 +84,6 @@ struct State {
 /// at it.
 pub struct Row<'a> {
     cells: toil::Cells<'a>,
-    meta: &'a Meta,
     state: &'a State,
 }
 
@@ -164,7 +157,7 @@ impl<R: Read> Frame<R> {
                 file: file.to_string(),
                 layout: None,
                 verdict: None,
-                cutoff: (None, None),
+                cutoff: None,
                 cutoff_for: Vec::new(),
                 seen: HashSet::from([shard_at.clone()]),
                 shard: shard_at,
@@ -197,11 +190,7 @@ impl<R: Read> Frame<R> {
 
     /// Hand every row to `f` in file order, then check the trailer.
     pub fn each(&mut self, mut f: impl FnMut(&Row) -> anyhow::Result<()>) -> anyhow::Result<()> {
-        let Frame {
-            reader,
-            meta,
-            state,
-        } = self;
+        let Frame { reader, state, .. } = self;
 
         while !state.done {
             let Some((at, entry)) = reader.next_entry()? else {
@@ -223,7 +212,7 @@ impl<R: Read> Frame<R> {
                     state.check(&cells)?;
                     state.rows += 1;
 
-                    f(&Row { cells, meta, state })?;
+                    f(&Row { cells, state })?;
                 }
             }
         }
@@ -297,8 +286,8 @@ impl State {
             self.cutoff_for.extend_from_slice(query);
 
             self.cutoff = match std::str::from_utf8(query) {
-                Ok(family) => cutoffs.pair(family),
-                Err(_) => (None, None),
+                Ok(family) => cutoffs.get(family),
+                Err(_) => None,
             };
         }
 
@@ -337,11 +326,6 @@ impl<'a> Row<'a> {
         field(&self.cells, at)
     }
 
-    /// Which block the row is in -- the unit it was searched against.
-    pub fn shard(&self) -> &'a str {
-        &self.state.shard
-    }
-
     /// Whether one run reported this pair at or above its family's cutoff.
     pub fn passed(&self, run: usize) -> bool {
         let verdict = self
@@ -354,45 +338,6 @@ impl<'a> Row<'a> {
             return false;
         };
 
-        let cutoff = match self.meta.runs[run].tool {
-            Tool::Nail | Tool::Hmmer => self.state.cutoff.0,
-            Tool::Mmseqs => self.state.cutoff.1,
-        };
-
-        cutoff.is_some_and(|cutoff| score >= cutoff)
-    }
-
-    /// hmmer's domain scores, in the order the domtbl listed them.
-    pub fn domains(&self) -> impl Iterator<Item = f32> + 'a {
-        let layout = self
-            .state
-            .layout
-            .as_ref()
-            .expect("a frame is given its layout before its first row");
-
-        self.field(layout.dom)
-            .split(|byte| *byte == b',')
-            .filter_map(super::scan::score)
-    }
-
-    /// How many of the pair's domains carry enough of the hit to count as
-    /// their own.
-    pub fn domain_count(&self) -> usize {
-        let best = self.domains().fold(f32::NEG_INFINITY, f32::max);
-        if best == f32::NEG_INFINITY {
-            return 0;
-        }
-
-        // against the best domain rather than an absolute score:
-        // the question is whether the hit is one region of the
-        // sequence or several, and a weak family's several are
-        // still several
-        match best > 0.0 {
-            true => self
-                .domains()
-                .filter(|score| score / best >= SIGNIFICANT)
-                .count(),
-            false => self.domains().count(),
-        }
+        self.state.cutoff.is_some_and(|cutoff| score >= cutoff)
     }
 }

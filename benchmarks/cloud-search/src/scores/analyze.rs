@@ -1,15 +1,16 @@
-//! The analyses, which are groupings over a table of pairs.
+//! The summary, which is a grouping over a table of pairs.
 //!
-//! Nothing in here reads a results file. A summary counts per run, and stages
-//! counts per checkpoint within a run; both are held to the same denominator,
-//! which is what hmmer found and scored over its family's cutoff.
+//! Nothing in here reads a results file. A summary counts per run what that
+//! run reported over nail's cutoff, and holds it against what the full run
+//! reported. A run is one cell over all its reps: the hits are rep 1's, and
+//! the wall clock is the median over the reps, with the fastest and slowest
+//! beside it.
 //!
-//! A family short of a cutoff for any tool, or for hmmer's best domain, is
-//! left out of every count. Each table says how many families that was in a
+//! A family with no nail cutoff is left out of every count. The table says how many families that was in a
 //! `#= left_out families <n>` line, and counts per run the pairs that run
 //! reported in them in a `left_out` column.
 //!
-//! They are separate from `parse` because reading every results table is the
+//! It is separate from `parse` because reading every results table is the
 //! expensive half and the half least likely to change: a different statistic
 //! is a re-run of this, not of the benchmark.
 
@@ -18,28 +19,30 @@ use std::path::Path;
 
 use anyhow::{Context, ensure};
 
+use crate::run::FULL;
+use crate::scores::complete;
 use crate::scores::runs::Reader as Runs;
-use crate::scores::{Tool, complete};
 
 /// What every run found, and what it cost.
 ///
-/// One pass over the table, counting per run: what it reported over the
-/// cutoff, how much of that hmmer also found, and how much of that hmmer read
-/// as one domain rather than several. Nothing is held but the counters.
-///
+/// One pass over the table, counting per run what it reported over the
+/// cutoff. Nothing is held but the counters.
 pub fn summary(path: &Path, out: &Path) -> anyhow::Result<()> {
     let mut scores = Runs::open(path)?;
 
-    let hmmer = scores.meta().hmmer()?;
     let runs = scores.meta().runs.len();
     let complete = complete(&scores.meta().cutoffs, scores.meta().c)?;
 
-    let mut found = vec![0usize; runs];
+    let full = scores
+        .meta()
+        .runs
+        .iter()
+        .position(|run| run.name == FULL)
+        .with_context(|| format!("no `{FULL}` run in {} to measure against", path.display()))?;
+
     let mut hits = vec![0usize; runs];
-    let mut hits_sd = vec![0usize; runs];
     let mut left = vec![0usize; runs];
     let mut left_families = HashSet::new();
-    let (mut truth, mut truth_sd) = (0usize, 0usize);
     let mut rows = 0u64;
 
     scores.each(|scored| {
@@ -54,38 +57,16 @@ pub fn summary(path: &Path, out: &Path) -> anyhow::Result<()> {
 
         rows += 1;
 
-        let true_hit = row.passed(hmmer);
-
-        // a hit hmmer breaks into one region is a different question from one
-        // it breaks into several: the tools disagree most about the second
-        let single = true_hit && row.domain_count() == 1;
-
-        if true_hit {
-            truth += 1;
-            truth_sd += usize::from(single);
-        }
-
-        for run in 0..runs {
-            if !row.passed(run) {
-                continue;
-            }
-
-            found[run] += 1;
-
-            // held to hmmer as well, so a run is credited for what it agreed
-            // with rather than for everything it scored highly
-            if true_hit {
-                hits[run] += 1;
-                hits_sd[run] += usize::from(single);
-            }
+        for (run, n) in hits.iter_mut().enumerate() {
+            *n += usize::from(row.passed(run));
         }
 
         Ok(())
     })?;
 
     ensure!(
-        truth > 0,
-        "hmmer found nothing that clears a cutoff; there is nothing to measure against"
+        hits[full] > 0,
+        "the `{FULL}` run found nothing that clears a cutoff; there is nothing to measure against"
     );
 
     // every setting any run recorded, so a pipeline that swept two knobs gets
@@ -98,48 +79,48 @@ pub fn summary(path: &Path, out: &Path) -> anyhow::Result<()> {
         .map(String::as_str)
         .collect();
 
-    let mut headers = vec!["name".to_string(), "tool".to_string()];
+    let mut headers = vec!["name".to_string()];
     headers.extend(keys.iter().map(|k| k.to_string()));
     headers.extend(
         [
-            "wall_s", "found", "hits", "sens", "hits_sd", "sens_sd", "left_out",
+            "reps", "wall_s", "wall_min", "wall_max", "hits", "coverage", "left_out",
         ]
         .iter()
         .map(|h| h.to_string()),
     );
-
-    let cells: Vec<Vec<String>> = meta
-        .runs
-        .iter()
-        .enumerate()
-        .map(|(i, run)| {
-            let mut cells = vec![run.name.clone(), run.tool.to_string()];
-            cells.extend(keys.iter().map(|k| match run.params.get(*k) {
-                Some(value) => value.clone(),
-                None => "-".to_string(),
-            }));
-            cells.extend([
-                format!("{:.4}", run.wall_s),
-                found[i].to_string(),
-                hits[i].to_string(),
-                format!("{:.4}", frac(hits[i], truth)),
-                hits_sd[i].to_string(),
-                format!("{:.4}", frac(hits_sd[i], truth_sd)),
-                left[i].to_string(),
-            ]);
-
-            cells
-        })
-        .collect();
 
     let mut table = toil::Table::new(toil::Schema::new(headers));
     table.meta(
         "left_out",
         [toil::Cell::from("families"), left_families.len().into()],
     );
-    preamble(&mut table, meta, truth, rows);
-    for row in cells {
-        table.row(row);
+    preamble(
+        &mut table,
+        meta,
+        hits[full],
+        median(&meta.runs[full].walls),
+        rows,
+    );
+
+    for (i, run) in meta.runs.iter().enumerate() {
+        let mut cells = vec![run.name.clone()];
+        cells.extend(keys.iter().map(|k| match run.params.get(*k) {
+            Some(value) => value.clone(),
+            None => "-".to_string(),
+        }));
+        let min = run.walls.iter().copied().fold(f64::INFINITY, f64::min);
+        let max = run.walls.iter().copied().fold(f64::NEG_INFINITY, f64::max);
+        cells.extend([
+            run.walls.len().to_string(),
+            format!("{:.4}", median(&run.walls)),
+            format!("{min:.4}"),
+            format!("{max:.4}"),
+            hits[i].to_string(),
+            format!("{:.4}", hits[i] as f64 / hits[full] as f64),
+            left[i].to_string(),
+        ]);
+
+        table.row(cells);
     }
 
     table
@@ -147,22 +128,33 @@ pub fn summary(path: &Path, out: &Path) -> anyhow::Result<()> {
         .with_context(|| format!("failed to write {}", out.display()))
 }
 
+/// The middle of `walls`, or the mean of the middle two.
+fn median(walls: &[f64]) -> f64 {
+    let mut sorted = walls.to_vec();
+    sorted.sort_by(f64::total_cmp);
+
+    let mid = sorted.len() / 2;
+    match sorted.len() % 2 {
+        1 => sorted[mid],
+        _ => (sorted[mid - 1] + sorted[mid]) / 2.0,
+    }
+}
+
 /// What was searched, what the fractions are fractions of, and the two times
 /// the figures use as reference lines.
-fn preamble(table: &mut toil::Table, meta: &crate::scores::Meta, truth: usize, rows: u64) {
+fn preamble(
+    table: &mut toil::Table,
+    meta: &crate::scores::Meta,
+    full: usize,
+    wall: f64,
+    rows: u64,
+) {
     let (mut count, mut residues, mut bytes) = (0usize, 0u64, 0u64);
     for (_, size) in &meta.targets {
         count += size.count;
         residues += size.residues;
         bytes += size.bytes;
     }
-
-    let hmmer = meta
-        .runs
-        .iter()
-        .find(|run| run.tool == Tool::Hmmer)
-        .map(|run| run.wall_s)
-        .unwrap_or_default();
 
     // a dash rather than a zero for a pipeline that never seeded: seeding
     // taking no time and there being no seeding are different things
@@ -183,175 +175,9 @@ fn preamble(table: &mut toil::Table, meta: &crate::scores::Meta, truth: usize, r
             "pairs  {rows:>9} rows      {:>12} runs",
             meta.runs.len()
         ))
-        .comment(format!("hmmer  {truth:>9} hits      {hmmer:>12.4} wall_s"))
+        .comment(format!("full   {full:>9} hits      {wall:>12.4} wall_s"))
         .comment(format!("seed   {:>9}           {seed:>12} wall_s", ""))
         .comment("");
-}
-
-/// What one unit's pairs came to, per run.
-struct Tally {
-    /// Pairs hmmer reported at or above their family's cutoff, for this unit.
-    truth: usize,
-    lost_seed: Vec<usize>,
-    lost_cloud_align: Vec<usize>,
-    /// Scored, and below the family's cutoff. nail found the pair and would
-    /// not return it, which is a loss like any other.
-    lost_cutoff: Vec<usize>,
-    kept: Vec<usize>,
-    /// Pairs each run reported in a family left out, for this unit.
-    left: Vec<usize>,
-}
-
-impl Tally {
-    fn new(runs: usize) -> Tally {
-        Tally {
-            truth: 0,
-            lost_seed: vec![0; runs],
-            lost_cloud_align: vec![0; runs],
-            lost_cutoff: vec![0; runs],
-            kept: vec![0; runs],
-            left: vec![0; runs],
-        }
-    }
-}
-
-/// Where the hits hmmer found are lost, per unit and per run.
-pub fn stages(path: &Path, out: &Path) -> anyhow::Result<()> {
-    let mut scores = Runs::open(path)?;
-
-    let hmmer = scores.meta().hmmer()?;
-    let runs = scores.meta().runs.len();
-    let complete = complete(&scores.meta().cutoffs, scores.meta().c)?;
-    let mut left_families = HashSet::new();
-
-    ensure!(
-        !scores.meta().seeds.is_empty(),
-        "this pipeline kept no seeds, so there is no seeding checkpoint to split on"
-    );
-
-    // per unit as well as per run. A `cross` set searches one query against
-    // several kinds of target, and what hmmer found in one is not the truth
-    // set for another: summed, the two corpora make a sensitivity that
-    // describes neither
-    let mut at: indexmap::IndexMap<String, Tally> = indexmap::IndexMap::new();
-    let mut rows = 0u64;
-
-    scores.each(|row| {
-        let unit = row.row().shard();
-
-        if left_out(&complete, &mut left_families, row.row().field(0))? {
-            let tally = tally(&mut at, unit, runs);
-            for (run, n) in tally.left.iter_mut().enumerate() {
-                *n += usize::from(row.present(run));
-            }
-            return Ok(());
-        }
-
-        rows += 1;
-
-        if !row.row().passed(hmmer) {
-            return Ok(());
-        }
-
-        let tally = tally(&mut at, unit, runs);
-        tally.truth += 1;
-
-        for run in 0..runs {
-            if run == hmmer {
-                continue;
-            }
-
-            // per run rather than per pair: a seeding sweep gives every arm
-            // its own seed list, so whether the pair was ever offered is the
-            // arm's answer and not the pipeline's
-            match (row.seeded(run), row.present(run), row.row().passed(run)) {
-                (false, _, _) => tally.lost_seed[run] += 1,
-                (_, false, _) => tally.lost_cloud_align[run] += 1,
-                (_, _, false) => tally.lost_cutoff[run] += 1,
-                (_, _, true) => tally.kept[run] += 1,
-            }
-        }
-
-        Ok(())
-    })?;
-
-    ensure!(
-        at.values().any(|t| t.truth > 0),
-        "hmmer found nothing that clears a cutoff; there is nothing to measure against"
-    );
-
-    // one row per (unit, run), a column per checkpoint. Written long it was
-    // four rows apiece, where `n` meant a population on two of them and a loss
-    // on the other two, and the last row's fraction only ever repeated the one
-    // above it
-    let headers = [
-        "unit",
-        "run",
-        "truth",
-        "lost_seed",
-        "lost_align",
-        "lost_cutoff",
-        "kept",
-        "sens",
-        "left_out",
-    ]
-    .map(str::to_string)
-    .to_vec();
-    let mut cells: Vec<Vec<String>> = Vec::new();
-
-    for (unit, tally) in &at {
-        for (run, column) in scores.meta().runs.iter().enumerate() {
-            if run == hmmer {
-                continue;
-            }
-
-            cells.push(vec![
-                unit.clone(),
-                column.name.clone(),
-                tally.truth.to_string(),
-                tally.lost_seed[run].to_string(),
-                tally.lost_cloud_align[run].to_string(),
-                tally.lost_cutoff[run].to_string(),
-                tally.kept[run].to_string(),
-                format!("{:.4}", frac(tally.kept[run], tally.truth)),
-                tally.left[run].to_string(),
-            ]);
-        }
-    }
-
-    ensure!(
-        !cells.is_empty(),
-        "nothing but hmmer ran, so there is no pipeline to trace"
-    );
-
-    let truth: usize = at.values().map(|tally| tally.truth).sum();
-
-    let mut table = toil::Table::new(toil::Schema::new(headers));
-    table.meta(
-        "left_out",
-        [toil::Cell::from("families"), left_families.len().into()],
-    );
-    preamble(&mut table, scores.meta(), truth, rows);
-    for row in cells {
-        table.row(row);
-    }
-
-    table
-        .write(out)
-        .with_context(|| format!("failed to write {}", out.display()))
-}
-
-/// One unit's tally, made on the first row that names the unit.
-fn tally<'a>(
-    at: &'a mut indexmap::IndexMap<String, Tally>,
-    unit: &str,
-    runs: usize,
-) -> &'a mut Tally {
-    if !at.contains_key(unit) {
-        at.insert(unit.to_string(), Tally::new(runs));
-    }
-
-    &mut at[unit]
 }
 
 /// Whether a row's family is left out, adding it to `met` when it is.
@@ -373,24 +199,26 @@ fn left_out(
     Ok(true)
 }
 
-fn frac(n: usize, of: usize) -> f64 {
-    match of {
-        0 => 0.0,
-        of => n as f64 / of as f64,
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
 
     /// What `analysis` writes from the fixture table.
     fn written(name: &str, analysis: fn(&Path, &Path) -> anyhow::Result<()>) -> String {
+        written_from(name, &crate::scores::runs::tests::file(), analysis)
+    }
+
+    /// What `analysis` writes from `table`.
+    fn written_from(
+        name: &str,
+        table: &str,
+        analysis: fn(&Path, &Path) -> anyhow::Result<()>,
+    ) -> String {
         let dir = std::env::temp_dir().join(format!("mgy-analyze-{}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();
 
         let path = dir.join(format!("{name}.runs.tbl"));
-        std::fs::write(&path, crate::scores::runs::tests::file()).unwrap();
+        std::fs::write(&path, table).unwrap();
 
         let out = dir.join(format!("{name}.tbl"));
         analysis(&path, &out).unwrap();
@@ -413,25 +241,60 @@ mod tests {
 
         assert!(text.contains("#= left_out families 1\n"));
 
-        // zeta's pair is hmmer's and the first cell's, and not the full
-        // run's, which was never offered it
-        assert_eq!(left_column(&text, &["hmmer"]), "1");
         assert_eq!(left_column(&text, &["A2.0-B4.0"]), "1");
-        assert_eq!(left_column(&text, &["full"]), "0");
-
-        // beta and gamma, and not zeta, which hmmer scored over nail's
-        // cutoff
-        assert!(text.contains("hmmer          2 hits"));
+        assert_eq!(left_column(&text, &["full"]), "1");
         assert!(text.contains("pairs          3 rows"));
     }
 
     #[test]
-    fn stages_leave_out_a_family_short_of_a_cutoff_and_count_it() {
-        let text = written("stages", stages);
+    fn coverage_is_a_run_s_hits_over_the_full_run_s() {
+        let text = written("coverage", summary);
 
-        assert!(text.contains("#= left_out families 1\n"));
-        assert_eq!(left_column(&text, &["1", "A2.0-B4.0"]), "1");
-        assert_eq!(left_column(&text, &["1", "full"]), "0");
-        assert!(text.contains("hmmer          2 hits"));
+        // the full run cleared alpha, beta's first pair and beta's second;
+        // the cell cleared only beta's second
+        assert!(text.contains("full           3 hits"));
+
+        let cells: Vec<&str> = text
+            .lines()
+            .find(|line| line.starts_with("A2.0-B4.0"))
+            .unwrap()
+            .split_whitespace()
+            .collect();
+        assert_eq!(&cells[cells.len() - 3..cells.len() - 1], ["1", "0.3333"]);
+    }
+
+    /// The cells of the first row that opens with `name`.
+    fn row<'t>(text: &'t str, name: &str) -> Vec<&'t str> {
+        text.lines()
+            .find(|line| line.split_whitespace().next() == Some(name))
+            .unwrap()
+            .split_whitespace()
+            .collect()
+    }
+
+    #[test]
+    fn the_wall_clock_is_the_median_over_reps() {
+        let text = written("median", summary);
+
+        // the fixture's cell ran three reps at 3, 5 and 4 seconds
+        let cells = row(&text, "A2.0-B4.0");
+        assert_eq!(&cells[3..7], ["3", "4.0000", "3.0000", "5.0000"]);
+
+        // and the full run two, at 9 and 10
+        let cells = row(&text, "full");
+        assert_eq!(&cells[3..7], ["2", "9.5000", "9.0000", "10.0000"]);
+        let preamble = text.lines().find(|l| l.starts_with("# full")).unwrap();
+        assert!(preamble.ends_with(" 9.5000 wall_s"), "{preamble}");
+    }
+
+    #[test]
+    fn a_table_of_one_rep_still_summarizes() {
+        let one = crate::scores::runs::tests::file()
+            .replace("3.0000,5.0000,4.0000", "3.0000")
+            .replace("9.0000,10.0000", "9.0000");
+        let text = written_from("one-rep", &one, summary);
+
+        let cells = row(&text, "A2.0-B4.0");
+        assert_eq!(&cells[3..7], ["1", "3.0000", "3.0000", "3.0000"]);
     }
 }

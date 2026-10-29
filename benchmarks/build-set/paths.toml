@@ -51,15 +51,6 @@ name = "mgnify"
 from = "../../data/mgnify"
 seqs = 50000
 
-[[cloud-search-toy.targets]]
-name = "swissprot"
-from = "../../data/swissprot.fa"
-seqs = 50000
-
-# 500,000 a side rather than the million loss-decomp draws: Swissprot holds
-# 570,420 sequences in total, and a target the size of most of its source is a
-# sample of nothing. The two units have to be the same size for the surfaces to
-# be read against each other, so the smaller source sets it.
 [cloud-search-real]
 shape = "cross"
 out   = "../../sets/cloud-search/inputs"
@@ -72,12 +63,7 @@ alignments = "../../data/pfam.sto"
 [[cloud-search-real.targets]]
 name = "mgnify"
 from = "../../data/mgnify"
-seqs = 500000
-
-[[cloud-search-real.targets]]
-name = "swissprot"
-from = "../../data/swissprot.fa"
-seqs = 500000
+seqs = 1000000
 
 [loss-decomp-toy]
 shape = "cross"

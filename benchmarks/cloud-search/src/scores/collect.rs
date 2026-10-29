@@ -196,16 +196,10 @@ fn estimate(work: &Shard<'_>, shard: &str) -> u64 {
         .runs
         .iter()
         .filter(|column| column.shards.iter().any(|covered| covered == shard))
-        .map(|column| {
-            let table = manifest::table_path(work.results, &column.run.name, shard);
-            let dom = manifest::dom_path(work.results, &column.run.name, shard);
-
-            [table, dom]
-                .iter()
-                .filter_map(|path| std::fs::metadata(path).ok())
-                .map(|meta| meta.len())
-                .sum::<u64>()
+        .filter_map(|column| {
+            std::fs::metadata(manifest::table_path(work.results, &column.file, shard)).ok()
         })
+        .map(|meta| meta.len())
         .sum();
 
     (bytes + seeds) * PEAK / 8 + OVERHEAD

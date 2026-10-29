@@ -1,8 +1,9 @@
 //! What nail's cloud-search pruning costs and what it loses.
 //!
-//! Reads a [`shape::FIXED`] set and searches one unit of it, seeding once and
-//! then searching every `(A, B)` pruning cell off those same seeds, so the
-//! pruning parameters are the only thing moving.
+//! Searches every unit of a set, seeding once and then searching every
+//! `(A, B)` pruning cell off those same seeds, so the pruning parameters are
+//! the only thing moving. What a cell loses is counted against nail's own
+//! unpruned run.
 
 mod plot;
 mod run;
@@ -34,22 +35,20 @@ enum Command {
     /// Turn the results into a table, and that into numbers.
     #[command(subcommand)]
     Parse(Parse),
-    /// Draw the pruning heatmaps from summary.tbl.
+    /// Draw the pruning heatmap from summary.tbl.
     Plot(plot::Args),
 }
 
 /// `-A` and `-B` constrain the dynamic programming, so two cells can score one
-/// pair differently. That is what makes a column per run the honest shape here,
-/// where recall wants a column per tool.
+/// pair differently. That is what makes a column per run the honest shape here.
 #[derive(Subcommand)]
 enum Parse {
     /// Read the results into runs.tbl, one row per pair, one score column per
-    /// run, and whether seeding found the pair.
+    /// cell read from rep 1, and whether seeding found the pair.
     Runs(crate::scores::parse::ScoresArgs),
-    /// What every run found and what it cost, one row per run.
+    /// What every run found against the full run, and what it cost, one row
+    /// per cell with its median wall time over the reps.
     Summary(crate::scores::parse::TableArgs),
-    /// Where the hits hmmer found were lost, one row per run per checkpoint.
-    Stages(crate::scores::parse::TableArgs),
 }
 
 /// This crate's directory, fixed at compile time. The plot script hangs off
@@ -107,7 +106,6 @@ impl Command {
             Command::Plot(a) => a.label.as_deref(),
             Command::Parse(Parse::Runs(a)) => a.label.as_deref(),
             Command::Parse(Parse::Summary(a)) => a.label.as_deref(),
-            Command::Parse(Parse::Stages(a)) => a.label.as_deref(),
         }
     }
 
@@ -124,10 +122,6 @@ impl Command {
             Command::Parse(Parse::Summary(mut a)) => {
                 a.analysis = paths.analysis.clone();
                 crate::scores::parse::main(crate::scores::parse::Cmd::Summary(a))
-            }
-            Command::Parse(Parse::Stages(mut a)) => {
-                a.analysis = paths.analysis.clone();
-                crate::scores::parse::main(crate::scores::parse::Cmd::Stages(a))
             }
         }
     }

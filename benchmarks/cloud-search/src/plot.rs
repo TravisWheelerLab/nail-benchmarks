@@ -1,4 +1,4 @@
-//! Draws the pruning heatmaps, by handing summary.tbl to matplotlib.
+//! Draws the pruning heatmap, by handing summary.tbl to matplotlib.
 //!
 //! Only cloud-search has a surface to draw: the figure is a grid of -A against
 //! -B, and a pipeline that swept something else has nothing to put in it. The
@@ -42,7 +42,7 @@ pub fn main(args: Args, paths: &crate::Paths) -> anyhow::Result<()> {
 
     if !summary.is_file() {
         bail!(
-            "no summary.tbl at {}; run `mgy parse summary` first",
+            "no summary.tbl at {}; run `cloud-search parse summary` first",
             summary.display()
         );
     }

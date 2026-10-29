@@ -372,10 +372,8 @@ combination, `unit` naming both sides.
 
 cloud-search and loss-decomp read `cross` because their questions are about
 the kind of sequence being searched rather than about how much of it there is.
-cloud-search draws Pfam against MGnify and against Swissprot, 500,000 a side,
-so its two surfaces differ only in where the targets came from; Swissprot is
-not much bigger than that, and a target the size of most of its source is a
-sample of nothing. loss-decomp draws Pfam against one recall shard's worth of
+cloud-search draws Pfam against 1,000,000 MGnify sequences.
+loss-decomp draws Pfam against one recall shard's worth of
 MGnify, 2,455,940 sequences, and nothing else.
 
 `pairs` is the one shape with no draw in it. Its two sources are separate
@@ -517,17 +515,23 @@ source against every target source. Each writes a `set.tbl`, and every
 pipeline here takes `--in <label>` to say which one to search.
 
 Three benchmarks. `recall` searches every shard while sweeping nail's and
-MMseqs2's prefilter sensitivity. `cloud-search` seeds once, then searches every
-`(A, B)` pruning cell off those same seeds, so the pruning parameters are the
-only thing moving. The grid is run twice, at `-a 5` and at `-a 1`, because a
-surface at one `-a` cannot say whether a hard-pruning cell found its hits or
-recovered them. `loss-decomp` asks where nail loses the hits HMMER finds,
-and how far down the prefilter list the hits it does find sit. It runs
-nail once, seeded `prog` the way nail runs by default, at `--s 12.0`: one
-`nail search`, seeding and alignment together, with the seed list written
-beside its table so `parse` can tell a pair the seeding never offered from
-one it offered and nail dropped; hmmer runs once beside it, and is most of
-the wall clock. nail leaves mmseqs' databases under
+MMseqs2's prefilter sensitivity. `cloud-search` seeds once, then searches
+every `(A, B)` pruning cell off those same seeds, so the pruning parameters
+are the only thing moving. Every cell runs at nail's default `-a 5`.
+cloud-search runs nail alone. `run --reps N` runs every cell N times, and the
+`full` run too. `--reps` has no default. The reps are the outer loop, so load
+from other users spreads across cells. Seeding runs once, before the first
+rep. Each rep is its own step and results table, named for its cell with the
+rep on the end, `A10.0-B16.0-r1`, and carries a `rep` setting. cloud-search's
+`summary` holds each cell against nail's unpruned `full` run. The one number
+it reports is coverage: the pairs a run reports over nail's cutoff, as a
+fraction of the `full` run's count. `loss-decomp` asks where nail loses the
+hits HMMER finds, and how far down the prefilter list the hits it does find
+sit. It runs nail once, seeded `prog` the way nail runs by default, at `--s
+12.0`: one `nail search`, seeding and alignment together, with the seed list
+written beside its table so `parse` can tell a pair the seeding never offered
+from one it offered and nail dropped; hmmer runs once beside it, and is most
+of the wall clock. nail leaves mmseqs' databases under
 `results/prefilter.nail.<unit>/`, which is part of the record: `parse depth`
 reads a pair's rank in its query's prefilter list out of it.
 
@@ -544,18 +548,26 @@ what it scores them, so one column per tool is the honest shape and the cheap
 one; a column per run is what made an earlier grammar unwritable at a
 thousand shards.
 
-`cloud-search parse runs --in <label>` reads cloud-search and loss-decomp into
-`runs.tbl`: one score column per run, and no pass string. A cell is the score,
-or `-` where that run's seeding offered the pair and the run did not report
-it, or `.` where the seeding never offered it at all. Whether a run cleared its
-family's cutoff is its score against the cutoff `#= cutoffs` names, worked out
-when the table is read. A seeding sweep gives every arm its own seed list, so
-the offered-or-not answer differs between runs of one pair; a run's ledger row
-names the seeding it replayed in a `seeds` setting, the list is
-`results/seeds.<seeding>.<shard>`, and many runs to one seeding is the
-ordinary case. `-A` and `-B` constrain the dynamic programming, so two cells
-can score one pair differently, and that is what the sweep measures. These
-pipelines search one shard, so the wider row costs nothing.
+`cloud-search parse runs --in <label>` and `loss-decomp parse runs --in
+<label>` each write a `runs.tbl`: one score column per run, and no pass
+string. A cell is the score, or `-` where that run's seeding offered the pair
+and the run did not report it, or `.` where the seeding never offered it at
+all. Whether a run cleared its family's cutoff is its score against the cutoff
+`#= cutoffs` names, worked out when the table is read. A seeding sweep gives
+every arm its own seed list, so the offered-or-not answer differs between runs
+of one pair; a run's ledger row names the seeding it replayed in a `seeds`
+setting, the list is `results/seeds.<seeding>.<shard>`, and many runs to one
+seeding is the ordinary case. `-A` and `-B` constrain the dynamic programming,
+so two cells can score one pair differently, and that is what the sweep
+measures. These pipelines search one shard, so the wider row costs nothing.
+cloud-search's table holds nail's runs alone, one column per cell. nail scores
+a pair the same every time, so a cell's column is read from rep 1. `parse
+runs` first counts the hits in every rep's table on every shard, and fails
+naming the cell when a rep's count differs from rep 1's. The cell's `#= run`
+line keeps one wall time per rep, joined by commas. A pair gets a row there
+when some run clears nail's cutoff on its family. loss-decomp's table also
+keeps every pair hmmer reported, with hmmer's inclusion count and domain
+scores.
 
 A run's name is stacked over its column on the dashes it is built from, so
 `A10.0-B12.0-a1` takes three header lines rather than fourteen columns of
@@ -564,17 +576,20 @@ padding on every row.
 Both are collected the same way: each shard on its own, written as a block in
 shard order, so the file comes out the same bytes however many threads it ran.
 `--threads` and `--mem` size that. `summary` asks only whether each run
-cleared its family's cutoff, which recall's copy reads out of the pass string
-and the sweeps' out of the score columns. recall's pass string spends two
-letters on hmmer, its best domain against the `hmmer_dom` cutoff and then its
-sequence score against `hmmer`, and its summary splits hmmer's hits by the
-first: `sens_dom` over the hits a domain carried alone, `sens_seq` over the
-hits only the sequence score cleared. Every tool is held to the third decoy's
-score, `--c 2`, by default.
+cleared its family's cutoff. recall's copy reads that out of the pass string.
+cloud-search's reads it out of the score columns, and writes one row per cell.
+A row holds the cell's settings, `reps`, and `wall_s`, the median wall clock
+over the reps, with `wall_min` and `wall_max` beside it. `hits` counts the
+pairs the run reported over nail's cutoff. `coverage` is that count over the
+`full` run's. `left_out` counts the pairs the run reported in families left
+out. recall's pass string spends two letters on hmmer, its best domain against
+the `hmmer_dom` cutoff and then its sequence score against `hmmer`, and its
+summary splits hmmer's hits by the first: `sens_dom` over the hits a domain
+carried alone, `sens_seq` over the hits only the sequence score cleared. Every
+tool is held to the third decoy's score, `--c 2`, by default. loss-decomp's
 `stages` reads `runs.tbl` alone, because where a pair was dropped is a
-question about a run rather than about a tool, and it counts a pair as found
-only if nail kept it over the family's cutoff. `summary` still counts what a
-run reported; whether it should follow is an open issue.
+question about a run rather than about a tool. It counts a pair as found only
+if nail kept it over the family's cutoff.
 
 recall's `coverage` counts what each run reported over its own cutoff.
 hmmer counts a pair when its sequence score clears `hmmer` or its best domain
@@ -596,20 +611,17 @@ threads, each over its own run of whole shard blocks.
     recall        parse scores → parse summary
                                → parse coverage
     cloud-search  parse runs   → parse summary → plot
-                               → parse stages
     loss-decomp   parse runs   → parse stages  → plot
                                → parse depth
 
-`plot` draws one figure off cloud-search's summary: the `(A, B)` heatmaps of
-sensitivity and wall clock, with the `full` run in the far corner. `--full-dp`
+`plot` draws one figure off cloud-search's summary, `cloud-search.pdf`: one
+`(A, B)` heatmap. A cell's colour is its coverage as a percentage of `full`,
+and its text is its median wall time in seconds. The colour is scaled by the
+log of the share of `full`'s hits a cell misses, so 99.5% and 99.9% read as
+far apart as 60% and 90% do. The `full` run sits in the far corner. `--full-dp`
 records no `-A` and no `-B`, so it has no cell; the corner is where the surface
 is heading as the pruning relaxes, and it is the ceiling the pruned cells are
 read against.
-
-Each field is drawn at each `-a` and then as the difference between them, six
-panels. The difference is what the second arm is run for: it says where on the
-grid the sensitivity credited to `-A` and `-B` was recovered by retrying
-disjoint clouds instead. A summary with one `-a` in it draws two panels.
 
 `depth` bins each pair's rank in its query's prefilter list in ranges that
 double from `--bin`, the way prog's `n_take` does, and writes `depth.tbl`: per

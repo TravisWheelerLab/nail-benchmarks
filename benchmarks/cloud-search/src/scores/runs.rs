@@ -1,27 +1,23 @@
 //! `runs.tbl`: one row per pair, one score column per run.
 //!
-//! This is the table for the pipelines that move one tool's parameters and
-//! ask what that costs. recall's `scores.tbl` keeps one column per tool on
-//! the premise that a tool scores a pair the same wherever it reports it;
-//! `-A` and `-B` are exactly what break that premise, since pruning
-//! constrains the dynamic programming and a pair can come back with a lower
-//! score. So the score is kept per run here, and the price -- a column per
-//! cell rather than per tool -- is one this pipeline can pay: it searches one
-//! shard, where recall searches a thousand.
+//! `-A` and `-B` constrain the dynamic programming, so a pair can come back
+//! from a pruned cell with a lower score than the full run gave it. So the
+//! score is kept per run, and a column per cell is a price this pipeline can
+//! pay: it searches one unit per target source.
 //!
 //! ```text
-//! #= format runs 1
+//! #= format runs 3
 //! #= query <count> <residues> <bytes>
 //! #= target <shard> <count> <residues> <bytes>
 //! #= seed <seeding> <wall_s>
 //! #= cutoffs <path> c=<n>
-//! #= run <name> <tool> <wall_s> [k=v ...]
+//! #= run <name> <wall_s>[,<wall_s> ...] [k=v ...]
 //! #                       A2.0
 //! #                       B4.0
-//! # query target           a5   ... full   hmmer  inc dom
-//! # ----- ---------------- ---- --- ------ ------ --- ---
+//! # query target           a5   ... full
+//! # ----- ---------------- ---- --- ------
 //! #= shard 1
-//! 2-Hacid_dh_C MGYP000522683479 98.8 ... 98.8   98.7   1   98.1
+//! 2-Hacid_dh_C MGYP000522683479 98.8 ... 98.8
 //! #= end <rows>
 //! ```
 //!
@@ -35,13 +31,13 @@
 //! would compare against a threshold and look like one, which for this table
 //! is the whole question.
 //!
-//! There is no `pass` column. Whether a run cleared its family's cutoff is its
-//! score against the cutoff `#= cutoffs` names, so a character per run saying
-//! so again would be the answer written twice -- and at 164 runs, 164 bytes a
-//! row of it. recall's `scores.tbl` keeps one, because there a score is per
-//! tool and no column can say which run reported the pair.
+//! A run is a cell of the sweep over every rep it ran. Its scores are rep
+//! 1's, since nail scores a pair the same every time; the `#= run` line keeps
+//! a wall time per rep.
+//!
+//! Whether a run cleared its family's cutoff is its score against nail's
+//! cutoff in the file `#= cutoffs` names.
 
-use std::fmt::Write as _;
 use std::io::{BufWriter, Read, Write};
 use std::path::Path;
 
@@ -58,7 +54,11 @@ use crate::scores::shard::{Count, Pair, Scratch, Shard};
 use crate::scores::{Cutoffs, Meta, Named, Queries, runs};
 
 /// The `#= format` line a runs table opens with.
-pub const FORMAT: &str = "runs 1";
+pub const FORMAT: &str = "runs 3";
+
+/// The format before reps, whose `#= run` lines carry one wall time and so
+/// read as one rep.
+const ONE_REP: &str = "runs 2";
 
 /// How wide a target name is written. MGnify's are sixteen characters, and a
 /// wider one overruns rather than widening the column, since the header has
@@ -93,7 +93,8 @@ pub fn collect(args: Args<'_>) -> anyhow::Result<Count> {
     let ran = Ledger::load(args.dir)?;
     ledger::warn(ran.failed(), "command(s)");
 
-    let columns = runs(&ran)?;
+    let results = args.dir.join("results");
+    let columns = runs(&ran, &results)?;
     ensure!(
         !columns.is_empty(),
         "no finished runs in {}",
@@ -139,11 +140,6 @@ pub fn collect(args: Args<'_>) -> anyhow::Result<Count> {
         tools: ran.tools().to_vec(),
     };
 
-    // every run here is measured against what hmmer found, and the domain
-    // breakdown is hmmer's alone, so which run is hmmer's has to be a single
-    // answer
-    let hmmer = meta.hmmer()?;
-
     // one entry per run, naming the seeding it replayed, and the distinct
     // seedings behind them
     let lists: Vec<String> = {
@@ -177,16 +173,14 @@ pub fn collect(args: Args<'_>) -> anyhow::Result<Count> {
     let mut out = BufWriter::with_capacity(1 << 20, file);
 
     let mut head = Stream::new(schema.clone(), widths.clone(), &mut out);
-    meta.write(FORMAT, &mut head)?;
+    meta.write(&mut head)?;
     head.header()?;
 
-    let results = args.dir.join("results");
     let work = Shard {
         results: &results,
         runs: &columns,
         queries: &queries,
         cutoffs: &cutoffs,
-        hmmer: Some(hmmer),
         seeds: &seed_of,
         lists: &lists,
     };
@@ -221,45 +215,19 @@ fn block(
     let mut out = Stream::continued(schema.clone(), widths.clone(), Vec::new());
     out.meta("shard", [shard])?;
 
-    let mut doms = String::new();
-
     let count = work.collect(shard, scratch, &mut |pair: &Pair<'_>| {
         let mut line = out.line()?;
 
         line.text(work.queries.name(pair.query))?;
         line.bytes(pair.target)?;
 
-        for (run, score) in pair.scores.iter().enumerate() {
+        for (score, offered) in pair.scores.iter().zip(pair.offered) {
             match score {
                 Some(score) => line.num(*score as f64)?,
-                // the `-` a fold writes into the pass string is the seeding
-                // never having offered the pair, and the cell carries that
-                // here rather than a column of its own
-                None if pair.pass[run] == b'-' => line.text(NEVER)?,
+                None if !offered => line.text(NEVER)?,
                 None => line.missing()?,
             };
         }
-
-        match pair.inc {
-            Some(inc) => line.num(inc as f64)?,
-            None => line.missing()?,
-        };
-
-        match pair.doms {
-            [] => line.missing()?,
-            scores => {
-                doms.clear();
-                for (i, score) in scores.iter().enumerate() {
-                    let separator = match i {
-                        0 => "",
-                        _ => ",",
-                    };
-                    write!(doms, "{separator}{score:.1}").expect("a String takes what it is given");
-                }
-
-                line.text(&doms)?
-            }
-        };
 
         line.end()?;
         Ok(())
@@ -278,9 +246,8 @@ fn schema(meta: &Meta) -> Schema {
         Column::new("target").min_width(TARGET),
     ];
 
-    // named for the run rather than the tool: the column
-    // header is what says which cell of the sweep a score
-    // came from. stacked on the dashes the name is built
+    // named for the run: the column header is what says
+    // which cell of the sweep a score came from. stacked on the dashes the name is built
     // from, so A10.0-B12.0-a1 rules three header lines
     // rather than fourteen columns of padding on every
     // row -- at 164 runs that padding was 46% of the file
@@ -290,21 +257,15 @@ fn schema(meta: &Meta) -> Schema {
             .min_width(SCORE)
     }));
 
-    columns.push(Column::new("inc").min_width(3));
-    columns.push(Column::new("dom").ragged());
-
     Schema::new(columns)
 }
 
 // -------------------------------------------------------------------- read
 
-/// Where this table's columns sit: query, target, one per run, inc, dom.
+/// Where this table's columns sit: query, target, one per run.
 pub fn layout(meta: &Meta) -> Layout {
-    let runs = meta.runs.len();
-
     Layout {
-        fields: SCORES_AT + runs + 2,
-        dom: SCORES_AT + runs + 1,
+        fields: SCORES_AT + meta.runs.len(),
     }
 }
 
@@ -328,7 +289,7 @@ impl<R: Read> Reader<R> {
 
     fn wrap(mut frame: Frame<R>) -> anyhow::Result<Reader<R>> {
         ensure!(
-            frame.format() == FORMAT,
+            frame.format() == FORMAT || frame.format() == ONE_REP,
             "{} does not open `#= format {FORMAT}`; it is not a runs table",
             frame.file(),
         );
@@ -374,20 +335,8 @@ impl RunsRow<'_, '_> {
         self.row
     }
 
-    /// Whether the seeding this run replayed offered the pair.
-    ///
-    /// True for a run that replayed no seed list: nothing was withheld from
-    /// it, which is a different answer from a seeding that looked and did not
-    /// find it, and the `.` is what carries that difference.
-    pub fn seeded(&self, run: usize) -> bool {
-        self.row.field(self.scores + run) != NEVER.as_bytes()
-    }
-
     /// Whether one run reported the pair at all, at any score.
     pub fn present(&self, run: usize) -> bool {
-        // presence, not a cutoff: a pair that survived to be
-        // scored badly was not dropped, which is the
-        // distinction the stages is built on
         super::scan::score(self.row.field(self.scores + run)).is_some()
     }
 
@@ -424,8 +373,7 @@ pub mod tests {
                  # ------ ------ -------- ------- -----------\n\
                    alpha  24.5   30.0     25.0    20.0\n\
                    beta   20.0   30.0     25.0    20.0\n\
-                   gamma  20.0   30.0     25.0    20.0\n\
-                   zeta   20.0   30.0     25.0    0.0\n",
+                   zeta   0.0    30.0     25.0    20.0\n",
             )
             .unwrap();
 
@@ -433,29 +381,28 @@ pub mod tests {
         })
     }
 
-    /// Two cells and hmmer, over a pipeline that seeded: one pair both cells
-    /// found and scored differently, one seeded pair only hmmer reported, one
-    /// pair seeding never offered the cells at all, and one pair in `zeta`,
-    /// which has no cutoff for hmmer's best domain.
+    /// One cell and the full run, over a pipeline that seeded: one pair both
+    /// found and scored differently, one seeded pair the cell lost, one pair
+    /// both cleared, and one pair in `zeta`, which has no cutoff for hmmer's
+    /// best domain.
     pub fn file() -> String {
         format!(
             "\
-#= format runs 1
+#= format runs 3
 #= query 3 18 120
 #= target 1 3 12 40
 #= seed once 4.0000
 #= cutoffs {} c=0
-#= run A2.0-B4.0 nail 3.0000 seeds=once A=2.0 B=4.0
-#= run full nail 9.0000 seeds=once
-#= run hmmer hmmer 2.0000
+#= run A2.0-B4.0 3.0000,5.0000,4.0000 seeds=once A=2.0 B=4.0
+#= run full 9.0000,10.0000 seeds=once
 #                       A2.0
-# query target           B4.0 full   hmmer  inc dom
-# ----- ---------------- ---- ------ ------ --- ---
+# query target           B4.0 full
+# ----- ---------------- ---- ------
 #= shard 1
-alpha MGYP000000000001 24.0 25.0   24.0   1   24.0
-beta MGYP000000000002 -    -      30.0   1   30.0
-gamma MGYP000000000003 .    .      28.0   1   28.0
-zeta MGYP000000000004 30.0 .      31.0   1   31.0
+alpha MGYP000000000001 24.0 25.0
+beta MGYP000000000002 -    30.0
+beta MGYP000000000005 21.0 22.0
+zeta MGYP000000000004 30.0 31.0
 #= end 4
 ",
             cutoffs().display()
@@ -482,55 +429,21 @@ zeta MGYP000000000004 30.0 .      31.0   1   31.0
     }
 
     #[test]
-    fn the_checkpoints_are_told_apart() {
-        let rows = rows(&file(), |r| (r.seeded(0), r.present(0), r.seeded(2)));
-        assert_eq!(rows.len(), 4);
-
-        assert!(rows[0].0 && rows[0].1);
-
-        // seeded, and then lost between there and the table
-        assert!(rows[1].0 && !rows[1].1);
-
-        // never seeded at all, which is a different loss. hmmer replayed no
-        // seed list, so its own character is untouched
-        assert!(!rows[2].0 && !rows[2].1 && rows[2].2);
-    }
-
-    #[test]
     fn a_run_clears_the_cutoff_on_its_score_alone() {
-        let rows = rows(&file(), |r| {
-            (r.row().passed(0), r.row().passed(1), r.row().passed(2))
-        });
+        let rows = rows(&file(), |r| (r.row().passed(0), r.row().passed(1)));
 
         // alpha's cutoff is 24.5, so the cell's 24.0 is under it and the
-        // full run's 25.0 is over. hmmer is held to nail's cutoff and its
-        // 24.0 is under it too
-        assert_eq!(rows[0], (false, true, false));
+        // full run's 25.0 is over
+        assert_eq!(rows[0], (false, true));
 
-        // a cell that reported nothing cleared nothing, whatever beta's
-        // cutoff is
-        assert!(!rows[1].0 && rows[1].2);
+        // a cell that reported nothing cleared nothing
+        assert_eq!(rows[1], (false, true));
     }
 
     #[test]
     fn a_table_of_another_format_is_refused() {
-        let other = file().replace(&format!("#= format {FORMAT}"), "#= format scores 2");
+        let other = file().replace(&format!("#= format {FORMAT}"), "#= format runs 1");
+        assert_ne!(other, file());
         assert!(Reader::new(other.as_bytes(), "test").is_err());
-    }
-
-    #[test]
-    fn a_run_that_replayed_no_seed_list_counts_as_offered_every_pair() {
-        // nothing was withheld from it, which is not the same answer as a
-        // seeding that looked and did not find the pair
-        let text = file()
-            .replace("#= seed once 4.0000\n", "")
-            .replace(" seeds=once", "")
-            .replace(
-                "gamma MGYP000000000003 .    .",
-                "gamma MGYP000000000003 -    -",
-            );
-
-        let rows = rows(&text, |r| (r.seeded(0), r.score(1)));
-        assert_eq!(rows[0], (true, Some(25.0)));
     }
 }

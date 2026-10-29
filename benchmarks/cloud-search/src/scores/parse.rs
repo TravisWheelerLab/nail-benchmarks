@@ -1,9 +1,4 @@
 //! Turning a finished pipeline into a table, and that table into the numbers.
-//!
-//! `scores` and `summary` are recall's. The shard-parallel collector under
-//! them is not -- any pipeline's results go through it -- but what a row looks
-//! like is a decision each analysis makes for itself, so this is where the
-//! pipelines stop being interchangeable.
 
 use std::path::{Path, PathBuf};
 
@@ -17,20 +12,17 @@ use crate::scores::analyze;
 #[derive(Subcommand)]
 pub enum Cmd {
     /// Read a sweep's results into runs.tbl, one row per pair, one score
-    /// column per run, and whether seeding found the pair.
+    /// column per cell read from rep 1, and whether seeding found the pair.
     Runs(ScoresArgs),
-    /// What every run found and what it cost, one row per run.
+    /// What every run found against the full run, and what it cost, one row
+    /// per cell with its median wall time over the reps.
     Summary(TableArgs),
-    /// Where the hits hmmer found were lost, one row per run per
-    /// checkpoint.
-    Stages(TableArgs),
 }
 
 pub fn main(cmd: Cmd) -> anyhow::Result<()> {
     match cmd {
         Cmd::Runs(args) => runs(args),
         Cmd::Summary(args) => summary(args),
-        Cmd::Stages(args) => stages(args),
     }
 }
 
@@ -65,7 +57,7 @@ pub struct ScoresArgs {
     #[arg(short = 'c', default_value_t = 2, value_name = "N")]
     c: usize,
 
-    #[arg(short, long, value_name = "scores.tbl")]
+    #[arg(short, long, value_name = "runs.tbl")]
     out: Option<PathBuf>,
 
     /// How many shards to collect at once. Defaults to the machine's cores
@@ -96,7 +88,7 @@ fn runs(args: ScoresArgs) -> anyhow::Result<()> {
     Ok(())
 }
 
-/// What both collectors are pointed at, once the defaults are filled in.
+/// What the collector is pointed at, once the defaults are filled in.
 struct Inputs {
     dir: PathBuf,
     set: Set,
@@ -206,9 +198,7 @@ pub struct TableArgs {
 }
 
 fn summary(args: TableArgs) -> anyhow::Result<()> {
-    // either grammar: a summary is the one analysis both pipelines' tables
-    // answer, so naming a directory has to find whichever it wrote
-    let path = table(&args, &["scores.tbl", "runs.tbl"])?;
+    let path = table(&args)?;
     let out = beside(&path, args.out, "summary.tbl")?;
 
     analyze::summary(&path, &out)?;
@@ -217,52 +207,22 @@ fn summary(args: TableArgs) -> anyhow::Result<()> {
     Ok(())
 }
 
-fn stages(args: TableArgs) -> anyhow::Result<()> {
-    let path = table(&args, &["runs.tbl"])?;
-    let out = beside(&path, args.out, "stages.tbl")?;
-
-    analyze::stages(&path, &out)?;
-
-    println!("wrote {}", out.display());
-    Ok(())
-}
-
-/// Where the table an analysis reads is, given either as a path or by
-/// pipeline.
-///
-/// `names` are the tables this analysis can read, in the order it prefers
-/// them. A path is taken as given; a pipeline is searched for the first of
-/// them it holds.
-fn table(args: &TableArgs, names: &[&str]) -> anyhow::Result<PathBuf> {
+/// Where `runs.tbl` is, given either as a path or as the analysis directory
+/// holding it.
+fn table(args: &TableArgs) -> anyhow::Result<PathBuf> {
     if args.analysis.is_file() {
         return Ok(args.analysis.clone());
     }
 
-    let dir = &args.analysis;
-
-    match names
-        .iter()
-        .map(|name| dir.join(name))
-        .find(|p| p.is_file())
-    {
-        Some(path) => Ok(path),
-        None => {
-            let wanted: Vec<String> = names
-                .iter()
-                .map(|name| {
-                    let (stem, _) = name.split_once('.').unwrap_or((name, ""));
-                    format!("`cloud-search parse {stem}`")
-                })
-                .collect();
-
-            bail!(
-                "no {} in {}; run {} first",
-                names.join(" or "),
-                dir.display(),
-                wanted.join(" or "),
-            )
-        }
+    let path = args.analysis.join("runs.tbl");
+    if !path.is_file() {
+        bail!(
+            "no runs.tbl in {}; run `cloud-search parse runs` first",
+            args.analysis.display()
+        );
     }
+
+    Ok(path)
 }
 
 fn beside(path: &Path, out: Option<PathBuf>, name: &str) -> anyhow::Result<PathBuf> {
