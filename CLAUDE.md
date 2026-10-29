@@ -871,8 +871,8 @@ wall and core-seconds, peak RSS, the time perfect scaling from the arm's
 lowest rung would take and the percentage of that speedup reached, and the
 highest load seen; and `agree.tbl`, one row per run counting the pairs
 missing, extra or rescored against rep 1 of the arm's lowest rung. `plot`
-draws wall clock and that percentage against threads into
-`thread-scaling.pdf`.
+draws wall clock against threads into `thread-scaling-wall.pdf`, and that
+percentage into `thread-scaling-efficiency.pdf`.
 
 The split arm is `util::search::hmmer`, so its parts share one pool of N
 cores.
