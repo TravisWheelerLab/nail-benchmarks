@@ -952,9 +952,8 @@ build reads them all as well. At 1,000,000 sequences the two longest bins
 hold less than their share, 9,951 and 2,178, so the nine shorter bins take
 about 109,763 each.
 
-`run` searches each form once with nail at the parameters the cells figure
-was first drawn with: `--mmseqs-s 12.0 --mmseqs-max-seqs 200 -S 1e9 -C 1e9
--F 1e9 -E 1e9 --f32-p 5`. The filters at 1e9 drop no pair nail aligns.
+`run` searches each form once with nail at its defaults, with `-E 1e9 --f32-p
+5`. The E-value at 1e9 reports every pair that passes nail's filters.
 `--f32-p 5` prints the cell fraction to five decimals, where nail's default
 of three rounds the smallest to 0. `parse` writes `cells.<form>.tbl`, one row
 per reported pair, with the cells of its full matrix and the fraction nail

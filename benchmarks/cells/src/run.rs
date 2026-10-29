@@ -1,5 +1,5 @@
-//! One nail search per form, with the parameters the cells figure was first
-//! drawn with in the percent-identity benchmark's sparse run.
+//! One nail search per form, at nail's defaults with the reporting
+//! threshold opened.
 
 use std::path::PathBuf;
 
@@ -16,22 +16,14 @@ use util::tools;
 /// The name every form's search is filed under.
 pub const RUN_NAME: &str = "nail";
 
-/// The E-value nail reports down to, and every filter's threshold: high
-/// enough that no pair nail aligns is dropped, since a pair with no signal is
-/// the point of two of the forms.
-const OPEN: &str = "1e9";
+/// The E-value nail reports down to: high enough that every pair through
+/// nail's filters is reported, since a pair with no signal is the point of
+/// two of the forms.
+const EVALUE: &str = "1e9";
 
-/// nail's parameters beyond `-E`, as the cells figure was first drawn with
-/// them. `--f32-p 5` prints the cell fraction to five decimals rather than
-/// three, which would round the smallest to 0 and stripe the rest.
-const ARGS: [(&str, &str); 6] = [
-    ("--mmseqs-s", "12.0"),
-    ("--mmseqs-max-seqs", "200"),
-    ("-S", OPEN),
-    ("-C", OPEN),
-    ("-F", OPEN),
-    ("--f32-p", "5"),
-];
+/// nail's arguments beyond `-E`. `--f32-p 5` prints the cell fraction to five
+/// decimals rather than three, which would round the smallest to 0.
+const ARGS: [(&str, &str); 1] = [("--f32-p", "5")];
 
 #[derive(Parser, Debug)]
 pub struct Args {
@@ -78,7 +70,7 @@ pub fn main(args: Args, paths: &crate::Paths) -> anyhow::Result<()> {
             &dirs.table(RUN_NAME, name),
             &dirs.tmp.join(name),
             threads,
-            OPEN,
+            EVALUE,
             &ARGS.map(|(flag, value)| (flag, value.to_string())),
             &[],
             RUN_NAME,
