@@ -2,7 +2,7 @@
 import argparse
 from pathlib import Path
 
-from plot import axes, Scatter, TOL_CYAN
+from collections.abc import Iterable
 
 import matplotlib as mpl
 import matplotlib.pyplot as plt
@@ -12,10 +12,57 @@ from matplotlib.legend_handler import HandlerBase
 
 import numpy as np
 
+TOL_CYAN = "#33BBEE"
+
+# drawn in this order, so the original is on top
+FORMS = [
+    ("shuffled", "Shuffled", cm.Greens),
+    ("reversed", "Reversed", cm.Reds),
+    ("original", "Original", cm.Blues),
+]
+
 xmin = None
 xmax = None
 ymin = None
 ymax = None
+
+
+def axes():
+    scale = 1.75
+    mpl.rcParams.update({
+        "font.size": mpl.rcParams["font.size"] * scale,
+    })
+
+    fig, ax = plt.subplots(
+        figsize=(16, 9),
+        # constrained_layout=True
+    )
+
+    P = 0.075
+    fig.subplots_adjust(
+        left=P,
+        right=1.0 - P,
+        bottom=P,
+        top=1.0 - P
+    )
+
+    return fig, ax
+
+
+class Scatter:
+    x: [float]
+    y: [float]
+
+    def __init__(self, lines: Iterable[str]) -> None:
+        """The first two columns of a `#`-headed table, as x and y."""
+        self.x = []
+        self.y = []
+        for line in lines:
+            if not line.strip() or line.startswith("#"):
+                continue
+            x, y = line.split()[:2]
+            self.x.append(float(x))
+            self.y.append(float(y))
 
 
 class HandlerColormap(HandlerBase):
@@ -66,7 +113,7 @@ class HandlerColormap(HandlerBase):
         return artists
 
 
-def heatmap(true_points, decoy_points, ax, long_points=None):
+def heatmap(forms, ax, long_points=None):
     N_BINS = 200
     global xmin, xmax, ymin, ymax
 
@@ -92,23 +139,21 @@ def heatmap(true_points, decoy_points, ax, long_points=None):
             rasterized=True,
         )
 
-    dh = plot(decoy_points, cm.Reds)
-    th = plot(true_points, cm.Blues)
+    handles = []
+    labels = []
+    handler_map = {}
 
-    dh.set_norm(mpl.colors.Normalize(
-        vmin=np.nanmin(dh.get_array()),
-        vmax=np.nanmax(dh.get_array()),
-    ))
-    th.set_norm(mpl.colors.Normalize(
-        vmin=np.nanmin(th.get_array()),
-        vmax=np.nanmax(th.get_array()),
-    ))
+    for points, label, cmap_base in forms:
+        mesh = plot(points, cmap_base)
+        mesh.set_norm(mpl.colors.Normalize(
+            vmin=np.nanmin(mesh.get_array()),
+            vmax=np.nanmax(mesh.get_array()),
+        ))
 
-    decoy_sm = plt.cm.ScalarMappable(norm=dh.norm, cmap=dh.cmap)
-    true_sm = plt.cm.ScalarMappable(norm=th.norm, cmap=th.cmap)
-
-    handles = [decoy_sm, true_sm]
-    labels = ["Decoys", "True positives"]
+        sm = plt.cm.ScalarMappable(norm=mesh.norm, cmap=mesh.cmap)
+        handles.append(sm)
+        labels.append(label)
+        handler_map[sm] = HandlerColormap(mesh.cmap, mesh.norm)
 
     if long_points:
         handles.append(ax.scatter(
@@ -122,10 +167,7 @@ def heatmap(true_points, decoy_points, ax, long_points=None):
     ax.legend(
         handles=handles,
         labels=labels,
-        handler_map={
-            decoy_sm: HandlerColormap(dh.cmap, dh.norm),
-            true_sm: HandlerColormap(th.cmap, th.norm),
-        },
+        handler_map=handler_map,
         handleheight=1.0,
         handlelength=6.0,
         labelspacing=1.2,
@@ -133,17 +175,24 @@ def heatmap(true_points, decoy_points, ax, long_points=None):
 
 
 def main(args):
-    with open(args.true_hits) as f:
-        true_points = Scatter(f.readlines())
-
-    with open(args.decoy_hits) as f:
-        decoy_points = Scatter(f.readlines())
+    forms = []
+    for form, label, cmap_base in FORMS:
+        with open(getattr(args, form)) as f:
+            points = Scatter(f.readlines())
+        if not points.x:
+            print(f"warning: no {form} points to draw")
+            continue
+        zeros = sum(1 for y in points.y if y <= 0)
+        if zeros:
+            print(f"warning: {zeros} {form} points have a fraction of 0, "
+                  "which a log axis cannot draw")
+        forms.append((points, label, cmap_base))
 
     global xmin, xmax, ymin, ymax
-    xmin = min(min(true_points.x), min(decoy_points.x))
-    xmax = max(max(true_points.x), max(decoy_points.x))
-    ymin = min(min(true_points.y), min(decoy_points.y))
-    ymax = max(max(true_points.y), max(decoy_points.y))
+    xmin = min(min(p.x) for p, _, _ in forms)
+    xmax = max(max(p.x) for p, _, _ in forms)
+    ymin = min(min(y for y in p.y if y > 0) for p, _, _ in forms)
+    ymax = max(max(p.y) for p, _, _ in forms)
 
     long_points = None
     if args.long_hits:
@@ -152,7 +201,7 @@ def main(args):
 
     fig, ax = axes()
 
-    heatmap(true_points, decoy_points, ax, long_points)
+    heatmap(forms, ax, long_points)
 
     ax.set_title("Cells computed")
     ax.grid(True)
@@ -170,8 +219,8 @@ def main(args):
 
 if __name__ == "__main__":
     p = argparse.ArgumentParser()
-    p.add_argument("true_hits", type=Path)
-    p.add_argument("decoy_hits", type=Path)
+    for form, _, _ in FORMS:
+        p.add_argument(f"--{form}", type=Path, required=True)
     p.add_argument("out", type=Path)
     p.add_argument("--long_hits", type=Path)
     args = p.parse_args()

@@ -159,6 +159,16 @@ pub mod shape {
         attrs: &["truth", "originals"],
     };
 
+    /// One draw of targets written in several forms, one unit per form.
+    ///
+    /// Every unit holds the same sequences under the same names, as drawn,
+    /// written backwards or shuffled, so `form` is what tells one from another.
+    pub const FORMS: Shape = Shape {
+        name: "forms",
+        needs: &[Rep::QueryHmm, Rep::QuerySto, Rep::QueryDb, Rep::Target],
+        attrs: &["form"],
+    };
+
     /// Other sets, each under its own directory, as one.
     ///
     /// A part keeps its own `set.tbl` and everything it wrote; the union's

@@ -240,6 +240,28 @@ queries = "../../data/long-seqs/query"
 targets = "../../data/long-seqs/target"
 out     = "../../sets/long-seqs/inputs"
 
+# -------------------------------------------------------------------- cells
+
+# One draw of TrEMBL, equal counts per doubling length bin from 16 residues,
+# written three times: as drawn, backwards, and with each sequence shuffled.
+# The forms differ in whether the target carries signal and in nothing else.
+[cells-toy]
+shape      = "forms"
+queries    = "../../data/pfam.hmm"
+alignments = "../../data/pfam.sto"
+targets    = "../../data/trembl.fa"
+out        = "../../sets-toy/cells/inputs"
+seqs       = 20000
+fams       = 1000
+
+[cells-real]
+shape      = "forms"
+queries    = "../../data/pfam.hmm"
+alignments = "../../data/pfam.sto"
+targets    = "../../data/trembl.fa"
+out        = "../../sets/cells/inputs"
+seqs       = 1000000
+
 # ---------------------------------------------------------------------- pid
 
 # Recall against percent identity. The split is drawn once from Pfam's SEED and

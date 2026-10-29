@@ -1,0 +1,18 @@
+# Where cells reads and writes. Paths only, relative to this file.
+#
+# Its own two sets, built by `build-set --in cells-toy|cells-real`: one draw of
+# TrEMBL in three forms, original, reversed and shuffled, against Pfam.
+
+[toy]
+set      = "../../sets-toy/cells/inputs"
+run      = "../../sets-toy/cells/outputs"
+analysis = "../../sets-toy/cells/analysis"
+figures  = "../../figures-toy"
+tmp      = "../../sets-toy/cells/tmp"
+
+[real]
+set      = "../../sets/cells/inputs"
+run      = "../../sets/cells/outputs"
+analysis = "../../sets/cells/analysis"
+figures  = "../../figures"
+tmp      = "../../sets/cells/tmp"

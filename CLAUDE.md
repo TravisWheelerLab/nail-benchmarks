@@ -70,7 +70,7 @@ benchmarks/util/          set, search, paths, manifest, ledger, tools,
                           split, cut, clean, domains
 
 benchmarks/build-set/     cuts sources into a set: fixed | reversed | cross |
-                          pairs | profmark
+                          pairs | profmark | forms | union
 
 benchmarks/recall/        recall against prefilter sensitivity   [fixed]
 benchmarks/cloud-search/  the (A, B) pruning surface             [cross]
@@ -80,6 +80,7 @@ benchmarks/long-seqs/     how nail scales with length             [pairs]
 benchmarks/pid/           recall against percent identity          [profmark]
 benchmarks/thread-scaling/ wall clock against thread count      [cross]
 benchmarks/stage-times/   where nail's wall clock goes, by stage  [union]
+benchmarks/cells/         nail's cell fraction, signal or none    [forms]
 ```
 
 One binary per benchmark, and the shape in brackets is the set it reads.
@@ -341,6 +342,7 @@ builder stamps `#= shape` and the benchmark names the one it reads, and
 | `pairs` | `query_fa`, `target` | `pair`, `query_residues`, `residues` | long-seqs |
 | `profmark` | `query_hmm`, `query_sto`, `query_fa`, `target` | `truth`, `originals` | pid |
 | `union` | `query_hmm`, `target` | `part` | stage-times |
+| `forms` | the same as `fixed` | `form` | cells |
 
 `reversed` is `fixed` written backwards: the same sources, the same seed and
 the same sharding, with each sequence reversed as it is dealt. Reversing keeps
@@ -361,6 +363,11 @@ under its own directory with its own `set.tbl`, and the union's rows are the
 parts' units under the part's name with only the query profile and the target,
 since a part's other columns mean what its own shape says. It is for a
 benchmark whose units are of different shapes.
+
+`forms` is one draw written several ways, a unit per form. Every unit holds
+the same sequences under the same names, so `form` is the only column that
+tells two units apart. The recipe also writes `seqs`, `residues` and `bytes`,
+which are the same in every row.
 
 `cross` is the only shape where both sides are lists of independent sources
 rather than cuts of one. `fixed` grids a query over a partition of a single
@@ -840,9 +847,9 @@ true pairs, up to 10. This is the pre-refactor design and stays.
 `parse` has three subcommands. `recall` writes `pid.tbl`, `roc.tbl` and
 `time.tbl`: one row per run per identity bin, one row per run per point of its
 ROC curve, and one row per run of what it cost against what it found. `score`
-and `cells` answer questions other than recall against identity.
+answers a question other than recall against identity.
 
-`plot` names five figures, roc, pid, time, cells and score, and `--only`
+`plot` names four figures, roc, pid, time and score, and `--only`
 draws a subset, one name per flag.
 
 ## benchmarks/long-seqs
@@ -923,6 +930,34 @@ cpu where nail printed one. `counts.tbl` carries the counts nail prints above
 the tree, and a `#= michi` line per unit carries what michi timed for the
 whole command. A `.stats` file from a nail before the three-branch tree reads
 wrong, since its alignment leaves were cpu seconds; rerun rather than reparse.
+
+## benchmarks/cells
+
+How much of the dynamic-programming matrix nail's cloud search fills, against
+query length times target length, on targets with signal and on targets with
+none. `build-set --in cells-toy|cells-real` draws TrEMBL by length. Each
+doubling bin from [16, 32) up to an open [16384, inf) gets an equal count. A
+bin holding fewer than its share is taken whole, and its unused quota is split
+over the other bins. Sequences under 16 residues are never drawn. The draw is
+written once per form. `original` is the draw as it is, `reversed` writes each
+sequence backwards, and `shuffled` puts each sequence's residues in a seeded
+random order of its own. The queries are all of Pfam.
+
+The build writes `bins.tbl` beside `set.tbl`, with each bin's count in the
+source and the count drawn. build-set counts the bins by reading the length
+of every TrEMBL record, 149,430,635 of them, in 76 s at 16 threads. The toy
+build reads them all as well. At 1,000,000 sequences the two longest bins
+hold less than their share, 9,951 and 2,178, so the nine shorter bins take
+about 109,763 each.
+
+`run` searches each form once with nail at the parameters the cells figure
+was first drawn with: `--mmseqs-s 12.0 --mmseqs-max-seqs 200 -S 1e9 -C 1e9
+-F 1e9 -E 1e9 --f32-p 5`. The filters at 1e9 drop no pair nail aligns.
+`--f32-p 5` prints the cell fraction to five decimals, where nail's default
+of three rounds the smallest to 0. `parse` writes `cells.<form>.tbl`, one row
+per reported pair, with the cells of its full matrix and the fraction nail
+computed. `plot` overlays the three forms in `cells.pdf` as log-density
+heatmaps, with original in blue, reversed in red and shuffled in green.
 
 ## Formatting
 
@@ -1029,8 +1064,8 @@ fetches it and ignoring it would empty a fresh clone, and
 `data/mgy-cutoffs.tbl`, because learning it is a calibration run rather than a
 download.
 
-Plotting is Python and matplotlib. Four benchmarks have a `plot` command and
-a `scripts/` beside their source: cloud-search, loss-decomp, pid and
+Plotting is Python and matplotlib. Five benchmarks have a `plot` command and
+a `scripts/` beside their source: cells, cloud-search, loss-decomp, pid and
 thread-scaling. recall, cutoffs and long-seqs stop at `parse`.
 
 `reports/` is untracked too. Each report there was put together by hand from

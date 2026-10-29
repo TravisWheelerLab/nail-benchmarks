@@ -44,6 +44,7 @@ use libsail::index::{self, Index};
 use libsail::seq::fasta::{DEFAULT_LINE_WIDTH, IndexedFasta};
 
 use michi::{Closure, Cmd as PCmd, PipelineBuilder, Progress, Step};
+mod forms;
 mod profmark;
 
 use util::cut;
@@ -159,6 +160,26 @@ enum Recipe {
         #[serde(default = "default_max_test")]
         max_test: usize,
     },
+    /// One draw of a target source, stratified by length, written in each of
+    /// [`forms::FORMS`] and searched by one query set.
+    ///
+    /// Equal counts per doubling length bin from 16 residues up, a bin that
+    /// runs short handing its quota to the rest, so the draw covers as wide a
+    /// range of lengths as the source holds.
+    Forms {
+        queries: PathBuf,
+        alignments: PathBuf,
+        /// A fasta, or a directory of them.
+        targets: PathBuf,
+        out: PathBuf,
+        /// The sequences drawn.
+        seqs: usize,
+        /// A cap on the families cut. All of them when absent.
+        #[serde(default)]
+        fams: Option<usize>,
+        #[serde(default = "default_seed")]
+        seed: u64,
+    },
     /// Other labels, each built under its own directory, as one set.
     ///
     /// For a benchmark whose units are of different shapes: each part is a
@@ -202,6 +223,7 @@ impl Recipe {
             Recipe::Fixed { out, .. }
             | Recipe::Cross { out, .. }
             | Recipe::Pairs { out, .. }
+            | Recipe::Forms { out, .. }
             | Recipe::Union { out, .. }
             | Recipe::Profmark { out, .. } => out,
         }
@@ -213,6 +235,7 @@ impl Recipe {
             Recipe::Fixed { out, .. }
             | Recipe::Cross { out, .. }
             | Recipe::Pairs { out, .. }
+            | Recipe::Forms { out, .. }
             | Recipe::Union { out, .. }
             | Recipe::Profmark { out, .. } => *out = at,
         }
@@ -225,6 +248,7 @@ impl Recipe {
             Recipe::Fixed { .. } => "fixed",
             Recipe::Cross { .. } => "cross",
             Recipe::Pairs { .. } => "pairs",
+            Recipe::Forms { .. } => "forms",
             Recipe::Union { .. } => "union",
             Recipe::Profmark { .. } => "profmark",
         }
@@ -335,6 +359,22 @@ fn build(recipe: Recipe, paths: &paths::File, threads: usize) -> anyhow::Result<
             train_test_id,
             min_test,
             max_test,
+            threads,
+        ),
+        Recipe::Forms {
+            queries,
+            alignments,
+            targets,
+            out,
+            seqs,
+            fams,
+            seed,
+        } => make_forms(
+            Sources::new(paths, queries, alignments, targets)?,
+            paths.at(out),
+            seqs,
+            fams,
+            seed,
             threads,
         ),
         Recipe::Union { out, parts } => union(paths, paths.at(out), parts, threads),
@@ -454,6 +494,17 @@ fn listing(paths: &paths::File) -> anyhow::Result<String> {
                     Some(n) => format!("{n} {}", plural(*n, "pair")),
                     None => "every pair".to_string(),
                 },
+                out,
+            ),
+            Recipe::Forms {
+                out, seqs, fams, ..
+            } => (
+                recipe.shape(),
+                format!(
+                    "{seqs} seqs x {} forms, {} families",
+                    forms::FORMS.len(),
+                    count(*fams)
+                ),
                 out,
             ),
             Recipe::Profmark { out, pairs, .. } => (
@@ -922,6 +973,113 @@ fn unique<'a>(names: impl Iterator<Item = &'a String>, side: &str) -> anyhow::Re
             "two {side} sources are both called {name:?}"
         );
     }
+    Ok(())
+}
+
+// -------------------------------------------------------------------- forms
+
+fn make_forms(
+    src: Sources,
+    root: PathBuf,
+    n_seqs: usize,
+    n_fams: Option<usize>,
+    seed: u64,
+    threads: usize,
+) -> anyhow::Result<()> {
+    claim(&root)?;
+
+    let queries = root.join(QUERIES);
+    let targets = root.join(TARGETS);
+    let (query_hmm, query_sto) = (queries.join(QUERY_HMM), queries.join(QUERY_STO));
+
+    let drawn: Arc<Mutex<Option<(forms::Written, [usize; forms::BINS], [usize; forms::BINS])>>> =
+        Arc::default();
+
+    PipelineBuilder::new()
+        .pool(threads)
+        .step(
+            PCmd::new("mkdir")
+                .name("dirs")
+                .flag("-p")
+                .path(&queries)
+                .path(&targets),
+        )
+        .step(
+            Step::from_closures([
+                Closure::new("query", {
+                    let src = src.clone();
+                    move || Ok(subset_query(&src, n_fams, &query_hmm, &query_sto)?)
+                }),
+                Closure::new("target", {
+                    let src = src.clone();
+                    let targets = targets.clone();
+                    let drawn = Arc::clone(&drawn);
+
+                    move || {
+                        let seqs = src.collection()?;
+                        let bins = forms::bins(&seqs)?;
+                        let counts = forms::counts(&bins);
+                        let quotas = forms::quotas(&counts, n_seqs);
+
+                        let picked = forms::pick(&bins, &quotas, seed);
+                        if picked.len() < n_seqs {
+                            eprintln!(
+                                "warning: asked for {n_seqs} sequences but {} holds {} of {} residues or more",
+                                src.dir.display(),
+                                picked.len(),
+                                forms::SHORTEST
+                            );
+                        }
+
+                        let written = forms::write(&seqs, &bins, &picked, seed, &targets)?;
+                        *drawn.lock().expect("the draw poisoned the count") =
+                            Some((written, counts, quotas));
+                        Ok(())
+                    }
+                }),
+            ])
+            .name("draw"),
+        )
+        .step(profile_db(&src.mmseqs, &queries).name("profile db"))
+        .stderr_dir(root.join("stderr"))
+        .sink(Progress::new())
+        .build()?
+        .run()?;
+
+    let drawn = drawn.lock().expect("the draw poisoned the count");
+    let (written, counts, quotas) = drawn.as_ref().expect("the draw ran");
+
+    let mut bins = toil::Table::new(toil::Schema::new(["lower", "source", "drawn"]));
+    for b in 0..forms::BINS {
+        bins.row([forms::lower(b), counts[b], quotas[b]]);
+    }
+    let at = root.join("bins.tbl");
+    bins.write(&at)
+        .with_context(|| format!("failed to write {}", at.display()))?;
+
+    let rows = forms::FORMS
+        .iter()
+        .map(|form| {
+            set::Row::new(*form, format!("{TARGETS}/{form}.fa"))
+                .query_hmm(format!("{QUERIES}/{QUERY_HMM}"))
+                .query_sto(format!("{QUERIES}/{QUERY_STO}"))
+                .query_db(format!("{QUERIES}/{QUERY_DB}"))
+                .attr("form", form)
+                .attr("seqs", written.seqs)
+                .attr("residues", written.residues)
+                .attr("bytes", written.bytes)
+        })
+        .collect();
+
+    Set::new(&root, rows)
+        .says("shape", set::shape::FORMS.name)
+        .says("recipe", "forms")
+        .says("seed", seed)
+        .says("query", src.hmm.display())
+        .says("targets", src.dir.display())
+        .save()?;
+
+    println!("\nbuilt {}", root.display());
     Ok(())
 }
 

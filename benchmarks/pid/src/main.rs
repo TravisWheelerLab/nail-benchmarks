@@ -96,7 +96,6 @@ impl Command {
             Command::Reject(a) => a.label.as_deref(),
             Command::Plot(a) => a.label.as_deref(),
             Command::Parse(parse::Cmd::Recall(a)) => a.label.as_deref(),
-            Command::Parse(parse::Cmd::Cells(a)) => a.label.as_deref(),
             Command::Parse(parse::Cmd::Score(a)) => a.label.as_deref(),
         }
     }

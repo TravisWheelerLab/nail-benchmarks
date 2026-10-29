@@ -40,11 +40,6 @@ const FIGURES: &[Figure] = &[
         inputs: &["time.tbl"],
     },
     Figure {
-        name: "cells",
-        script: "plot_cell_frac.py",
-        inputs: &["cells.true.tbl", "cells.decoy.tbl"],
-    },
-    Figure {
         name: "score",
         script: "plot_score.py",
         inputs: &["score.tbl"],
@@ -109,7 +104,7 @@ pub fn main(args: Args, paths: &crate::Paths) -> anyhow::Result<()> {
         }
 
         // a figure whose analysis has not been run is skipped rather than
-        // failed: `parse recall` and `parse cells` write different files, and
+        // failed: `parse recall` and `parse score` write different files, and
         // asking for everything should not mean running everything first
         let missing: Vec<&str> = figure
             .inputs
