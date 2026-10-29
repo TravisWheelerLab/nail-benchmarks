@@ -1,0 +1,10 @@
+{
+  "slug": "shard-a8-tradeoff",
+  "text": "On loss-decomp's shard (Pfam against 2,455,940 MGnify), replaying its seeds at 48 threads on node 1, 27 Oct 2026: -A 10 -B 16 takes a median 170.3 s over 3 reps and -A 8 -B 16 takes 125.1 s. -A 8 finds 2,089,169 pairs over nail's cutoff against 2,090,820, losing 3,710 and gaining 2,059. Its share of hmmer's 2,212,678 hits (sequence or best domain over cutoff) falls from 0.9325 to 0.9319. Scratch: tmp-claude/2026-10-27-shard-A8/.",
+  "created_at": "2026-10-29T17:36:52.893564845Z",
+  "updated_at": "2026-10-29T17:36:52.893564845Z",
+  "stamp": {
+    "commit": "c9c9e4c",
+    "branch": "claude-refactor"
+  }
+}
