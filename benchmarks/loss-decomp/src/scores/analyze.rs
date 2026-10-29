@@ -27,8 +27,8 @@ use crate::scores::{LeftOut, Tool};
 /// What was searched, what the fractions are fractions of, and the two times
 /// the figures use as reference lines.
 ///
-/// `domain_only` is the pairs where hmmer's best domain cleared its cutoff and
-/// the sequence score did not, which are in no fraction.
+/// `truth` is every pair hmmer's sequence score or best domain carried over
+/// its cutoff, and `domain_only` is the part of it only the best domain did.
 fn preamble(
     table: &mut toil::Table,
     meta: &crate::scores::Meta,
@@ -106,8 +106,8 @@ struct Tally {
     /// Pairs the run reported at or above the cutoff, whether or not hmmer
     /// found them.
     over: Vec<usize>,
-    /// Pairs hmmer's best domain cleared its cutoff on and its sequence
-    /// score did not, which are no part of `truth`.
+    /// Of `truth`, the pairs only hmmer's best domain carried: it cleared
+    /// `hmmer_dom` and the sequence score did not clear `hmmer`.
     domain_only: usize,
     /// Pairs the run reported, at any score, in a family short of a cutoff.
     left_out: Vec<usize>,
@@ -186,10 +186,7 @@ pub fn stages(path: &Path, root: &Path, out: &Path, threads: usize) -> anyhow::R
 
         let best_domain = row.best_domain();
         let dom_cutoff = row.row().domain_cutoff();
-        let domain_clears = match (best_domain, dom_cutoff) {
-            (Some(best), Some(cutoff)) => best >= cutoff,
-            _ => false,
-        };
+        let domain_clears = row.domain_clears();
         let reported = row.domains_reported();
         let tally = at
             .entry(unit.clone())
@@ -201,12 +198,12 @@ pub fn stages(path: &Path, root: &Path, out: &Path, threads: usize) -> anyhow::R
             }
         }
 
-        if !row.row().passed(hmmer) {
-            tally.domain_only += usize::from(domain_clears);
+        if !row.hmmer_found(hmmer) {
             return Ok(());
         }
 
         tally.truth += 1;
+        tally.domain_only += usize::from(!row.row().passed(hmmer));
 
         for run in 0..runs {
             if run == hmmer {

@@ -435,6 +435,20 @@ impl RunsRow<'_, '_> {
             .reduce(f32::max)
     }
 
+    /// Whether hmmer's best domain clears the cutoff learned from best domains.
+    pub fn domain_clears(&self) -> bool {
+        match (self.best_domain(), self.row.domain_cutoff()) {
+            (Some(best), Some(cutoff)) => best >= cutoff,
+            _ => false,
+        }
+    }
+
+    /// Whether hmmer counts the pair as a hit: its sequence score clears
+    /// `hmmer`, or its best domain clears `hmmer_dom`.
+    pub fn hmmer_found(&self, hmmer: usize) -> bool {
+        self.row.passed(hmmer) || self.domain_clears()
+    }
+
     /// How many domains hmmer reported for the pair: every row its domtbl
     /// listed, whatever each scored.
     pub fn domains_reported(&self) -> usize {

@@ -1,6 +1,5 @@
 //! Draws where each arm lost the hits hmmer found, by handing stages.tbl to
-//! matplotlib, and where the hits sit in the prefilter list from hits.tbl and
-//! lists.tbl.
+//! matplotlib.
 //!
 //! The drawing is python because matplotlib is what the other benchmarks plot
 //! with and there is no reason for this one to be different. It goes through
@@ -16,7 +15,6 @@ use clap::Parser;
 use michi::{Cmd, PipelineBuilder, Progress, Step};
 
 const SCRIPT: &str = "scripts/plot.py";
-const DEPTH_SCRIPT: &str = "scripts/plot_depth.py";
 
 #[derive(Parser, Debug)]
 pub struct Args {
@@ -67,25 +65,8 @@ pub fn main(args: Args, paths: &crate::Paths) -> anyhow::Result<()> {
         .arg("--out", &out)
         .path(&stages);
 
-    let mut pl = PipelineBuilder::new().step(Step::serial([cmd]));
-
-    // the depth figure needs what parse depth wrote, and a run parsed
-    // before depth existed still gets its stages figure
-    let hits = paths.analysis.join("hits.tbl");
-    let lists = paths.analysis.join("lists.tbl");
-    if hits.is_file() && lists.is_file() {
-        let script = crate::dir().join(DEPTH_SCRIPT);
-        pl = pl.step(Step::serial([Cmd::new(&args.python)
-            .name("plot depth")
-            .sub(script.to_string_lossy())
-            .arg("--out", &out)
-            .path(&hits)
-            .path(&lists)]));
-    } else {
-        println!("no hits.tbl and lists.tbl; run `loss-decomp parse depth` for the depth figure");
-    }
-
-    let pipeline = pl
+    let pipeline = PipelineBuilder::new()
+        .step(Step::serial([cmd]))
         .stderr_dir(paths.tmp.join("plot-stderr"))
         .sink(Progress::new())
         .build()?;

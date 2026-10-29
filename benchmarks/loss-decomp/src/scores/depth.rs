@@ -461,7 +461,7 @@ pub fn depth(
             return Ok(());
         }
 
-        let truth = row.row().passed(hmmer);
+        let truth = row.hmmer_found(hmmer);
         if truth {
             *truth_of.entry(row.row().shard().to_string()).or_default() += 1;
         }

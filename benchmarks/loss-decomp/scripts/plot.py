@@ -52,7 +52,9 @@ import matplotlib as mpl
 mpl.use("Agg")
 
 import matplotlib.pyplot as plt
+import numpy as np
 from matplotlib.offsetbox import AnchoredOffsetbox, HPacker, TextArea, VPacker
+from matplotlib.colors import LinearSegmentedColormap, LogNorm
 from matplotlib.patches import Circle, FancyArrowPatch, Rectangle
 from matplotlib.path import Path as MplPath
 
@@ -80,17 +82,18 @@ STAGES = {
     "lost_cutoff": "under\ncutoff",
 }
 
-# the paper's classes in cutoff-pairs.tbl's spelling and what to call each,
-# in the paper's order
+# the paper's classes in cutoff-pairs.tbl's spelling, what to call each and
+# its colour, from the arrangement trusted most to the one trusted least, as
+# the May 2026 multi-domain chart coloured them
 CLASSES = {
-    "strong_match": "strong",
-    "pileup:full": "pileup:\nfull",
-    "pileup:mid": "pileup:\nmid",
-    "pileup:fragment": "pileup:\nfragment",
-    "colinear_match": "colinear",
-    "shuffled_match": "shuffled",
-    "weak_match": "weak",
-    "-": "no positive\ndomain",
+    "strong_match": ("strong", "#009988"),
+    "colinear_match": ("colinear", "#0077BB"),
+    "pileup:full": ("pileup:\nfull", "#33BBEE"),
+    "pileup:mid": ("pileup:\nmid", "#EE7733"),
+    "pileup:fragment": ("pileup:\nfragment", "#CC3311"),
+    "shuffled_match": ("shuffled", "#EE3377"),
+    "weak_match": ("weak", "#BBBBBB"),
+    "-": ("no positive\ndomain", "#DDDDDD"),
 }
 
 
@@ -174,16 +177,19 @@ def axes_in(fig, box, margins):
     ])
 
 
-def frame(fig, box, title, colour=None):
-    """A thin box around a panel, with its title inside at the top left.
-    With `colour`, the count the title opens with is set in it: the colour
-    of the arrow that brings those hits in from the panel above."""
+def frame(fig, box, title, letter, colour=None):
+    """A thin box around a panel, with its title inside at the top left and
+    its letter at the top right. With `colour`, the count the title opens
+    with is set in it: the colour of the arrow that brings those hits in
+    from the panel above."""
     pad = 0.006
     box = box.expanded((box.width + 2 * pad) / box.width, (box.height + 2 * pad) / box.height)
     fig.add_artist(Rectangle(
         (box.x0, box.y0), box.width, box.height, transform=fig.transFigure, fill=False,
         edgecolor="0.7", linewidth=0.8, zorder=5,
     ))
+    fig.text(box.x1 - pad, box.y1 - pad, letter, ha="right", va="top", color=INK,
+             fontsize=mpl.rcParams["font.size"] * 1.2, fontweight="bold")
     style = {"fontsize": mpl.rcParams["font.size"] * 0.9, "fontweight": "medium"}
     x, y = box.x0 + pad, box.y1 - pad
     first, rest = title.split("\n", 1) if "\n" in title else (title, None)
@@ -245,13 +251,12 @@ def frame(fig, box, title, colour=None):
 CHART_BOTTOM = -0.22
 CHART_TOP = 1.2
 
-
-def chart(ax, bars, hue, size=0.7):
+def chart(ax, bars, hue, size=0.7, colours=None):
     """One bar per `(name, n)` to scale, in shades of `hue` from dark to
-    light, each with its count over it and its name under it at `size` of
-    the base font. Returns each bar's shade."""
+    light or in `colours` where given, each with its count over it and its
+    name under it at `size` of the base font. Returns each bar's shade."""
     top = max(n for _, n in bars) or 1
-    shades = ramp(hue, len(bars))
+    shades = colours or ramp(hue, len(bars))
     for i, ((name, n), colour) in enumerate(zip(bars, shades)):
         ax.bar(i, n / top, width=0.7, color=colour, linewidth=0)
         ax.text(i, n / top + 0.02, f"{n:,}", ha="center", va="bottom", color="0.2",
@@ -437,13 +442,17 @@ def arrow(fig, tip, parent, box, colour):
 
 def histogram(ax, gaps, colour):
     """How far under the cutoff nail scored the pairs: quarter-bit bins up to
-    one bit, whole bits past it, every bin drawn the same width."""
+    one bit, whole bits past it, every bin drawn the same width. The axis
+    ends at the 97.5th percentile, and the last bin takes every pair past it:
+    a few families with very high cutoffs leave a long, thin tail."""
     if not gaps:
         ax.text(0.5, 0.5, "no pairs", ha="center", va="center", transform=ax.transAxes, color=colour)
         ax.axis("off")
         return
-    edges = [0, 0.25, 0.5, 0.75] + list(range(1, max(2, math.ceil(max(gaps))) + 1))
+    cap = max(2, math.ceil(sorted(gaps)[int(len(gaps) * 0.975)]))
+    edges = [0, 0.25, 0.5, 0.75] + list(range(1, cap + 1))
     counts = [sum(1 for g in gaps if lo <= g < hi) for lo, hi in zip(edges, edges[1:])]
+    counts[-1] += sum(1 for g in gaps if g >= edges[-1])
     slots = range(len(counts))
     ax.bar(slots, counts, width=1.0, align="edge", color=colour, edgecolor="white", linewidth=1.0)
 
@@ -470,12 +479,15 @@ def histogram(ax, gaps, colour):
 
     # tick every edge while they fit, then the whole bits only, thinned
     ax.set_xlim(0, len(counts))
-    labels = [f"{e:g}" for e in edges]
+    # a tick sits at a bin's left edge, and the last bin takes the tail
+    last = len(edges) - 2
+    labels = [f"{e:g}" for e in edges[:last]] + [f"{edges[last]:g}+"]
+    # the quarter bits are too narrow to label, so 0 and the whole bits only
     if len(edges) <= 10:
-        ticks = list(range(len(edges)))
+        ticks = [0] + list(range(4, last + 1))
     else:
         step = max(1, math.ceil((len(edges) - 4) / 8))
-        ticks = [0, 2, 4] + list(range(4 + step, len(edges), step))
+        ticks = [0] + [t for t in range(4, last, step) if last - t > step // 2] + [last]
     ax.set_xticks(ticks)
     ax.set_xticklabels([labels[t] for t in ticks], fontsize=mpl.rcParams["font.size"] * 0.85)
     # the axis ends just over the tallest bin
@@ -486,7 +498,8 @@ def histogram(ax, gaps, colour):
 
 
 def scatter(ax, pairs, colour):
-    """hmmer's best domain score against its sequence score, with the line
+    """hmmer's best domain score against its sequence score as a density on
+    half-bit bins, log-scaled the way pid's score heatmap is, with the line
     they would sit on were the sequence score the domain's."""
     if not pairs:
         ax.text(0.5, 0.5, "no pairs", ha="center", va="center", transform=ax.transAxes, color=colour)
@@ -494,18 +507,38 @@ def scatter(ax, pairs, colour):
         return
     xs = [float(p["domain"]) for p in pairs]
     ys = [float(p["hmmer"]) for p in pairs]
-    lo, hi = min(xs + ys), max(xs + ys)
+    # the axes run from the 0.5th to the 99.5th percentile of either score,
+    # so a few outliers do not leave the bulk of the points in a corner; the
+    # count outside is printed
+    both = sorted(xs + ys)
+    lo, hi = both[int(len(both) * 0.005)], both[int(len(both) * 0.995)]
     pad = (hi - lo) * 0.05 or 1.0
+    off = sum(1 for x, y in zip(xs, ys) if min(x, y) < lo - pad or max(x, y) > hi + pad)
     ax.plot([lo - pad, hi + pad], [lo - pad, hi + pad], color="0.7", linewidth=0.8)
     ax.text(
         hi + pad, hi + pad, "sequence = domain ", ha="right", va="top", color="0.5",
         fontsize=mpl.rcParams["font.size"] * 0.8, rotation=45, rotation_mode="anchor",
     )
-    ax.scatter(xs, ys, s=12, color=colour, alpha=0.6, linewidths=0)
-    ax.text(0.03, 0.95, f"{len(pairs):,} pairs", ha="left", va="top", transform=ax.transAxes,
+    edges = [lo - pad + 0.5 * i for i in range(math.ceil((hi - lo + 2 * pad) / 0.5) + 1)]
+    counts, _, _ = np.histogram2d(xs, ys, bins=[edges, edges])
+    counts[counts == 0] = np.nan
+    cmap = LinearSegmentedColormap.from_list("density", ["#D5EEE8", colour, "#06352B"])
+    mesh = ax.pcolormesh(edges, edges, counts.T, cmap=cmap, norm=LogNorm(),
+                         shading="flat", rasterized=True)
+    bar = ax.figure.colorbar(mesh, cax=ax.inset_axes([1.04, 0.15, 0.04, 0.7]))
+    bar.set_label("pairs per bin", fontsize=mpl.rcParams["font.size"] * 0.7)
+    bar.ax.tick_params(labelsize=mpl.rcParams["font.size"] * 0.7)
+    bar.outline.set_visible(False)
+    note = f"{len(pairs):,} pairs" + (f", {off:,} off the axes" if off else "")
+    # under the diagonal, where a sequence score below its best domain's
+    # leaves no points
+    ax.text(0.98, 0.03, note.replace(", ", ",\n"), ha="right", va="bottom", transform=ax.transAxes,
             color=colour, fontsize=mpl.rcParams["font.size"] * 0.9)
+    # one scale on both axes and a square box, so the diagonal is the
+    # diagonal and a distance off it reads the same either way
     ax.set_xlim(lo - pad, hi + pad)
-    ax.set_ylim(lo - pad, hi + pad * 2)
+    ax.set_ylim(lo - pad, hi + pad)
+    ax.set_aspect("equal", adjustable="box")
     ax.set_xlabel("hmmer's domain score, bits")
     ax.set_ylabel("hmmer's sequence score, bits")
     for side in ("top", "right"):
@@ -545,7 +578,7 @@ def draw(stages_path, out):
         first, second = axes_in(fig, cells[0, c], FREE), axes_in(fig, cells[0, c + 1], FREE)
         left, by_domain = axes_in(fig, cells[1, c], AXES), axes_in(fig, cells[1, c + 1], FREE)
         by_reported = axes_in(fig, cells[2, c + 1], FREE)
-        points, classes = axes_in(fig, cells[3, c], AXES), axes_in(fig, cells[3, c + 1], FREE)
+        points, classes = axes_in(fig, cells[2, c], AXES), axes_in(fig, cells[3, c + 1], FREE)
 
         truth, over, kept = int(r["truth"]), int(r["over"]), int(r["kept"])
         # hmmer's crescent on the right, facing the chart it leads to
@@ -581,7 +614,7 @@ def draw(stages_path, out):
         panels.append((by_reported, f"the {nodomain:,} no domain clears:\nby how many domains hmmer reported", cells[2, c + 1]))
 
         scatter(points, [p for p in pairs if p["kind"] == "single"], ramp(HUES["scatter"], 1)[0])
-        panels.append((points, f"the {single:,} with one domain:\nits score against the sequence's", cells[3, c]))
+        panels.append((points, f"the {single:,} with one domain:\nits score against the sequence's", cells[2, c]))
 
         counts = {}
         for p in pairs:
@@ -590,9 +623,9 @@ def draw(stages_path, out):
         unknown = [k for k in counts if k not in CLASSES]
         if unknown:
             raise SystemExit(f"no colour for class {', '.join(unknown)}; add it to CLASSES in {__file__}")
-        chart(classes, [
-            (CLASSES[k], counts.get(k, 0)) for k in CLASSES if counts.get(k, 0)
-        ], HUES["classes"], size=0.6)
+        shown = [k for k in CLASSES if counts.get(k, 0)]
+        chart(classes, [(CLASSES[k][0], counts[k]) for k in shown], HUES["classes"], size=0.6,
+              colours=[CLASSES[k][1] for k in shown])
         panels.append((classes, f"the {multi:,} with 2+ domains:\nby how they add up to hmmer's score", cells[3, c + 1]))
 
         arrows.append((first, label, second, ink(agreement[2][1])))
@@ -624,8 +657,10 @@ def draw(stages_path, out):
     # a child's title opens with the count its arrow brings in, in the
     # arrow's colour
     brought = {below: colour for _, _, below, colour in arrows}
-    for ax, title, box in panels:
-        frame(fig, box, title, brought.get(ax))
+    # lettered in reading order, top to bottom and left to right
+    order = sorted(panels, key=lambda p: (-round(p[2].y1, 3), p[2].x0))
+    for letter, (ax, title, box) in zip("abcdefghijklmnopqrstuvwxyz", order):
+        frame(fig, box, title, letter, brought.get(ax))
     for above, tip, below, colour in arrows:
         arrow(fig, tip, boxes[above], boxes[below], colour)
 
