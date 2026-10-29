@@ -653,8 +653,10 @@ under `prog-seed/<round>/`, which is why `parse stages` takes the run
 directory as well as the table. Beside it goes `cutoff-pairs.tbl`, one row
 per pair a run scored under its cutoff: the scores and the three cutoffs,
 how many domains hmmer reported, and the paper's class for how they add up
-against hmmer's cutoff. The figure is a letter page of eight panels off
-those two tables, each handed its pairs by the one before it.
+against hmmer's cutoff. The figure, `loss-decomp-hits.pdf`, is drawn off
+those two tables: a flow of hmmer's hits through the stages and then the
+domain splits. Every column fills the full height, split in proportion to its
+counts, and each slice is labelled inside the ribbon that runs into it.
 
 ## benchmarks/cutoffs
 
